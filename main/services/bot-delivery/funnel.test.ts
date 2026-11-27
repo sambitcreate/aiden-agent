@@ -14,6 +14,7 @@ import {
 import { BotDeliveryHistoryFullError, createBotDeliveryLog } from "./log.js";
 import type { ScheduledTask } from "../types.js";
 import { createBotNotificationFeed } from "../bot-routine-notifications.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const NOW = Date.parse("2026-10-27T09:00:00.000Z");
 const HOUR = 60 * 60 * 1_000;
@@ -339,8 +340,7 @@ test("a delivery after the Bot is forgotten writes nothing and sends nothing", a
 
 test("a slept-through morning does not release held results on the following quiet night", async (t) => {
   let now = Date.parse("2026-10-27T23:00:00Z");
-  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-delivery-sleep-"));
-  t.after(() => rm(profile, { recursive: true, force: true }));
+  const profile = await temporaryDirectory(t, "aiden-delivery-sleep-");
   const log = createBotDeliveryLog({ profileDir: () => profile, now: () => now });
   const gate = createBotDeliveryGate({ settings: async () => DEFAULT_BOT_INTERRUPTIONS, sentToday: async () => 0, timeZone: () => "UTC" });
   const sends: string[] = [];
@@ -362,8 +362,7 @@ test("a slept-through morning does not release held results on the following qui
 });
 
 test("several results competing for the last daily slot produce one result and one limit note", async (t) => {
-  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-delivery-limit-"));
-  t.after(() => rm(profile, { recursive: true, force: true }));
+  const profile = await temporaryDirectory(t, "aiden-delivery-limit-");
   const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
   const gate = createBotDeliveryGate({
     settings: async () => ({ ...DEFAULT_BOT_INTERRUPTIONS, dailyLimit: 1 }),
@@ -379,8 +378,7 @@ test("several results competing for the last daily slot produce one result and o
 
 test("an overdue group released on a full-budget day still sends its issue", async (t) => {
   let now = Date.parse("2026-10-27T23:00:00Z");
-  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-delivery-held-budget-"));
-  t.after(() => rm(profile, { recursive: true, force: true }));
+  const profile = await temporaryDirectory(t, "aiden-delivery-held-budget-");
   const log = createBotDeliveryLog({ profileDir: () => profile, now: () => now });
   const gate = createBotDeliveryGate({
     settings: async () => ({ ...DEFAULT_BOT_INTERRUPTIONS, dailyLimit: 1 }),
@@ -420,8 +418,7 @@ test("quiet-hours peer results revalidate their protected original root after re
 
 test("a peer final held past quiet hours is stopped by a full budget, and its root stays protected until the limit note lands", async (t) => {
   let now = Date.parse("2026-10-27T23:00:00Z");
-  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-held-budget-"));
-  t.after(() => rm(profile, { recursive: true, force: true }));
+  const profile = await temporaryDirectory(t, "aiden-peer-held-budget-");
   const log = createBotDeliveryLog({ profileDir: () => profile, now: () => now });
   const gate = createBotDeliveryGate({
     settings: async () => ({ ...DEFAULT_BOT_INTERRUPTIONS, dailyLimit: 1 }),
@@ -461,8 +458,7 @@ for (const [path_, second] of [
   ["stopped at admission", "suppress"],
 ] as const) {
   test(`a later final ${path_} stays protected until the day's shared limit note lands`, async (t) => {
-    const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-shared-note-"));
-    t.after(() => rm(profile, { recursive: true, force: true }));
+    const profile = await temporaryDirectory(t, "aiden-peer-shared-note-");
     const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
     const limit = { kind: "suppress", reason: "daily_limit", digestKey: "digest:limit:today" } as const;
     const settled: string[] = [];
@@ -496,8 +492,7 @@ for (const [path_, second] of [
 }
 
 test("a final suppressed after the day's limit note went out settles without waiting on it", async (t) => {
-  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-sent-note-"));
-  t.after(() => rm(profile, { recursive: true, force: true }));
+  const profile = await temporaryDirectory(t, "aiden-peer-sent-note-");
   const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
   const settled: string[] = [], banners: string[] = [];
   const funnel = createBotDeliveryFunnel({
@@ -518,8 +513,7 @@ test("a final suppressed after the day's limit note went out settles without wai
 });
 
 test("a note refuses a root past what a stored row can hold, and stays readable", async (t) => {
-  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-note-cap-"));
-  t.after(() => rm(profile, { recursive: true, force: true }));
+  const profile = await temporaryDirectory(t, "aiden-peer-note-cap-");
   const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
   const roots = Array.from({ length: 200 }, (_, index) => `root-${index}`);
   const { row } = await log.append({ botId: "bot:scout", class: "digest", dedupeKey: "digest:limit:today", title: "Scout", body: "More updates are in the chat.", status: "info", createdAt: NOW, deliverAfter: NOW, peerRootIds: roots });
@@ -534,8 +528,7 @@ for (const [name, review] of [
   ["stopped by the budget", { kind: "suppress", reason: "daily_limit", digestKey: "digest:limit:today" }],
 ] as const) {
   test(`a peer root retired during the flush's gate review cannot publish a held row ${name}`, async (t) => {
-    const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-held-retired-"));
-    t.after(() => rm(profile, { recursive: true, force: true }));
+    const profile = await temporaryDirectory(t, "aiden-peer-held-retired-");
     const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
     const channels: string[] = [];
     let live = true, retireOnReview = true;

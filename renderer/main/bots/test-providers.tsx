@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import * as React from "react";
-import { act, render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppCapabilitiesProvider, type AppCapabilities } from "../../lib/app-capabilities";
 import { CommandSystemProvider } from "../../lib/command-system";
@@ -14,6 +15,14 @@ import {
   RouterProvider,
   useParams,
 } from "@tanstack/react-router";
+
+export function modelOption(label: string): HTMLElement {
+  const option = screen
+    .getAllByRole("option")
+    .find((candidate) => candidate.textContent?.includes(label));
+  assert.ok(option, `an option for ${label}`);
+  return option;
+}
 
 /** A query client that never schedules GC timers, so test processes exit. */
 export function createBotTestQueryClient(): QueryClient {

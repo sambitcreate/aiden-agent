@@ -8,9 +8,8 @@ import { McpLiveStatusRegistry } from "../services/mcp-status-events.js";
 import { createMcpStdioApprovalStore, type McpStdioApprovalStore } from "../services/mcp-stdio-approvals.js";
 import { mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
 import { mcpMacAppStatus, openMcpMacApp, type McpMacAppProbe } from "../services/mcp-mac-apps.js";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const linear = { id: "custom-linear", name: "Linear", transport: "http", url: "https://mcp.test/sse", oauth: true, enabled: true } as const;
 
@@ -259,8 +258,7 @@ test("stored header values are lent to a draft only while it reaches the saved e
 });
 
 test("local servers added outside Aiden are listed with what they run and approved only as shown", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-mcp-controls-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-mcp-controls-");
   const approvals = createMcpStdioApprovalStore(async () => path.join(dir, "approvals.json"));
   const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "npx", args: ["-y", "server"], env: { TOKEN: `aiden-secret:v1:${"b".repeat(32)}` }, enabled: true };
   const saved: McpServer[] = [linear, local];

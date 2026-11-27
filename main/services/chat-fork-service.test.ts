@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { ChatForkError, type ChatForkErrorCode } from "./chat-fork-error.js";
@@ -14,10 +13,10 @@ import type { Chat, Workspace } from "./types.js";
 import { createWorkspaceApplicationService, type WorkspaceApplicationDependencies } from "./workspace-application-service.js";
 import { workspaceFolderMissing } from "./workspace-folder-presence.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function fixture(t: TestContext) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-service-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-fork-service-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Parser", workspaceId: "workspace-fork" });
   await store.appendMessage(chat.id, { role: "user", content: "Why does it fail?" });
@@ -280,8 +279,7 @@ test("a caller can refuse the copy before it is installed", async (t) => {
 });
 
 test("feature-owned chats are ineligible for copy and fork", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-owned-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-fork-owned-");
   const store = createChatStore(async () => directory);
   const owned = await store.create({ owner: { kind: "design-project", projectId: "project-1" } });
   await store.appendMessage(owned.id, { role: "user", content: "A pricing page" });
@@ -317,8 +315,7 @@ test("feature-owned chats are ineligible for copy and fork", async (t) => {
 });
 
 async function privateForkWorkspaces(t: TestContext, store: ReturnType<typeof createChatStore>, hidden = true) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-private-fork-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-private-fork-");
   const originalFolder = path.join(root, "original");
   await fs.mkdir(originalFolder);
   await fs.writeFile(path.join(originalFolder, "private.txt"), "source-only content");

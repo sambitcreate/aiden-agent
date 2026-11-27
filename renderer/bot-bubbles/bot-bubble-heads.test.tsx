@@ -5,7 +5,7 @@ import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createBotTestQueryClient } from "../main/bots/test-providers";
-import { botFixture } from "../main/bots/test-fixtures";
+import { botFixture, botLiveSnapshotFixture as snapshot } from "../main/bots/test-fixtures";
 import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
 import { BOT_SIDEBAR_PREFERENCES_KEY } from "../lib/bot-sidebar-preferences";
 import { EMPTY_BOT_BUBBLE_STATE, type BotBubble, type BotBubbleState } from "../shared/bot-bubbles";
@@ -17,21 +17,6 @@ beforeEach(() => localStorage.clear());
 
 const AREA = { width: 1000, height: 800 };
 const PENNY: BotBubble = { botId: "bot-1", placement: { side: "right", y: 0.5, displayId: null } };
-
-function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
-  return {
-    botId: "bot-1",
-    epoch: "epoch-1",
-    seq: 0,
-    entries: [],
-    partial: null,
-    state: { kind: "idle" },
-    question: null,
-    activity: null,
-    queued: [],
-    ...overrides,
-  };
-}
 
 function summary(overrides: Partial<BotLiveSummary> = {}): BotLiveSummary {
   return { botId: "bot-1", preview: null, updatedAt: null, state: { kind: "idle" }, needsYou: false, lastReplyAt: null, ...overrides };

@@ -11,6 +11,7 @@ import { createDefaultAppearanceConfig } from "../shared/appearance";
 import type { BusySendPreference } from "../shared/appearance";
 import { ActivityFeed } from "./activity-feed";
 import type { GenerationTimeline } from "../shared/generation-timeline";
+import { createTestQueryClient } from "../lib/test-harness";
 
 let queryClient: QueryClient;
 let sent: string[];
@@ -21,8 +22,8 @@ function preference(mode: BusySendPreference) {
 beforeEach(() => {
   localStorage.clear();
   sent = [];
-  installBotTestIpc({ "settings:get": () => null, "shortcut:get": () => null, "app:renderer-ready": () => null });
-  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+  installBotTestIpc({ "settings:get": () => null, "app:renderer-ready": () => null, "shortcut:get": () => null });
+  queryClient = createTestQueryClient();
 });
 afterEach(() => { cleanup(); queryClient.clear(); localStorage.clear(); });
 const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));

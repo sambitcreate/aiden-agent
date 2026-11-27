@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
 import * as crypto from "node:crypto";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
@@ -25,6 +23,7 @@ import * as scheduledGenerationPolicy from "./scheduled-generation-policy.js";
 import * as scheduleChatDelivery from "./schedule-chat-delivery.js";
 import * as scheduledTaskPresentation from "../../renderer/shared/scheduled-task-presentation.js";
 import type { ScheduledTask } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 // Runs the real scheduled LLM execution path and records what it hands the
 // generation client. Policy, surface and guard modules are the production
@@ -367,8 +366,7 @@ test("a task made in a chat runs there under the task's own policy, its prompt s
 });
 
 test("a task run in its chat saves its prompt and answer there, and the stored chat keeps the person's model", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-task-chat-model-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-task-chat-model-");
   const chats = createChatStore(async () => directory);
   const chosen = await chats.create({ workspaceId: "workspace-1", providerId: "chat-provider", model: "chat-model" });
   const unset = await chats.create({ workspaceId: "workspace-1" });

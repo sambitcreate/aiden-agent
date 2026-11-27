@@ -14,19 +14,12 @@ import { idleLiveController } from "./assistant/assistant-live-test-fixture";
 import type { AssistantLiveController } from "./assistant/use-assistant-live";
 import { DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { mountWithBotRouter } from "../main/bots/test-providers";
-import type { Chat, Workspace } from "../lib/types";
+import type { Chat } from "../lib/types";
+import { TEST_WORKSPACE, createTestQueryClient } from "../lib/test-harness";
 
 // With an empty draft, the button in Send's place starts Aiden Live; typing,
 // attaching, a running turn or dictation keep Send (or Stop).
 
-const WORKSPACE: Workspace = {
-  id: "ws-1",
-  name: "app",
-  folderPath: "/tmp/app",
-  permission: "full",
-  createdAt: 1,
-  updatedAt: 1,
-};
 const DRAFT = { id: "draft-live", title: "New chat", messages: [], createdAt: 1, updatedAt: 1 } as unknown as Chat;
 const READY: LiveLaunchState = { offered: true, sessionActive: false, needsSetup: false };
 
@@ -78,8 +71,8 @@ beforeEach(() => {
   launches = 0;
   calls = installBotTestIpc({
     "settings:get": () => null,
-    "shortcut:get": () => null,
     "app:renderer-ready": () => null,
+    "shortcut:get": () => null,
     "voice:resolveProvider": () => ({ kind: "ready", provider: "local", modelId: "parakeet-v3-metal", automatic: true }),
     "localVoice:warm": () => undefined,
     "voice:localLiveStart": () => ({ sessionId: "live-1" }),
@@ -99,9 +92,7 @@ beforeEach(() => {
     getMediaAccessStatus: async () => "granted",
     askForMediaAccess: async () => true,
   };
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
 });
 
 afterEach(() => {
@@ -120,7 +111,7 @@ function Harness({ offer = true, isGenerating = false }: { offer?: boolean; isGe
             hasMessages={false}
             chatId={DRAFT.id}
             sessionChat={DRAFT}
-            workspace={WORKSPACE}
+            workspace={TEST_WORKSPACE}
             offerLive={offer}
             onRenameChat={() => undefined}
             onSend={async (text) => {

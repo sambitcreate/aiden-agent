@@ -17,6 +17,7 @@ import {
 } from "./pi-upgrade-rollout.js";
 import { PiCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { runPiUpgradeCachedPrefixReplay, runPiUpgradeReplayCases } from "./pi-upgrade-replay-runner.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function passingMeasurements(): Promise<PiUpgradeReplayMeasurement[]> {
   return runPiUpgradeReplayCases();
@@ -209,8 +210,7 @@ test("device-local rollout advances one stage and v4-only requires installed rol
 });
 
 test("two rollout-store instances cannot regress device state from a stale cache", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-rollout-race-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-rollout-race-");
   const options = { root: () => root, initialStage: "internal_fixtures" as const, now: () => 20_000 };
   const first = new PiUpgradeRolloutStore(options);
   const stale = new PiUpgradeRolloutStore(options);
@@ -232,8 +232,7 @@ test("two rollout-store instances cannot regress device state from a stale cache
 });
 
 test("rollout reads reject invalid replacements and recover without rewriting device data", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-rollout-reload-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-rollout-reload-");
   const store = new PiUpgradeRolloutStore({ root: () => root, initialStage: "new_chats", now: () => 100 });
   const initial = await store.load();
   const file = path.join(root, "pi-upgrade-rollout-v1.json");
@@ -269,8 +268,7 @@ test("rollout reads reject invalid replacements and recover without rewriting de
 });
 
 test("an overlapping first load cannot recreate a policy deleted after the first read", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-rollout-overlap-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-rollout-overlap-");
   let calls = 0;
   let release!: () => void;
   let arrived!: () => void;
@@ -295,8 +293,7 @@ test("an overlapping first load cannot recreate a policy deleted after the first
 });
 
 test("failed advancement still records observation before a waiting first load can recreate policy", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-observed-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-observed-");
   const file = path.join(root, "pi-upgrade-rollout-v1.json");
   await writeFile(file, JSON.stringify({ version: 1, stage: "existing_long_chats", activatedAt: 100, revision: 7 }));
   let release!: () => void;
@@ -320,8 +317,7 @@ test("failed advancement still records observation before a waiting first load c
 });
 
 test("concurrent rollout initialization publishes one complete policy without losing the winner", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-rollout-create-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-rollout-create-");
   const stores = Array.from({ length: 24 }, (_, index) => new PiUpgradeRolloutStore({
     root: () => root,
     initialStage: index % 2 === 0 ? "new_chats" : "internal_fixtures",
@@ -340,8 +336,7 @@ test("concurrent rollout initialization publishes one complete policy without lo
 });
 
 test("external rollout advancement preserves the activated new-chat cohort on subsequent reads", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-rollout-cutoff-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-rollout-cutoff-");
   let now = 100;
   const options = { root: () => root, initialStage: "developer_installs" as const, now: () => now };
   const app = new PiUpgradeRolloutStore(options);
@@ -374,8 +369,7 @@ test("external rollout advancement preserves the activated new-chat cohort on su
 });
 
 test("crashed rollout locks recover and installed identity includes app resources", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-rollout-stale-lock-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-rollout-stale-lock-");
   const app = path.join(root, "Candidate.app");
   const executable = path.join(app, "Contents", "MacOS", "Aiden Agent");
   const resource = path.join(app, "Contents", "Resources", "app.asar");
@@ -436,8 +430,7 @@ test("operator advancement command is registered and uses the guarded store", as
 });
 
 test("production journal creation and legacy migration obey the device rollout without rewriting deferred v3", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-format-rollout-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-format-rollout-");
   const root = path.join(temporary, "sessions");
   const directory = path.join(root, "--legacy--");
   await mkdir(directory, { recursive: true });
@@ -486,8 +479,7 @@ test("production journal creation and legacy migration obey the device rollout w
 });
 
 test("openChatIfEligible probes the rollout without creating or rewriting journals", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-open-eligible-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-open-eligible-");
   const policy = { version: 1 as const, stage: "new_chats" as const, activatedAt: 1, revision: 1 };
 
   // (a) An eligible new chat delegates to the shared open continuation: a

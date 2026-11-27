@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { test } from "node:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -15,24 +14,17 @@ import {
   MAX_DISPLAY_IMAGE_PIXELS_PER_CHAT,
 } from "./display-image-extension.js";
 import type { ChatImageArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import { createTempDirRegistry } from "../shared/temp-dir-test-support.js";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==",
   "base64",
 );
-const temporaryDirectories: string[] = [];
+const tempDirs = createTempDirRegistry();
 
-afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
-});
 
 async function storageRoot(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-artifacts-"));
-  temporaryDirectories.push(directory);
+  const directory = await tempDirs.create("aiden-image-artifacts-");
   return directory;
 }
 

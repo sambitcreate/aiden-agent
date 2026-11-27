@@ -4,12 +4,13 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
-import { Harness, MemoryStorage, ToolResultEntry } from "@earendil-works/pi-durable";
+import { ToolResultEntry } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./test-support/faux.js";
+import { openBotHarness } from "./test-support/harness.js";
 import { botAccessRequestCandidate, botSavedLocationForCall, BOT_ACCESS_REQUEST_MEMO, type BotAccessRequestToolDeps } from "./bot-access-request-tool.js";
 import { BotAccessRequestStaleError, createBotAccessRequests, type BotAccessSettle } from "./bot-access-requests.js";
 import { createBotAccessAuthorizer } from "./bot-access-authorization.js";
@@ -382,16 +383,6 @@ test("real harness cannot call request_access from nested codemode", async (t) =
   const read = buildBotFileTools({
     defaultLocation: { id: "home", label: "Bot folder", root: app.botHome },
   })[0]!;
-  const registry = createBotRegistry(
-    BOT,
-    recordingDeps({
-      tools: [
-        { ...app.candidate, replay: "safe" },
-        { tool: read, replay: "safe" },
-      ],
-    }),
-  );
-  await registry.refresh();
   const faux = createFauxModels([
     fauxAssistantMessage(
       [
@@ -403,10 +394,18 @@ test("real harness cannot call request_access from nested codemode", async (t) =
     ),
     fauxAssistantMessage("done"),
   ]);
-  const harness = await Harness.open(new MemoryStorage(), { registry, models: faux.models }, ctx);
-  registry.attachHarness(harness);
+  const { harness, root } = await openBotHarness({
+    botId: BOT,
+    deps: recordingDeps({
+      tools: [
+        { ...app.candidate, replay: "safe" },
+        { tool: read, replay: "safe" },
+      ],
+    }),
+    fauxModels: faux,
+    ctx,
+  });
   try {
-    const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
     await (await root.submit({ type: "input", content: "try", requestId: "r1" }, ctx)).wait(ctx);
     const result = (await root.context(ctx)).entries.find(
       (entry) => entry.kind === ToolResultEntry.kind,
@@ -526,11 +525,18 @@ test("real harness keeps own Always A reachable after its task settles and Once 
     step("read_file",{location:"run.access",path:"b.txt"}),
     fauxAssistantMessage("queued done"),
   ]);
-  const registry=createBotRegistry(BOT,recordingDeps({tools:[{...app.candidate,replay:"safe"},...app.fileCandidates.map(candidate=>({...candidate,replay:"safe" as const}))]}));
-  await registry.refresh();
-  const harness=await Harness.open(new MemoryStorage(),{registry,models:faux.models},ctx);registry.attachHarness(harness);
+  const { harness, root: conversation } = await openBotHarness({
+    botId: BOT,
+    deps: recordingDeps({
+      tools: [
+        { ...app.candidate, replay: "safe" },
+        ...app.fileCandidates.map((candidate) => ({ ...candidate, replay: "safe" as const })),
+      ],
+    }),
+    fauxModels: faux,
+    ctx,
+  });
   try {
-    const conversation=await harness.root(ctx,{agent:{model:FAUX_MODEL_REF}});
     const first=await conversation.submit({type:"input",content:"work",requestId:"r1"},ctx);
     await waitFor(()=>app.requests.pending().length===1);
     await app.answer("always");

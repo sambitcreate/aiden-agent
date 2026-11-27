@@ -11,6 +11,7 @@ import {
   inspectAidenFilesystemIdentity,
   type AidenOpaqueHandleClaims,
 } from "./aiden-remote-opaque-handles.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const claims = (overrides: Partial<AidenOpaqueHandleClaims> = {}): AidenOpaqueHandleClaims => ({
   instanceId: "instance-1",
@@ -136,8 +137,7 @@ test("opaque handle storage prunes consumed and expired entries and fails closed
 });
 
 test("failed identity inspection drains its other path lookup before releasing metadata admission", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-identity-drain-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-identity-drain-");
   const original = fsPromises.realpath;
   let release!: () => void;
   let failed!: () => void;

@@ -12,31 +12,7 @@ import {
 } from "./peer-run-subscriptions.js";
 import type { PeerRunEvent } from "../../renderer/shared/peer-host.js";
 import { applyRemoteRunSubscription, initialRemoteRunView } from "../../renderer/lib/hosts/remote-stream-translator.js";
-
-class FakeTimers {
-  now = 0;
-  private next = 1;
-  private readonly pending = new Map<number, { at: number; callback: () => void }>();
-  set = (callback: () => void, ms: number): unknown => {
-    const id = this.next++;
-    this.pending.set(id, { at: this.now + ms, callback });
-    return id;
-  };
-  clear = (handle: unknown): void => {
-    this.pending.delete(handle as number);
-  };
-  advance(ms: number): void {
-    this.now += ms;
-    for (const [id, timer] of [...this.pending].sort((a, b) => a[1].at - b[1].at)) {
-      if (timer.at > this.now || !this.pending.has(id)) continue;
-      this.pending.delete(id);
-      timer.callback();
-    }
-  }
-  get size(): number {
-    return this.pending.size;
-  }
-}
+import { FakeTimers } from "./peer-timers-test-support.js";
 
 function setup(feeds = 0) {
   const timers = new FakeTimers();

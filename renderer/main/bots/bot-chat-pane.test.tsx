@@ -8,7 +8,7 @@ import { BotPanelHandoff } from "./bot-panel-handoff";
 import { clearHandoffTaken } from "../../components/bots/handoff-taken";
 import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
-import { botFixture } from "./test-fixtures";
+import { botFixture, botLiveSnapshotFixture as snapshot } from "./test-fixtures";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
 import { pendingBotResumes, recordBotResume } from "./bot-resume-journal";
 import type { BotPlanView } from "../../shared/bot-plans";
@@ -24,21 +24,6 @@ beforeEach(() => {
 
 const COST_RECEIPT = "cost_" + "a".repeat(64);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
-
-function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
-  return {
-    botId: "bot-1",
-    epoch: "epoch-1",
-    seq: 0,
-    entries: [],
-    partial: null,
-    state: { kind: "idle" },
-    question: null,
-    activity: null,
-    queued: [],
-    ...overrides,
-  };
-}
 
 const COLOUR_QUESTION = {
   question: "Which colour should the banner use?",

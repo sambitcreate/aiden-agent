@@ -15,19 +15,7 @@ import { TaskConnectorChoiceError, connectorTriggerForSave, createTaskConnectorT
 import type { ScheduledTaskConnectorTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 import { createScheduledTaskTriggerStore, hashTaskLinkToken } from "./scheduled-task-triggers-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-  async load(): Promise<T> { return structuredClone(this.data); }
-  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    this.data = draft;
-    return result;
-  }
-  snapshot(): T { return structuredClone(this.data); }
-  restore(data: T): void { this.data = structuredClone(data); }
-}
+import { MemoryPersistence } from "./task-persistence-test-support.js";
 
 const MINUTE = 60_000;
 

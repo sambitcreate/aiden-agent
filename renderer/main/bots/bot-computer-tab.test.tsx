@@ -1,4 +1,4 @@
-import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "./test-dom";
+import { botPanel, emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -68,11 +68,6 @@ async function mountBotChat(
   return { calls, ...mounted };
 }
 
-const botPanel = (): HTMLElement => {
-  const panel = document.getElementById("bot-panel");
-  assert.ok(panel, "the Bot panel is mounted");
-  return panel;
-};
 const panelTabs = () => within(botPanel()).queryAllByRole("tab");
 const tabNames = () => panelTabs().map((tab) => tab.textContent);
 const selectedTab = () => panelTabs().find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent;

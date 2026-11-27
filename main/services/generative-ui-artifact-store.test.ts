@@ -1,23 +1,17 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { test } from "node:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { GenerativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import { createTempDirRegistry } from "../shared/temp-dir-test-support.js";
 
 const HTML = "<p>hello</p>";
-const temporaryDirectories: string[] = [];
+const tempDirs = createTempDirRegistry();
 
-afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
-});
 
 async function storageRoot(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-html-artifacts-"));
-  temporaryDirectories.push(directory);
+  const directory = await tempDirs.create("aiden-html-artifacts-");
   return directory;
 }
 

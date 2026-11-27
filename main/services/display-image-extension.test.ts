@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { test } from "node:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   hasCanonicalBase64Padding,
@@ -22,6 +21,7 @@ import {
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import type { ChatImageArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import { createTempDirRegistry } from "../shared/temp-dir-test-support.js";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==",
@@ -96,7 +96,7 @@ function webpWithMismatchedEmbeddedFrame(): Buffer {
   body.copy(webp, 12);
   return webp;
 }
-const temporaryDirectories: string[] = [];
+const tempDirs = createTempDirRegistry();
 
 test("an artifact-only assistant reply is visible terminal output", () => {
   assert.equal(generationHasVisibleOutput("", 1), true);
@@ -104,17 +104,9 @@ test("an artifact-only assistant reply is visible terminal output", () => {
   assert.equal(generationHasVisibleOutput("Done", 0), true);
 });
 
-afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
-});
 
 async function workspace(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-display-image-"));
-  temporaryDirectories.push(directory);
+  const directory = await tempDirs.create("aiden-display-image-");
   return directory;
 }
 

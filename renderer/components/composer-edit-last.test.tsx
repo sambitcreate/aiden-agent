@@ -10,8 +10,9 @@ import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import { loadComposerDraft, stageComposerText } from "../lib/composer-draft-store";
 import { openLayer } from "../lib/layer-stack";
-import type { Chat, ChatMessage, Workspace } from "../lib/types";
+import type { Chat, ChatMessage } from "../lib/types";
 import type { ComposerHistoryEntry } from "../lib/composer-history";
+import { TEST_WORKSPACE, createTestQueryClient, settle } from "../lib/test-harness";
 
 // ↑ in an empty message box opens the history popover, live-fills the composer
 // with past prompts, and shows each prompt's paired reply. ↓ steps back down
@@ -20,15 +21,6 @@ import type { ComposerHistoryEntry } from "../lib/composer-history";
 // and Alt+Enter triggers Edit in fork when the turn is eligible.
 
 let queryClient: QueryClient;
-
-const WORKSPACE: Workspace = {
-  id: "ws-1",
-  name: "app",
-  folderPath: "/tmp/app",
-  permission: "full",
-  createdAt: 1,
-  updatedAt: 1,
-};
 
 function message(
   id: string,
@@ -55,17 +47,15 @@ beforeEach(() => {
   localStorage.clear();
   installBotTestIpc({
     "settings:get": () => null,
-    "shortcut:get": () => null,
     "app:renderer-ready": () => null,
+    "shortcut:get": () => null,
     "workspaces:files": () => ({
       entries: [{ path: "README.md", name: "README.md", parentPath: "", depth: 0, kind: "file" }],
       truncated: false,
       skippedDirectories: 0,
     }),
   });
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
 });
 
 afterEach(() => {
@@ -107,7 +97,7 @@ function buildComposer(
             chatId={sessionChat?.id ?? "bot:b1"}
             sessionChat={sessionChat}
             historyEntries={historyEntries}
-            workspace={WORKSPACE}
+            workspace={TEST_WORKSPACE}
             inputRef={inputRef}
             slashPaletteBlocked={slashPaletteBlocked}
             slashSessionBlockedReason={slashSessionBlockedReason}
@@ -147,12 +137,6 @@ function mount(sessionChat: Chat | undefined, options: MountOptions = {}) {
     rerender: (nextChat: Chat | undefined, nextOptions: MountOptions = options) =>
       view.rerender(buildComposer(nextChat, nextOptions, forks, sends, onStop)),
   };
-}
-
-async function settle() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
 }
 
 async function press(target: Element, key: string, init: Record<string, unknown> = {}) {

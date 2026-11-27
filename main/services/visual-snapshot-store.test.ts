@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { createChatStore } from "./chat-store-core.js";
 import { projectAidenRemoteChat } from "./aiden-remote-chats.js";
 import { VISUAL_SNAPSHOT_ID_PREFIX } from "../../renderer/shared/visual-snapshots.js";
 import { displayedAssistantImageUsage } from "./display-image-extension.js";
 import type { Attachment } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 const PNG_SIZE = Buffer.from(PNG, "base64").length;
@@ -22,8 +20,7 @@ function png(id: string, name = "Board.png"): Attachment {
 }
 
 async function chatWithVisuals(t: TestContext, extraAttachments: Attachment[] = []) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-snapshots-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-snapshots-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Snapshots", workspaceId: "w", providerId: "p", model: "m" });
   await store.appendMessage(chat.id, { role: "user", content: "Draw it" });

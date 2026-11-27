@@ -23,6 +23,8 @@ import type {
   SubagentRunStoreGeneration,
   SubagentRunStoreStorage,
 } from "./subagent-run-store-io.js";
+import { deferred } from "../../shared/async-test-support.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function testDirectory(t: test.TestContext): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-subagent-runs-"));
@@ -92,14 +94,6 @@ test("lossless V1 migration accepts only exact non-normalizing evidence", () => 
     ),
   );
 });
-
-function deferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function framedIrregularEncoding(value: string): string {
   const chunks: string[] = [];
@@ -204,8 +198,7 @@ async function assertUnreadableDeletionEvidenceBlocksRestart(
   t: test.TestContext,
   corrupt: (contents: Buffer) => Buffer,
 ): Promise<void> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-deletion-evidence-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-chat-deletion-evidence-");
   const chatsDirectory = path.join(root, "chats");
   const runsDirectory = path.join(root, "runs");
   await fs.mkdir(chatsDirectory, { recursive: true });
@@ -2373,8 +2366,7 @@ test("over-cap valid pending deletion state fails closed without dropping a mark
 });
 
 test("startup finishes a chat deletion journaled before the owning chat was removed", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-deletion-restart-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-chat-deletion-restart-");
   const chatsDirectory = path.join(root, "chats");
   const runsDirectory = path.join(root, "runs");
   await fs.mkdir(chatsDirectory, { recursive: true });

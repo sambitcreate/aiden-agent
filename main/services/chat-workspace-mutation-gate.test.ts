@@ -1,14 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ChatWorkspaceMutationGate } from "./chat-workspace-mutation-gate.js";
-
-function deferred() {
-  let resolve = (): void => undefined;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 test("a delayed generation initialization keeps an empty-chat workspace move closed", async () => {
   const gate = new ChatWorkspaceMutationGate();

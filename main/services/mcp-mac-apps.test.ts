@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -9,6 +9,7 @@ import { createMcpStdioApprovalStore } from "./mcp-stdio-approvals.js";
 import { resolveMcpConnectionCredentials } from "./mcp-connection-credentials.js";
 import { desktopStdioLaunch, isMcpMacAppOpen, mcpMacAppStatus, openMcpMacApp, type McpMacAppProbe } from "./mcp-mac-apps.js";
 import { getMcpPreset, serverFromPreset, type MacAppMcpPreset } from "./mcp-presets.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const imcp = getMcpPreset("imcp") as MacAppMcpPreset;
 const HOME = "/Users/me";
@@ -117,8 +118,7 @@ test("an approved iMCP path cannot run a replacement executable", { skip: proces
   const run = promisify(execFile);
   await run(process.execPath, ["scripts/build-imcp-launcher.mjs"]);
   const launcher = path.resolve("build/native/aiden-imcp-launcher");
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-imcp-replaced-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-imcp-replaced-");
   t.mock.method(os, "homedir", () => root);
   const bundle = path.join(root, "Applications", "iMCP.app");
   const command = path.join(bundle, "Contents/MacOS/imcp-server");

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -36,38 +35,21 @@ import type {
   WebSearchFetch,
 } from "./web-search-provider-registry.js";
 import type { WebSearchResolvedExistingAuth } from "./web-search-auth-reuse.js";
+import { adapterTestSupport, fixture, oversizedStreamResponse } from "./web-search-adapter-test-support.js";
 
 const PRIVATE_KEY = "wave1-provider-key-4e3d9c";
 const PRIVATE_BODY = "WAVE1_PRIVATE_UPSTREAM_BODY_4e3d9c";
 
-async function fixture(
-  provider: "openai-responses" | "brave-search" | "tavily-search",
-  name: string,
-): Promise<string> {
-  return readFile(new URL(`./fixtures/${provider}/${name}`, import.meta.url), "utf8");
-}
+const { assertSecureRequest, createAdapterRequest } = adapterTestSupport({
+  key: PRIVATE_KEY,
+  body: PRIVATE_BODY,
+});
 
-function adapterRequest(
+const adapterRequest = (
   _providerId: "openai" | "brave" | "tavily",
-  signal = new AbortController().signal,
-): WebSearchAdapterRequest {
-  return {
-    query: "current provider documentation",
-    numResults: 2,
-    credentialMode: "api-key",
-    credential: PRIVATE_KEY,
-    signal,
-  };
-}
-
-function assertSecureRequest(init: RequestInit | undefined): void {
-  assert.equal(init?.redirect, "error");
-  assert.equal(init?.credentials, "omit");
-  assert.equal(init?.cache, "no-store");
-  assert.equal(init?.referrerPolicy, "no-referrer");
-  assert.equal(JSON.stringify(init).includes(PRIVATE_BODY), false);
-  assert.equal(JSON.stringify(init).includes(PRIVATE_KEY), true);
-}
+  signal?: AbortSignal,
+): WebSearchAdapterRequest =>
+  createAdapterRequest({ query: "current provider documentation", signal });
 
 test("OpenAI builder follows the reviewed Responses web-search JSON contract", () => {
   const request = buildOpenAIWebSearchRequest("  current OpenAI docs  ", 2, {
@@ -462,19 +444,7 @@ test("declared and streamed byte bounds are enforced before JSON parsing", async
   );
 
   const streamedOversize = createBraveWebSearchAdapter({
-    fetch: async () => {
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array(WEB_SEARCH_JSON_RESPONSE_MAX_BYTES));
-          controller.enqueue(new Uint8Array(1));
-          controller.close();
-        },
-      });
-      return new Response(stream, {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    },
+    fetch: async () => oversizedStreamResponse(WEB_SEARCH_JSON_RESPONSE_MAX_BYTES),
   });
   await assert.rejects(
     streamedOversize.search(adapterRequest("brave")),

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import type { BeforeToolCallContext } from "@earendil-works/pi-agent-core";
@@ -23,10 +22,10 @@ import {
   subagentWorkspaceRevisionV2,
   type SubagentWorkspaceWriteApprovalBrokerV2Input,
 } from "./subagent-workspace-write.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function testWorkspace(t: test.TestContext): Promise<Workspace> {
-  const folderPath = await mkdtemp(path.join(os.tmpdir(), "aiden-subagent-write-"));
-  t.after(() => rm(folderPath, { recursive: true, force: true }));
+  const folderPath = await temporaryDirectory(t, "aiden-subagent-write-");
   return {
     id: "workspace-write",
     name: "Workspace Write",

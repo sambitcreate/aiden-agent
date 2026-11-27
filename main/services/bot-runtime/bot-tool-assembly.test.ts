@@ -9,7 +9,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type ImageContent, type Message } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { defineExtension, hook, ToolTask, Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
+import { defineExtension, hook, ToolTask, type Conversation } from "@earendil-works/pi-durable";
 import { createBotPlans, type BotPlans } from "../bot-plans/plans.js";
 import { botPlanProposalFingerprint, botPlanRuleFingerprint, type BotPlanProposal } from "../bot-plans/validate.js";
 import type { BotPlanItem } from "../../../renderer/shared/bot-plans.js";
@@ -63,6 +63,7 @@ import {
 import { spawnHarnessChild } from "./test-support/child.js";
 import { countingTool } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
+import { botToolResults, openBotHarness, type BotToolResultModel } from "./test-support/harness.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const scenarioFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-support", "assembly-scenario.ts");
@@ -86,14 +87,7 @@ function botHome(): string {
 const full = (home: string) => testAuthority({ mode: "full", home, ...FULL_GRANTS });
 const customNone = (home: string) => testAuthority({ mode: "custom", home, ...CUSTOM_NONE });
 
-type ToolResultModel = { isError: boolean; toolName: string; content: Array<{ text?: string }> };
-
-async function toolResults(conversation: Conversation): Promise<ToolResultModel[]> {
-  const view = await conversation.context(ctx);
-  return view.entries
-    .filter((entry) => entry.kind === ToolResultEntry.kind)
-    .map((entry) => (entry as unknown as { model: ToolResultModel[] }).model[0]!);
-}
+const toolResults = (conversation: Conversation) => botToolResults(conversation, ctx);
 
 async function sharedImages(conversation: Conversation): Promise<Array<{ name: string; data: string }>> {
   const view = await conversation.context(ctx);
@@ -102,15 +96,10 @@ async function sharedImages(conversation: Conversation): Promise<Array<{ name: s
     .map((entry) => entry.data as unknown as { name: string; data: string });
 }
 
-const resultText = (result: ToolResultModel | undefined) => result?.content.map((part) => part.text ?? "").join("") ?? "";
+const resultText = (result: BotToolResultModel | undefined) => result?.content.map((part) => part.text ?? "").join("") ?? "";
 
 async function memoryHarness(deps: BotExtensionDeps, fauxModels: FauxModels, botId = "bot-1") {
-  const registry = createBotRegistry(botId, deps);
-  await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
-  registry.attachHarness(harness);
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
-  return { harness, root, registry };
+  return openBotHarness({ botId, deps, fauxModels, ctx });
 }
 
 /** A faux runtime for the companion vision model. */

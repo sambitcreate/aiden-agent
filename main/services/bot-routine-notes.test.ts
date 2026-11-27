@@ -22,6 +22,7 @@ import {
   createBotRoutineService,
 } from "./scheduled-bot-routines.js";
 import type { ScheduledTask } from "./types.js";
+import { MemoryPersistence } from "./task-persistence-test-support.js";
 
 const roots: string[] = [];
 function profile(): string {
@@ -166,19 +167,6 @@ test("a call is bound to the routine whose input its run serves, not the newest 
   const done = Object.fromEntries(history.map((entry) => [(entry.data as { requestId: string }).requestId, "done" as const]));
   assert.equal(await routineTaskIdOfCall(callWith([notice(100, current), ...history], { ...done, [current]: "placed" })), "task-now");
 });
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-  async load(): Promise<T> {
-    return structuredClone(this.data);
-  }
-  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    this.data = draft;
-    return result;
-  }
-}
 
 function routineHarness(notes: ReturnType<typeof notesStore>) {
   const store = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]));

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { installBotTestIpc } from "../main/bots/test-dom";
-import { mountWithBotRouter } from "../main/bots/test-providers";
+import { modelOption, mountWithBotRouter } from "../main/bots/test-providers";
 import { detectedKeyboardPlatform } from "../shared/keybindings";
 import type { AppSettings, Provider } from "../lib/types";
 import { ModelPicker } from "./model-picker";
@@ -95,14 +95,6 @@ test("the side card names the other providers that serve the same model", async 
   assert.match(card.textContent ?? "", /Current Model/u);
   assert.match(card.textContent ?? "", /Also via Relay Hub/u);
 });
-
-function modelOption(label: string): HTMLElement {
-  const option = screen
-    .getAllByRole("option")
-    .find((candidate) => candidate.textContent?.includes(label));
-  assert.ok(option, `an option for ${label}`);
-  return option;
-}
 
 /** A row's mouse-only Pin action, by what pressing it does ("Pin", "Unpin"). */
 function rowAction(label: string, action: string): HTMLElement {

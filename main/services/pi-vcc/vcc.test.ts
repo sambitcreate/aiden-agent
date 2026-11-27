@@ -11,6 +11,7 @@ import { recallVcc } from "./recall-core.js";
 import { createVccRecallTool } from "./recall.js";
 import { vccErrorMessage, vccFailureCode, VccError } from "./errors.js";
 import { compileVccInWorker, runVccWorker } from "./worker-client.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const settings = { enabled: true, reserveTokens: 1000, keepRecentTokens: 300 };
 async function fixture() {
@@ -370,12 +371,8 @@ test("synthetic replay reports semantic retention separately from searchable his
 });
 
 test("v4 restart preserves the VCC checkpoint and exact recall references; deletion removes its source", async (t) => {
-  const { mkdtemp, rm } = await import("node:fs/promises");
-  const { tmpdir } = await import("node:os");
-  const path = await import("node:path");
   const { createCurrentPiSessionRepository } = await import("../pi-session-repository-port.js");
-  const root = await mkdtemp(path.join(tmpdir(), "aiden-vcc-restart-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-vcc-restart-");
   const repo = createCurrentPiSessionRepository(root);
   const session = await repo.create({ id: "vcc-restart", cwd: root, metadata: {} });
   const { input, models, model } = await fixture();

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, test } from "node:test";
+import { test } from "node:test";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import {
   EncryptedPiCredentialStore,
@@ -13,16 +12,11 @@ import {
   type PiCredentialWriteChange,
 } from "./pi-credential-store-core.js";
 import { BotRuntimeInventoryLeaseRegistry } from "./bot-runtime-inventory-lease.js";
+import { deferred } from "../shared/async-test-support.js";
+import { createTempDirRegistry } from "../shared/temp-dir-test-support.js";
 
-const temporaryDirectories: string[] = [];
+const tempDirs = createTempDirRegistry();
 
-afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
-});
 
 function cipher(overrides: Partial<CredentialCipher> = {}): CredentialCipher {
   return {
@@ -45,8 +39,7 @@ async function fixture(
     syncDirectory?: (directory: string) => Promise<void>;
   } = {},
 ) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-pi-credentials-"));
-  temporaryDirectories.push(directory);
+  const directory = await tempDirs.create("aiden-pi-credentials-");
   const file = path.join(directory, "credentials.json");
   const makeStore = () =>
     new EncryptedPiCredentialStore({
@@ -277,12 +270,6 @@ test("fails closed for unavailable secure storage, corrupt files, and bad cipher
     return true;
   });
 });
-
-function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
-}
 
 for (const operation of ["modify", "delete"] as const) {
   test(`cancelled queued ${operation} cannot replace or remove a newer credential`, async () => {

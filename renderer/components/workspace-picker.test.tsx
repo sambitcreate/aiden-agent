@@ -11,6 +11,8 @@ import { CommandSystemProvider } from "../lib/command-system";
 import type { Workspace } from "../lib/types";
 import { workspaceCloneId, type WorkspacePathInspection } from "../shared/workspace-intake";
 import { queryKeys } from "../lib/queries";
+import { deferred } from "../../main/shared/async-test-support.js";
+import { createTestQueryClient } from "../lib/test-harness";
 
 // The real picker with IPC faked at the preload bridge. Boolean and string
 // oracles throughout: a failing assert on a happy-dom node would print the DOM.
@@ -56,9 +58,7 @@ beforeEach(() => {
   };
   // Tests add channels to `handlers` after install; the fake reads it per call.
   calls = installBotTestIpc(handlers);
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
 });
 
 afterEach(() => {
@@ -149,14 +149,6 @@ async function type(input: HTMLInputElement, value: string) {
 /** Wait past the path-inspection debounce. */
 async function afterInspectDelay() {
   await wait(200);
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 test("the trigger opens a menu with the five most recent workspaces and the actions, without worktrees", async () => {

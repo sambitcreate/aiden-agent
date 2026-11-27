@@ -18,6 +18,7 @@ import {
   type ProviderAuthOwner,
   type ProviderAuthPromptDto,
 } from "./provider-auth-flow-core.js";
+import { deferred } from "../shared/async-test-support.js";
 
 const PROVIDER_ID = "openai-codex" as const;
 const FLOW_A = "11111111-1111-4111-8111-111111111111";
@@ -133,16 +134,6 @@ function backend(login: (interaction: AuthInteraction) => Promise<unknown>): Pro
 function ids(...values: string[]): () => string {
   let index = 0;
   return () => values[index++] ?? PROMPT_A;
-}
-
-function deferred<T>() {
-  let resolve = (_value: T | PromiseLike<T>): void => undefined;
-  let reject = (_reason?: unknown): void => undefined;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 function makeCoordinator(options: {

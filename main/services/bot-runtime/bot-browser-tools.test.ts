@@ -6,7 +6,7 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
+import { type Conversation } from "@earendil-works/pi-durable";
 import {
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_SETTINGS,
@@ -19,7 +19,7 @@ import type { BrowserCommandContext, BrowserFieldProbe } from "../browser/servic
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import { BROWSER_STATE_SELECTOR_REFUSED, BROWSER_VALUE_SELECTOR_REFUSED, BROWSER_XPATH_SELECTOR_REFUSED } from "../browser/credential-boundary.js";
 import { createBotHandoffs, ruleHandoffRequest } from "./bot-handoffs.js";
-import { createBotRegistry, type BotExtensionDeps } from "./bot-extension.js";
+import { type BotExtensionDeps } from "./bot-extension.js";
 import {
   BOT_BROWSER_GUIDANCE,
   botBrowserOwnerMissing,
@@ -31,7 +31,8 @@ import { botIngressAllowsTool, botToolVerdict } from "./bot-tool-policy.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
 import { OLDER_BROWSER_SCREENSHOT_NOTE } from "../screenshot-trimming.js";
 import { assemblyDeps, assemblyState, FULL_GRANTS, testAuthority } from "./test-support/assembly-fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
+import { createFauxModels, waitFor, type FauxModels } from "./test-support/faux.js";
+import { botToolResults, openBotHarness } from "./test-support/harness.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const BOT = "bot-1";
@@ -357,22 +358,11 @@ function tempHome(): string {
 }
 
 async function botTurn(deps: BotExtensionDeps, fauxModels: FauxModels) {
-  const registry = createBotRegistry(BOT, deps);
-  await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
-  registry.attachHarness(harness);
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { harness, root } = await openBotHarness({ botId: BOT, deps, fauxModels, ctx });
   return { harness, root };
 }
 
-type ToolResultModel = { isError: boolean; toolName: string; content: Array<{ text?: string }> };
-
-async function toolResults(conversation: Conversation): Promise<ToolResultModel[]> {
-  const view = await conversation.context(ctx);
-  return view.entries
-    .filter((entry) => entry.kind === ToolResultEntry.kind)
-    .map((entry) => (entry as unknown as { model: ToolResultModel[] }).model[0]!);
-}
+const toolResults = (conversation: Conversation) => botToolResults(conversation, ctx);
 
 async function browserDeps(fake: ReturnType<typeof fakeBrowser>, options: Partial<Parameters<typeof assemblyDeps>[1]> = {}) {
   const state = assemblyState(testAuthority({ mode: "full", home: tempHome(), ...FULL_GRANTS, other: [...FULL_GRANTS.other, "browser"] }));

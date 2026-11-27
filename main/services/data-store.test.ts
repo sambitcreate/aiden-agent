@@ -1,22 +1,14 @@
 import { hardenPrivateFile } from "./private-storage.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { DataStore, type DataStorePublicationReceipt } from "./data-store.js";
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("serializes full config mutations so a delayed write cannot resurrect stale settings", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-data-store-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-data-store-");
   const store = new DataStore(
     "config.json",
     { settings: { computerUseEnabled: true, appearance: "system" }, providers: ["first"] },
@@ -53,8 +45,7 @@ test("serializes full config mutations so a delayed write cannot resurrect stale
 for (const protectedPublication of [false, true]) {
   for (const stage of ["before", "after", "success"] as const) {
     test(`DataStore receipt identifies ${stage} publication for ${protectedPublication ? "protected" : "ordinary"} updates`, async (t) => {
-      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-data-store-receipt-"));
-      t.after(() => fs.rm(directory, { recursive: true, force: true }));
+      const directory = await temporaryDirectory(t, "aiden-data-store-receipt-");
       let fail = false;
       const error = new Error(`${stage} publication failure`);
       const store = new DataStore("receipt.json", { value: "previous" }, () => directory, {
@@ -76,8 +67,7 @@ for (const protectedPublication of [false, true]) {
 }
 
 test("a compact store writes single-line JSON and still loads an indented file", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-data-store-compact-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-data-store-compact-");
   const file = path.join(directory, "journal.json");
   const previous = { version: 1, streams: [{ id: "stream-1", events: [1, 2, 3] }] };
   // Written by an earlier release with indentation.
@@ -97,8 +87,7 @@ test("a compact store writes single-line JSON and still loads an indented file",
 });
 
 test("a storage preparation failure does not load defaults or publish over existing data", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-storage-access-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-storage-access-");
   const target = path.join(root, "config.json");
   await fs.writeFile(target, '{"value":"preserve"}');
   const store = new DataStore("config.json", { value: "default" }, () => root, {
@@ -111,8 +100,7 @@ test("a storage preparation failure does not load defaults or publish over exist
 
 
 test("a concurrent private-store read accepts only its own active publication link", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-private-publication-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-private-publication-");
   const file = path.join(root, "config.json"), outside = path.join(root, "unapproved-link");
   await fs.writeFile(file, '{"value":1}');
   const store: DataStore<{ value: number }> = new DataStore("config.json", { value: 0 }, () => root, {

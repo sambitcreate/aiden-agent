@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -9,6 +8,7 @@ import { GitService } from "./git.js";
 import { resolveGitExecutable } from "./git-executable.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
 import type { Workspace } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const execFileAsync = promisify(execFile);
 // On macOS, select Apple's OS-managed `/usr/bin/git` (resolved via xcode-select
@@ -25,8 +25,7 @@ async function fixture(t: test.TestContext): Promise<{
   workspace: Workspace;
   worktreePath: string;
 }> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-worktree-admission-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-worktree-admission-");
   const repositoryPath = path.join(root, "repository");
   const worktreePath = path.join(root, "worktree");
   const workspacePath = path.join(worktreePath, "packages", "app");
@@ -155,8 +154,7 @@ test("GitService.managedWorktreeUsable verifies modern worktrees via 0-spawn pur
     if (prevNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
     else process.env.GIT_CONFIG_NOSYSTEM = prevNoSystem;
   });
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-usable-fs-"));
-  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const temp = await temporaryDirectory(t, "aiden-usable-fs-");
   const repo = path.join(temp, "repo");
   const worktreesRoot = path.join(temp, "worktrees");
   await fs.mkdir(repo, { recursive: true });
@@ -396,8 +394,7 @@ test("GitService.managedWorktreeUsable tracks native Git system config origins, 
     else process.env.GIT_EXEC_PATH = prevExecPath;
   });
 
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-usable-native-sys-"));
-  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const temp = await temporaryDirectory(t, "aiden-usable-native-sys-");
   const repo = path.join(temp, "repo");
   const worktreesRoot = path.join(temp, "worktrees");
   await fs.mkdir(repo, { recursive: true });
@@ -652,8 +649,7 @@ test("GitService.managedWorktreeUsable fails closed for unchanged wrapper script
     else process.env.GIT_CONFIG_NOSYSTEM = prevNoSystem;
   });
 
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-usable-shim-"));
-  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const temp = await temporaryDirectory(t, "aiden-usable-shim-");
   const repo = path.join(temp, "repo");
   const worktreesRoot = path.join(temp, "worktrees");
   await fs.mkdir(repo, { recursive: true });

@@ -10,6 +10,7 @@ import {
   microphoneCaptureErrorMessage,
   MICROPHONE_PERMISSION_OFF_MESSAGE,
 } from "./voice-recorder-core.js";
+import { deferred } from "../../main/shared/async-test-support.js";
 
 test("microphone capture errors preserve actionable device and permission causes", () => {
   assert.equal(
@@ -50,14 +51,6 @@ function replaceGlobal(t: TestContext, name: string, value: unknown): void {
     if (previous) Object.defineProperty(globalThis, name, previous);
     else Reflect.deleteProperty(globalThis, name);
   });
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 /** Browser conversion remains pending until the test delivers its callback. */

@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { applyChatMetadataUpdate, type ChatMetadataUpdatedPatch } from "../../renderer/shared/chat-metadata-update.js";
 import { createChatStore } from "./chat-store-core.js";
 import { reconcileTurnThinkingLevel } from "./chat-thinking-level-reconcile.js";
 import { resolveGenerationThinkingLevel } from "./generation-runtime.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 // A Codex model that offers its default levels plus xhigh, but not max.
 const PROVIDER = "openai-codex";
@@ -14,8 +12,7 @@ const MODEL = "codex-model";
 const runtimeModel = { reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } } as const;
 
 async function fixture(t: TestContext) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-thinking-reconcile-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-thinking-reconcile-");
   const chatStore = createChatStore(async () => root);
   const broadcasts: ChatMetadataUpdatedPatch[] = [];
   await chatStore.create({ id: "chat-1", title: "Chat", providerId: PROVIDER, model: MODEL });

@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test from "node:test";
 import type { WorkspaceArtifactsChangedEvent } from "../../../renderer/shared/workspace-artifacts.js";
 import { createVisualizeGuideTool } from "../generative-ui-extension.js";
@@ -12,6 +9,7 @@ import {
   workspaceArtifactCallApproval,
   type WorkspaceArtifactToolOptions,
 } from "./tool.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const PAGE = `<Visual title="Open PRs" state={{filter: "all"}}>
   <Text>{len($pulls)} open</Text>
@@ -23,8 +21,7 @@ const PULLS = { name: "pulls", kind: "shell", command: "gh pr list --json number
 const MERGE = { name: "merge", label: "Merge pull request", command: "gh pr merge {{number}}", params: [{ name: "number", type: "number" }] };
 
 async function harness(t: test.TestContext, overrides: Partial<WorkspaceArtifactToolOptions> = {}) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-tool-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifact-tool-");
   let ids = 0;
   const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}` });
   const events: WorkspaceArtifactsChangedEvent[] = [];
@@ -703,8 +700,7 @@ test("get says plainly when a version's markup was not kept, and an undo brings 
 });
 
 test("a page whose markup was dropped for room says so in get and edits, and whole markup brings it back", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-tool-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifact-tool-");
   let ids = 0;
   let clock = 1_000;
   const filler = (word: string) => `<Text>${`${word} `.repeat(1_500)}</Text>`;
@@ -727,8 +723,7 @@ test("a page whose markup was dropped for room says so in get and edits, and who
 });
 
 test("a save or restore whose own markup is dropped for room says in its reply that the next change sends whole markup", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-tool-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifact-tool-");
   let ids = 0;
   const big = PAGE.replace("</Visual>", `<Text>${"word ".repeat(3_000)}</Text>\n</Visual>`);
   // The pages file has room for the page but not for its markup as well.

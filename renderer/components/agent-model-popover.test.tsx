@@ -4,7 +4,7 @@ import { afterEach, test } from "node:test";
 import * as React from "react";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { installBotTestIpc } from "../main/bots/test-dom";
-import { mountWithBotRouter } from "../main/bots/test-providers";
+import { modelOption, mountWithBotRouter } from "../main/bots/test-providers";
 import { useSettings } from "../lib/queries";
 import type { AgentSliderSettings } from "../shared/agent-slider";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
@@ -142,14 +142,6 @@ function stopTarget(index: number): HTMLElement {
   const target = document.querySelector<HTMLElement>(`[data-agent-slider-stop="${index}"]`);
   assert.ok(target, `a click target for stop ${index}`);
   return target;
-}
-
-function modelOption(label: string): HTMLElement {
-  const option = screen
-    .getAllByRole("option")
-    .find((candidate) => candidate.textContent?.includes(label));
-  assert.ok(option, `an option for ${label}`);
-  return option;
 }
 
 test("on a stop the thumb reads the stop, its model and effort; it always has a valid value", async () => {

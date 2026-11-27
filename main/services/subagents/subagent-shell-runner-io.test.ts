@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
-import os from "node:os";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
@@ -12,14 +11,14 @@ import {
   resolveSubagentShellRunnerBinary,
   runSubagentShellProductionInert,
 } from "./subagent-shell-runner-io.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const digest = "a".repeat(64);
 const nonce = "b".repeat(64);
 const binary = path.join(process.cwd(), "build", "native", "aiden-subagent-shell-runner-test");
 
 async function workspace(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-shell-runner-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-shell-runner-");
   return realpath(root);
 }
 

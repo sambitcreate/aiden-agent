@@ -1,5 +1,6 @@
 // Must stay the first import: it selects TanStack Router's client behaviour.
 import "./test-env";
+import assert from "node:assert/strict";
 import { isServer } from "@tanstack/router-core/isServer";
 import { Window } from "happy-dom";
 import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
@@ -176,6 +177,13 @@ export function installBotTestIpc(
     },
   };
   return calls;
+}
+
+/** Returns the mounted Bot panel element (works even when closed / aria-hidden). */
+export function botPanel(): HTMLElement {
+  const panel = document.getElementById("bot-panel");
+  assert.ok(panel, "the Bot panel is mounted");
+  return panel;
 }
 
 installBotTestDom();

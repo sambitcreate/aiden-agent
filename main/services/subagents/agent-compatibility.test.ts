@@ -46,6 +46,7 @@ import {
 } from "./feature-flag.js";
 import { createSubagentOutboundApprovalBrokerV2 } from "./outbound-approval-v2.js";
 import { runSubagentChild, type SubagentChildRunnerPolicy } from "./subagent-child-runner.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 const EMPTY_USAGE = {
   input: 0,
@@ -211,14 +212,6 @@ test("partial findings handed to the parent hide every line of a secret-named bl
 
 function semanticCheckpointSummary(label: string): string {
   return `## Goal\n${label}\n\n## Constraints & Preferences\n- none\n\n## Progress\n### Done\n- [x] preserved state\n\n### In Progress\n- [ ] continue\n\n### Blocked\n- none\n\n## Key Decisions\n- preserve continuity\n\n## Next Steps\n1. Continue\n\n## Critical Context\n- ${label}`;
-}
-
-function deferred<T = void>() {
-  let resolve = (_value: T | PromiseLike<T>): void => undefined;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 async function within<T>(

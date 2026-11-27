@@ -24,6 +24,7 @@ import { StudioAssetGrants, studioAssetGrantToken, type StudioAssetGrantOwner } 
 import { StudioAssetStore } from "../../services/studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../../services/studio-assets/test-fixture.js";
 import { readPickedImage, registerCreateImagesHandlers, type CreateImagesFileActions, type CreateImagesOwner } from "./register.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 /** `owner: null` is a document that is not an Aiden window: the production owner check throws for it. */
 interface FakeEvent { owner: CreateImagesOwner | null }
@@ -399,8 +400,7 @@ test("handlers reach the image port only to list models; generation starts only 
 });
 
 test("a picked image is read through one handle and never beyond the import limit", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-pick-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-image-pick-");
   const exact = path.join(root, "exact.png");
   await writeFile(exact, Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]));
   assert.deepEqual([...(await readPickedImage(exact, 8))], [1, 2, 3, 4, 5, 6, 7, 8]);

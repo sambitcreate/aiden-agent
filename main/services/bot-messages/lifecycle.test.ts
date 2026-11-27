@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { createBotMessageLifecycle } from "./lifecycle.js";
 import { createBotMessageCourier, type BotMessageCourier } from "./courier.js";
 import { createBotMessageLedger } from "./ledger.js";
 import { createBotApprovals } from "../bot-runtime/bot-approvals.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 test("late tools cannot recreate messaging during quit; only explicit start reopens it", async () => {
   let factories = 0,
@@ -59,8 +59,7 @@ test("late tools cannot recreate messaging during quit; only explicit start reop
 });
 
 test("corrupt messaging storage is reported without rejecting Bot startup or altering evidence", async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "bot-message-lifecycle-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "bot-message-lifecycle-");
   const file = path.join(dir, "bot-messages.json");
   await writeFile(file, "broken");
   const reports: unknown[] = [];

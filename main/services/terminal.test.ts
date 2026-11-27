@@ -11,14 +11,7 @@ import {
 } from "./terminal-spawn-helper.js";
 import { TerminalInputOrder, TerminalService, foregroundCommandName, parseForegroundState, type ForegroundState } from "./terminal.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
-
-function deferred() {
-  let resolve: () => void = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 function ownerState(documentId = "document-1", id = 42) {
   let destroyed = false;

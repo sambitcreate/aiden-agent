@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import {
@@ -10,6 +9,7 @@ import {
   ManagedWorktreeRemoverError,
   removeManagedWorktreeDirectory,
 } from "./managed-worktree-remover.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function fixture(t: test.TestContext): Promise<{
   binary: string;
@@ -17,8 +17,7 @@ async function fixture(t: test.TestContext): Promise<{
   authorizationPath: string;
   abortMarker: string;
 }> {
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remover-wrapper-"));
-  t.after(() => fs.rm(parent, { force: true, recursive: true }));
+  const parent = await temporaryDirectory(t, "aiden-remover-wrapper-");
   const target = path.join(parent, ".aiden-removing-owned-token");
   const authorizationPath = path.join(parent, ".aiden-authorizing-owned-token");
   const abortMarker = path.join(parent, "abort-received");

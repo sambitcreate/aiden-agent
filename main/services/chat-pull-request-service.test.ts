@@ -3,8 +3,7 @@
 // the delete/unlink guarantee that nothing here mutates GitHub.
 
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import type { ChatPullRequestCreateIntent } from "../../renderer/shared/chat-pull-requests.js";
@@ -26,6 +25,7 @@ import type {
   GitHubPullRequestSummary,
   GitHubRepositoryStatus,
 } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const CHAT = "chat-test-1";
 const REPO = "owner/repo";
@@ -142,8 +142,7 @@ function fakeService(
 }
 
 test("link resolves canonical identity through gh and stores it", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service, calls } = fakeService(directory, {
     getPullRequestByUrl: async () =>
       ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
@@ -165,8 +164,7 @@ test("link resolves canonical identity through gh and stores it", async (t) => {
 });
 
 test("link rejects a non-pull-request URL without calling GitHub", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service, calls } = fakeService(directory);
   const result = await service.link(CHAT, {
     url: "https://example.com/not-a-pr",
@@ -176,8 +174,7 @@ test("link rejects a non-pull-request URL without calling GitHub", async (t) => 
 });
 
 test("linking the same PR twice deduplicates; unlink removes it", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service } = fakeService(directory, {
     getPullRequestByUrl: async () =>
       ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
@@ -193,8 +190,7 @@ test("linking the same PR twice deduplicates; unlink removes it", async (t) => {
 });
 
 test("detectAfterPush offers unlinked open PRs and refreshes linked ones", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   let found: GitHubPullRequestSummary[] = [summary(41, { title: "Old title" })];
   const { service } = fakeService(directory, {
     getPullRequestByUrl: async () =>
@@ -227,8 +223,7 @@ test("detectAfterPush offers unlinked open PRs and refreshes linked ones", async
 });
 
 test("detectAfterPush on a branch with no PR returns an empty match list", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service } = fakeService(directory);
   const detected = await service.detectAfterPush(CHAT, {
     workspaceId: "workspace-1",
@@ -239,8 +234,7 @@ test("detectAfterPush on a branch with no PR returns an empty match list", async
 });
 
 test("a successful create links the new PR and records no pending intent", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service } = fakeService(directory, {
     createPullRequest: async () =>
       ({
@@ -264,8 +258,7 @@ test("a successful create links the new PR and records no pending intent", async
 });
 
 test("an unknown create outcome with one match adopts it — never a blind retry", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service, calls } = fakeService(directory, {
     createPullRequest: async () =>
       ({
@@ -289,8 +282,7 @@ test("an unknown create outcome with one match adopts it — never a blind retry
 });
 
 test("an unknown outcome with zero matches stays pending instead of allowing a duplicate retry", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service } = fakeService(directory, {
     createPullRequest: async () =>
       ({
@@ -311,8 +303,7 @@ test("an unknown outcome with zero matches stays pending instead of allowing a d
 });
 
 test("an unknown outcome with several matches is ambiguous and keeps the intent", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service } = fakeService(directory, {
     createPullRequest: async () =>
       ({
@@ -355,8 +346,7 @@ test("an unknown outcome with several matches is ambiguous and keeps the intent"
 });
 
 test("adopting a candidate outside the intent is rejected and keeps it pending", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service, calls } = fakeService(directory, {
     createPullRequest: async () =>
       ({
@@ -402,8 +392,7 @@ test("adopting a candidate outside the intent is rejected and keeps it pending",
 });
 
 test("detectAfterPush only offers PRs whose head matches the pushed commit", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service } = fakeService(directory, {
     findForBranch: async () =>
       ready({
@@ -425,8 +414,7 @@ test("detectAfterPush only offers PRs whose head matches the pushed commit", asy
 });
 
 test("a create lost across restart reconciles on the next pending pass", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
 
   // First session: `gh pr create` outcome never makes it back (crash before
   // reconcile). Simulate by recording the intent directly, as the crash
@@ -462,8 +450,7 @@ test("a create lost across restart reconciles on the next pending pass", async (
 });
 
 test("unavailable reconciliation keeps the intent pending", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service } = fakeService(directory, {
     createPullRequest: async () =>
       ({ kind: "unknown", message: "killed" }) as GitHubPullRequestCreateResult,
@@ -484,8 +471,7 @@ test("unavailable reconciliation keeps the intent pending", async (t) => {
 });
 
 test("current resolves through the precedence model with workspace context", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service } = fakeService(directory, {
     getPullRequestByUrl: async () =>
       ready({
@@ -506,8 +492,7 @@ test("current resolves through the precedence model with workspace context", asy
 });
 
 test("a branch that pushes under another name resolves to the pull request on that name", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const listedBranches: unknown[] = [];
   const { service } = fakeService(
     directory,
@@ -548,8 +533,7 @@ test("a branch that pushes under another name resolves to the pull request on th
 });
 
 test("the push branch still resolves the pull request when the git status read fails", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service, deps } = fakeService(directory, {
     resolveRepository: async () => ({
       availability: "ready",
@@ -577,8 +561,7 @@ test("the push branch still resolves the pull request when the git status read f
 });
 
 test("sidebar reads each chat's best cached PR without calling GitHub", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const merged = new Set([11, 20]);
   const { service, calls } = fakeService(directory, {
     getPullRequestByUrl: async (...args: never[]) => {
@@ -611,8 +594,7 @@ test("sidebar reads each chat's best cached PR without calling GitHub", async (t
 });
 
 test("deleteChat removes the link file and never calls GitHub", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service, calls } = fakeService(directory, {
     getPullRequestByUrl: async () =>
       ready({ pullRequest: summary(12) }) as GitHubPullRequestStatus,
@@ -625,8 +607,7 @@ test("deleteChat removes the link file and never calls GitHub", async (t) => {
 });
 
 test("detectAfterPush treats an unreadable head SHA as unverifiable, not absent", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service } = fakeService(directory, {
     findForBranch: async () =>
       ready({
@@ -646,8 +627,7 @@ test("detectAfterPush treats an unreadable head SHA as unverifiable, not absent"
 });
 
 test("an unknown create reconciles against the normalized intent SHA", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service } = fakeService(directory, {
     createPullRequest: async () =>
       ({ kind: "unknown", message: "killed" }) as GitHubPullRequestCreateResult,
@@ -671,8 +651,7 @@ test("an unknown create reconciles against the normalized intent SHA", async (t)
 });
 
 test("invalid supplied SHA cannot start detection or creation", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service, calls } = fakeService(directory);
   for (const expectedHeadSha of ["invalid", "", "a".repeat(65), " aaaa"]) {
     const input = {
@@ -695,8 +674,7 @@ test("invalid supplied SHA cannot start detection or creation", async (t) => {
 });
 
 test("failed link publication retains the successful create intent for restart", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service, deps } = fakeService(directory, {
     createPullRequest: async () => ({
       kind: "created",
@@ -723,8 +701,7 @@ test("failed link publication retains the successful create intent for restart",
 });
 
 test("unlink survives restart and suppresses automatic current-PR discovery until explicitly relinked", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const github = {
     getPullRequestByUrl: async () => ready({ pullRequest: summary(12) }),
     currentPullRequest: async () => ready({ pullRequest: summary(12) }),
@@ -744,8 +721,7 @@ test("unlink survives restart and suppresses automatic current-PR discovery unti
 });
 
 test("only explicit manual resolution clears an unknown create that is absent from lookup", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const { service, calls } = fakeService(directory, {
     createPullRequest: async () => ({
       kind: "unknown",
@@ -769,8 +745,7 @@ test("only explicit manual resolution clears an unknown create that is absent fr
 });
 
 test("chat deletion fences a delayed GitHub link response", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   let release!: (value: GitHubPullRequestStatus) => void;
   let entered!: () => void;
   const started = new Promise<void>((resolve) => {
@@ -799,8 +774,7 @@ test("chat deletion fences a delayed GitHub link response", async (t) => {
 });
 
 test("chat deletion fences a delayed successful remote create", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   let release!: (value: GitHubPullRequestCreateResult) => void;
   let entered!: () => void;
   const started = new Promise<void>((resolve) => {
@@ -839,8 +813,7 @@ test("every unresolved create outcome notifies after its durable intent is visib
     ready({ pullRequests: [summary(1), summary(2)] }),
     { availability: "error" as const },
   ]) {
-    const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-    t.after(() => rm(directory, { recursive: true, force: true }));
+    const directory = await temporaryDirectory(t, "aiden-chat-pr-");
     const visible: Promise<ChatPullRequestCreateIntent[]>[] = [];
     const { service } = fakeService(
       directory,
@@ -872,8 +845,7 @@ test("every unresolved create outcome notifies after its durable intent is visib
 });
 
 test("a rate limit keeps cached snapshots and tells the caller when reads resume", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const retryAt = Date.now() + 10 * 60_000;
   let limited = false;
   let changes = 0;
@@ -907,8 +879,7 @@ test("a rate limit keeps cached snapshots and tells the caller when reads resume
 });
 
 test("refresh reads every link together and announces only real changes", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   let checksState: "passing" | "failing" = "passing";
   let inFlight = 0;
   let maxInFlight = 0;
@@ -943,8 +914,7 @@ test("refresh reads every link together and announces only real changes", async 
 });
 
 test("explicit refresh bypasses a fresh background cache after remote CI changes", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const github = new FakeGitHub({
     repositories: ["owner/repo"],
     pullRequests: [
@@ -1055,8 +1025,7 @@ function reserveLimitedService(directory: string) {
 }
 
 test("the link chooser and post-push detection may spend the reserve kept for user actions", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
 
   for (const action of ["chooser", "detect"] as const) {
     const { service, pullRequests } = reserveLimitedService(path.join(directory, action));

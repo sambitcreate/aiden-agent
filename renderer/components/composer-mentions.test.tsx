@@ -8,6 +8,7 @@ import { Composer } from "./composer";
 import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import type { Chat, Workspace, WorkspaceFileEntry } from "../lib/types";
+import { TEST_WORKSPACE, createTestQueryClient, settle } from "../lib/test-harness";
 
 // The real Composer with IPC faked: `@` lists the workspace's files and a pick
 // becomes a chip. Boolean oracles throughout: a failing assert on a happy-dom
@@ -18,15 +19,6 @@ let sends: string[];
 let fileListings: number;
 let rejectSends: boolean;
 let filesGate: Promise<void> | null;
-
-const WORKSPACE: Workspace = {
-  id: "ws-1",
-  name: "app",
-  folderPath: "/tmp/app",
-  permission: "full",
-  createdAt: 1,
-  updatedAt: 1,
-};
 
 function entry(path: string, kind: WorkspaceFileEntry["kind"] = "file"): WorkspaceFileEntry {
   const parts = path.split("/");
@@ -49,6 +41,9 @@ beforeEach(() => {
   rejectSends = false;
   filesGate = null;
   installBotTestIpc({
+    "settings:get": () => null,
+    "app:renderer-ready": () => null,
+    "shortcut:get": () => null,
     "pullRequests:list": () => ({ links: [] }),
     "pullRequests:current": () => null,
     "pullRequests:pending": () => [],
@@ -58,13 +53,8 @@ beforeEach(() => {
       if (filesGate) await filesGate;
       return { entries: FILES, truncated: false, skippedDirectories: 0 };
     },
-    "settings:get": () => null,
-    "shortcut:get": () => null,
-    "app:renderer-ready": () => null,
   });
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
 });
 
 afterEach(() => {
@@ -72,7 +62,7 @@ afterEach(() => {
   queryClient.clear();
 });
 
-async function mount(workspace: Workspace = WORKSPACE) {
+async function mount(workspace: Workspace = TEST_WORKSPACE) {
   await act(async () => {
     render(
       <QueryClientProvider client={queryClient}>
@@ -98,12 +88,6 @@ async function mount(workspace: Workspace = WORKSPACE) {
     );
   });
   return screen.getByRole("textbox") as HTMLTextAreaElement;
-}
-
-async function settle() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
 }
 
 async function type(textbox: HTMLTextAreaElement, value: string) {
@@ -288,7 +272,7 @@ test("keys an input method is composing never move or pick", async () => {
 });
 
 test("a workspace without folder access offers no mentions", async () => {
-  const textbox = await mount({ ...WORKSPACE, permission: "none" });
+  const textbox = await mount({ ...TEST_WORKSPACE, permission: "none" });
   await type(textbox, "@comp");
   assert.ok(picker() === null);
   assert.ok(fileListings === 0);

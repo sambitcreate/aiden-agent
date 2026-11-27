@@ -8,7 +8,8 @@ import { Composer } from "./composer";
 import { Toaster, TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import { restoreUnsentMessage, stageComposerText, takeComposerAttachmentSeed } from "../lib/composer-draft-store";
-import type { Attachment, Chat, Workspace } from "../lib/types";
+import type { Attachment, Chat } from "../lib/types";
+import { TEST_WORKSPACE, createTestQueryClient, settle } from "../lib/test-harness";
 
 // A cancelled worktree send hands its message back to the draft. The real
 // Composer, already open on that draft (the user left and came back), must
@@ -16,14 +17,6 @@ import type { Attachment, Chat, Workspace } from "../lib/types";
 
 let queryClient: QueryClient;
 
-const WORKSPACE: Workspace = {
-  id: "ws-1",
-  name: "app",
-  folderPath: "/tmp/app",
-  permission: "full",
-  createdAt: 1,
-  updatedAt: 1,
-};
 const DRAFT = { id: "draft-restore", title: "New chat", messages: [], createdAt: 1, updatedAt: 1 } as unknown as Chat;
 const NOTES: Attachment = {
   id: "att-notes",
@@ -36,14 +29,8 @@ const NOTES: Attachment = {
 
 beforeEach(() => {
   localStorage.clear();
-  installBotTestIpc({
-    "settings:get": () => null,
-    "shortcut:get": () => null,
-    "app:renderer-ready": () => null,
-  });
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  installBotTestIpc({ "settings:get": () => null, "app:renderer-ready": () => null, "shortcut:get": () => null });
+  queryClient = createTestQueryClient();
 });
 
 afterEach(() => {
@@ -62,7 +49,7 @@ function Harness({ saving }: { saving: boolean }) {
             hasMessages={false}
             chatId={DRAFT.id}
             sessionChat={DRAFT}
-            workspace={WORKSPACE}
+            workspace={TEST_WORKSPACE}
             freezeWhileSending
             firstMessageSaving={saving}
             onRenameChat={() => undefined}
@@ -74,12 +61,6 @@ function Harness({ saving }: { saving: boolean }) {
       </TooltipProvider>
     </QueryClientProvider>
   );
-}
-
-async function settle() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
 }
 
 test("an open composer takes back both the text and the attachments of a cancelled send", async () => {

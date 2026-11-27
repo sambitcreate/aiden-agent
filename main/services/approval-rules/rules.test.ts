@@ -4,8 +4,7 @@
 // reaches the person's Mac; in Never ask only Block rules apply.
 
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 
@@ -24,6 +23,7 @@ import type { ApprovalMode } from "../../../renderer/shared/approval-mode.js";
 import { planActionGate, type GateAction } from "../approval-gate/gate.js";
 import { ApprovalRuleBook, ApprovalRuleLimitError, ApprovalRulesUnreadableError, memoryApprovalRuleStore } from "./store.js";
 import { fileApprovalRuleStore } from "./file-store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const MAC: ApprovalRuleOwner = { kind: "mac" };
 let next = 0;
@@ -197,8 +197,7 @@ test("gate: an Allow rule runs a consequential action without a card, but never 
 });
 
 async function rulesDir(t: TestContext, contents?: string) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "approval-rules-file-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "approval-rules-file-");
   if (contents !== undefined) await writeFile(path.join(dir, "approval-rules.json"), contents);
   return dir;
 }

@@ -57,16 +57,7 @@ import {
   type AssistantLiveDependencies,
   useAssistantLiveWithDependencies,
 } from "./use-assistant-live.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((accept, decline) => {
-    resolve = accept;
-    reject = decline;
-  });
-  return { promise, resolve, reject };
-}
+import { deferred } from "../../../main/shared/async-test-support.js";
 
 async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));

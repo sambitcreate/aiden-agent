@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { RunScope, RunSnapshot } from "../../../renderer/shared/images/run-types.js";
@@ -12,6 +10,7 @@ import { ImageRunCoordinator } from "./run-coordinator.js";
 import { ImageRunLedger } from "./run-ledger.js";
 import { fakeImageModels, generateChains, NANO_BANANA, saveWorkflow, until, type FakeImageReply } from "./test-fixture.js";
 import { ImageWorkflowStore } from "./workflow-store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const OWNER = "1:document-a";
 const OTHER = "1:document-b";
@@ -33,8 +32,7 @@ interface FixtureOptions {
 }
 
 async function fixture(t: TestContext, options: FixtureOptions = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-coordinator-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-image-coordinator-");
   const assets = new StudioAssetStore({ root: () => path.join(root, "assets"), thumbnailer: fakeThumbnailer().thumbnailer });
   await assets.initialize();
   const workflows = new ImageWorkflowStore({ root: () => path.join(root, "create-images"), assets });

@@ -1,16 +1,15 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { JsonlSessionRepo, TODO_CONTEXT, value } from "./pi-legacy-harness.js";
 import { NodeExecutionEnv } from "./pi-legacy-harness.js";
 import { createCurrentPiSessionRepository } from "./pi-session-repository-port.js";
 import { convertOldPiV4Journal, upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("old Pi v4 journals upgrade with an exact backup and retain branch context", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-old-v4-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-old-v4-");
   const directory = path.join(root, "--legacy--");
   await mkdir(directory);
   const journal = path.join(directory, "old.jsonl");
@@ -41,8 +40,7 @@ test("old Pi v4 journals upgrade with an exact backup and retain branch context"
 });
 
 test("old Pi v4 upgrade preserves an interrupted operation and its transcript", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-old-v4-open-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-old-v4-open-");
   const directory = path.join(root, "--legacy--");
   await mkdir(directory);
   const journal = path.join(directory, "old.jsonl");
@@ -101,8 +99,7 @@ test("legacy operation reconciliation mirrors the 0.84.4 open-operation state", 
 });
 
 test("an existing identical rollback backup is restricted to the owner before promotion", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-old-v4-backup-mode-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-old-v4-backup-mode-");
   const journal = path.join(root, "old.jsonl");
   const original = JSON.stringify({ kind: "header", version: 4, id: "old", createdAt: 1, cwd: root }) + "\n";
   await writeFile(journal, original, { mode: 0o600 });
@@ -126,8 +123,7 @@ test("an existing identical rollback backup is restricted to the owner before pr
 });
 
 test("old Pi v4 header-only journals upgrade without a trailing newline", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-old-v4-header-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-old-v4-header-");
   const journal = path.join(root, "old.jsonl");
   await writeFile(journal, JSON.stringify({ kind: "header", version: 4, id: "old", createdAt: 1, cwd: root }));
   await upgradeOldPiV4File(journal);
@@ -135,8 +131,7 @@ test("old Pi v4 header-only journals upgrade without a trailing newline", async 
 });
 
 test("old Pi v4 usage rows retain native usage totals and adjustment details", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-old-v4-usage-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-old-v4-usage-");
   const journal = path.join(root, "old.jsonl");
   const usage = { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 5,
     cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 3 } };
@@ -154,8 +149,7 @@ test("old Pi v4 usage rows retain native usage totals and adjustment details", a
 });
 
 test("a failed ownership write releases the created journal and session claim", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-create-rollback-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-create-rollback-");
   const repository = createCurrentPiSessionRepository(root);
   const originalCreate = JsonlSessionRepo.prototype.create;
   JsonlSessionRepo.prototype.create = async function (options, context) {
@@ -176,8 +170,7 @@ test("a failed ownership write releases the created journal and session claim", 
 });
 
 test("an ownership write whose rollback delete also fails stays retryable", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-create-orphan-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-create-orphan-");
   const metadata = { kind: "aiden-chat-compaction-v1", chatId: "retry" };
   const repository = createCurrentPiSessionRepository(root);
   const originalCreate = JsonlSessionRepo.prototype.create;
@@ -210,8 +203,7 @@ test("an ownership write whose rollback delete also fails stays retryable", asyn
 });
 
 test("create never reclaims a same-id journal that holds data", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-create-owned-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-create-owned-");
   const native = new JsonlSessionRepo({ fileSystem: new NodeExecutionEnv({ cwd: root }), sessionsRoot: root });
   const existing = await native.create({ id: "taken", cwd: root }, TODO_CONTEXT);
   await existing.setValue(value<string>("private", "note"), "private", TODO_CONTEXT);

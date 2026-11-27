@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
 import { placeArtifactFrames, placeArtifactsOnCanvas, placeImageFrames, placeImagesOnCanvas } from "./artifact-frames.js";
 import { DesignCanvasStore } from "./store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const ids = () => {
   let next = 0;
@@ -95,8 +93,7 @@ test("several visuals in one reply land in a row without stacking", () => {
 });
 
 test("the stored canvas is saved and announced only when a visual actually changed it", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-frames-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-artifact-frames-");
   const store = new DesignCanvasStore({ root: () => base });
   const broadcasts: number[] = [];
   const place = (mediaId: string, title: string) =>
@@ -146,8 +143,7 @@ test("a saved image lands in its own image frame with the image's shape, and the
 });
 
 test("saved images are placed on the stored canvas only while the late check still allows it", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-frames-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-image-frames-");
   const store = new DesignCanvasStore({ root: () => base });
   const broadcasts: number[] = [];
   let designModeOn = false;

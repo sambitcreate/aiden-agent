@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import test, { type TestContext } from "node:test";
@@ -12,6 +10,7 @@ import { ImageRunCoordinator } from "./run-coordinator.js";
 import { ImageRunLedger } from "./run-ledger.js";
 import { fakeImageModels, NANO_BANANA, saveWorkflow } from "./test-fixture.js";
 import { ImageWorkflowStore } from "./workflow-store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 /**
  * Timing budget for the run ledger. Run it alone: `npm run test:create-images:perf`.
@@ -42,8 +41,7 @@ function timedLedger(ledger: ImageRunLedger) {
 }
 
 async function root(t: TestContext) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-image-perf-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-image-perf-");
   return directory;
 }
 

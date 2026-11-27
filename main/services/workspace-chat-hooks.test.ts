@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
 import os from "node:os";
-import * as path from "node:path";
 import test from "node:test";
 import { fauxProvider, type Api, type Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -43,6 +41,7 @@ import {
 } from "./workspace-chat-hooks.js";
 import { createChatRunInputAdmission, type ChatRunInputGenerationRef } from "./chat-run-input-admission.js";
 import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 interface Dispatched {
   event: HookEvent;
@@ -617,8 +616,7 @@ test("this process forgets the least recently started chat once it tracks too ma
 /* Prompt intake: SessionStart, then UserPromptSubmit, before the model sees a turn. */
 
 async function tempDir(t: test.TestContext, prefix: string): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, prefix);
   return directory;
 }
 

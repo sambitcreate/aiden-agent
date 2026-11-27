@@ -11,6 +11,7 @@ import { newBotId } from "../bot-application-service.js";
 import { botPlanProposalFingerprint, type BotPlanProposal } from "./validate.js";
 import { createBotPlans, type BotPlans, type BotPlanRequest } from "./plans.js";
 import type { BotPlanCoverCheck } from "./coverage.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 const connector: BotPlanItem = { id: "i1", kind: "connector", app: "Calendar", action: "create events", max: 2, tools: [{ modelName: "cal__create_event", serverId: "cal", remoteName: "create_event", title: "Create event" }] };
 const rule = (id = "default.purchase", fingerprint = "rule-fp"): BotPlanItem => ({ id: "i2", kind: "rule", ruleId: id, ruleFingerprint: fingerprint, label: "Purchase", max: 2 });
@@ -21,11 +22,6 @@ function proposal(items: BotPlanItem[] = [connector]): BotPlanProposal {
 }
 const check = (executionId: string, override: Partial<BotPlanCoverCheck> = {}): BotPlanCoverCheck => ({ executionId, operationFingerprint: `op-${executionId}`, toolName: "cal__create_event", requestIds: ["req-1"], baseline: true, rules: [], action: { surface: "mcp", modelName: "cal__create_event", serverId: "cal", remoteName: "create_event", summary: "create event", destructive: "additive" }, ...override });
 const request = (planId = "p1", p = proposal(), signal?: AbortSignal): BotPlanRequest => ({ botId: "b", planId, toolCallId: `call-${planId}`, proposal: p, requestIds: ["req-1"], signal });
-function deferred<T = void>() {
-  let resolve!: (v: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((r) => { resolve = r; });
-  return { promise, resolve };
-}
 async function fixture(t: TestContext) {
   const profileDir = await mkdtemp(path.join(tmpdir(), "bot-plans-"));
   let time = 1000, known = true;

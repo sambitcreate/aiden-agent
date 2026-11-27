@@ -1,17 +1,14 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 import { readGenerativeUiHostLibrary } from "../generative-ui-host-libraries.js";
 import { LOAD_TOOLS_TOOL_NAME, ON_DEMAND_TOOL_NAMES } from "../on-demand-tools.js";
 import { createDesignCanvasTools, DESIGN_MODE_PROMPT_SECTION } from "./canvas-tools.js";
 import { AIDEN_DESIGN_SKILL } from "./skill.js";
 import { DesignCanvasStore } from "./store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 test("every canvas tool the design skill and prompt name is a tool Aiden actually gets", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-skill-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-design-skill-");
   const tools = createDesignCanvasTools({
     chatId: "chat-1",
     workspaceRoot: base,

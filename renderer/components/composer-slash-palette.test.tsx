@@ -11,6 +11,7 @@ import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import { DesignModeControlsContext, type DesignModeControls } from "../lib/design-mode";
 import type { Chat } from "../lib/types";
+import { createTestQueryClient } from "../lib/test-harness";
 
 // Boolean oracles throughout: a failing assert on a happy-dom node would
 // util.inspect the whole DOM graph.
@@ -22,16 +23,14 @@ beforeEach(() => {
   localStorage.clear();
   sends = [];
   installBotTestIpc({
+    "settings:get": () => null,
+    "app:renderer-ready": () => null,
+    "shortcut:get": () => null,
     "pullRequests:list": () => [],
     "pullRequests:current": () => null,
     "pullRequests:pending": () => [],
-    "settings:get": () => null,
-    "shortcut:get": () => null,
-    "app:renderer-ready": () => null,
   });
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
 });
 
 afterEach(() => {

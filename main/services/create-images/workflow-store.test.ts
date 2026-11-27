@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { WorkflowDocV1 } from "../../../renderer/shared/images/schema.js";
@@ -8,10 +7,10 @@ import { StudioAssetStore } from "../studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../studio-assets/test-fixture.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 import { ImageWorkflowLoadError, ImageWorkflowStore } from "./workflow-store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function fixture(t: TestContext) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-workflows-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-image-workflows-");
   const assets = new StudioAssetStore({ root: () => path.join(root, "assets"), thumbnailer: fakeThumbnailer().thumbnailer });
   await assets.initialize();
   t.after(() => assets.close());

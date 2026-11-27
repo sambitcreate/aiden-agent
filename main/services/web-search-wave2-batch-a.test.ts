@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -38,53 +37,34 @@ import {
   WEB_SEARCH_JSON_RESPONSE_MAX_BYTES,
   mapWebSearchJsonHttpError,
 } from "./web-search-json-adapter.js";
-import { WebSearchError } from "./web-search-core.js";
 import type {
   WebSearchAdapterRequest,
   WebSearchAdapterFactory,
   WebSearchFetch,
 } from "./web-search-provider-registry.js";
 import { WEB_SEARCH_WAVE2_BATCH_A_ADAPTER_FACTORIES } from "./web-search-wave2-batch-a.js";
+import {
+  adapterTestSupport,
+  fixture,
+  oversizedStreamResponse,
+  type WebSearchAdapterTestSupport,
+} from "./web-search-adapter-test-support.js";
 
 const PRIVATE_KEY = "wave2-batch-a-private-key-4e3d9c";
 const PRIVATE_BODY = "WAVE2_BATCH_A_PRIVATE_UPSTREAM_BODY_4e3d9c";
 
 type BatchProviderId = "parallel" | "tinyfish" | "search1api" | "jina";
 
-async function fixture(
-  provider: "parallel-search" | "tinyfish-search" | "search1api-search" | "jina-search",
-  name: string,
-): Promise<string> {
-  return readFile(new URL(`./fixtures/${provider}/${name}`, import.meta.url), "utf8");
-}
+const support = adapterTestSupport({ key: PRIVATE_KEY, body: PRIVATE_BODY });
+const { assertSecureRequest, createAdapterRequest } = support;
+const assertNoSecretInError: WebSearchAdapterTestSupport["assertNoSecretInError"] =
+  support.assertNoSecretInError;
 
-function adapterRequest(
+const adapterRequest = (
   providerId: BatchProviderId,
-  signal = new AbortController().signal,
-): WebSearchAdapterRequest {
-  return {
-    query: `current ${providerId} documentation`,
-    numResults: 2,
-    credentialMode: "api-key",
-    credential: PRIVATE_KEY,
-    signal,
-  };
-}
-
-function assertSecureRequest(init: RequestInit | undefined): void {
-  assert.equal(init?.redirect, "error");
-  assert.equal(init?.credentials, "omit");
-  assert.equal(init?.cache, "no-store");
-  assert.equal(init?.referrerPolicy, "no-referrer");
-  assert.equal(JSON.stringify(init).includes(PRIVATE_BODY), false);
-  assert.equal(JSON.stringify(init).includes(PRIVATE_KEY), true);
-}
-
-function assertNoSecretInError(error: unknown): asserts error is WebSearchError {
-  assert.ok(error instanceof WebSearchError);
-  assert.equal(error.message.includes(PRIVATE_BODY), false);
-  assert.equal(error.message.includes(PRIVATE_KEY), false);
-}
+  signal?: AbortSignal,
+): WebSearchAdapterRequest =>
+  createAdapterRequest({ query: `current ${providerId} documentation`, signal });
 
 test("Wave 2 batch builders use reviewed fixed origins and header-only credentials", () => {
   const parallel = buildParallelWebSearchRequest("  current Parallel docs  ", 2, {
@@ -440,19 +420,7 @@ test("Wave 2 HTTP, redirect, malformed, envelope, and byte failures stay closed"
     });
 
     const adapter = factory({
-      fetch: async () => {
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array(WEB_SEARCH_JSON_RESPONSE_MAX_BYTES));
-            controller.enqueue(new Uint8Array(1));
-            controller.close();
-          },
-        });
-        return new Response(stream, {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      },
+      fetch: async () => oversizedStreamResponse(WEB_SEARCH_JSON_RESPONSE_MAX_BYTES),
     });
     await assert.rejects(adapter.search(adapterRequest("jina")), (error: unknown) => {
       assertNoSecretInError(error);

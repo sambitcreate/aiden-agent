@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { emptyToolApprovalRulesDocument, ToolApprovalRuleBook, type ToolApprovalRuleStore } from "../tool-approval-rules.js";
@@ -9,11 +8,11 @@ import { createBotApprovals } from "./bot-approvals.js";
 import { botApprovalNudgeHint, createBotAllowList, reconcileBotAllowListHistory } from "./bot-allow-list.js";
 import { botSessionDirectory } from "../bot-routine-notes.js";
 import type { BotApprovalSettlementInput } from "./bot-extension.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const CAL = { kind: "connection", serverId: "gcal", tool: "create_event" } as const;
 async function fixture(t: import("node:test").TestContext) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-allow-service-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-allow-service-");
   let now = Date.parse("2026-11-04T12:00:00Z"), document = emptyToolApprovalRulesDocument(), nextId = 0;
   let tail: Promise<unknown> = Promise.resolve();
   const store: ToolApprovalRuleStore = { load: async () => structuredClone(document), update: mutation => {
@@ -323,12 +322,12 @@ test("service: the profile rule cap suppresses offers while folder rows stay vis
 async function liveService(t: import("node:test").TestContext, count = 1) {
   const f = await fixture(t);
   const { BACKGROUND_CONTEXT: ctx } = await import("@earendil-works/chord/context");
-  const { Harness, MemoryStorage, ToolResultEntry } = await import("@earendil-works/pi-durable");
+  const { ToolResultEntry } = await import("@earendil-works/pi-durable");
   const { fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
   const { assemblyDeps, assemblyState, testAuthority, FULL_GRANTS } = await import("./test-support/assembly-fixtures.js");
   const { countingTool } = await import("./test-support/fixtures.js");
-  const { createFauxModels, FAUX_MODEL_REF, waitFor } = await import("./test-support/faux.js");
-  const { createBotRegistry } = await import("./bot-extension.js");
+  const { createFauxModels, waitFor } = await import("./test-support/faux.js");
+  const { openBotHarness } = await import("./test-support/harness.js");
   const target = { kind: "site", host: "docs.example", action: "click" } as const;
   for (let index = 0; index < 3; index++) await f.tallies.record("bot", target, { id: `site-seed-${index}`, authorizationFingerprint: `site-fp-${index}`, source: "person", answer: "allow", offered: false });
   const state = assemblyState(testAuthority({ mode: "full", home: f.dir, ...FULL_GRANTS, other: [...FULL_GRANTS.other, "browser"] }));
@@ -347,10 +346,7 @@ async function liveService(t: import("node:test").TestContext, count = 1) {
   };
   deps.settleApproval = async (input, context) => { settled.push(structuredClone(input)); return f.service.settle(input, context); };
   const faux = createFauxModels([fauxAssistantMessage(Array.from({ length: count }, (_, index) => fauxToolCall(tool.name, { text: `save-${index}` }, { id: `provider-${index}` })), { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
-  const registry = createBotRegistry("bot", deps); await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: faux.models, registry }, ctx); registry.attachHarness(harness);
-  t.after(() => harness.close(ctx));
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { root } = await openBotHarness({ botId: "bot", deps, fauxModels: faux, ctx, t });
   const submission = await root.submit({ type: "input", content: "Save", requestId: "person" }, ctx);
   const results = async () => (await root.context(ctx)).entries.filter(entry => entry.kind === ToolResultEntry.kind);
   return { ...f, ctx, target, deps, settled, tool, mutable, submission, results, waitFor };

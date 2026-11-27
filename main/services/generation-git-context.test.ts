@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
-import os from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { generationGitContext } from "./generation-git-context.js";
 import { GitService, GitServiceError } from "./git.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const signal = () => new AbortController().signal;
 
@@ -39,8 +39,7 @@ test("cancellation is never swallowed before, during, or after lookup", async ()
 
 test("real subprocess failure is optional only for generation, not explicit Git operations", async (t) => {
   if (process.platform === "win32") return t.skip("POSIX fixture");
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-no-xcode-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-no-xcode-");
   const binary = path.join(root, "git");
   await writeFile(binary, '#!/bin/sh\necho "xcode-select: note: No developer tools were found, requesting install." >&2\nexit 1\n', { mode: 0o755 });
   const git = new GitService({ gitBinary: binary });

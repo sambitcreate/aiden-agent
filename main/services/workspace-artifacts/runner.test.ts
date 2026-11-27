@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { compileAum } from "../../../renderer/shared/aiden-ui/compile.js";
@@ -16,6 +15,7 @@ import { runArgvPlan, type ArgvPlanOptions } from "./argv-runner.js";
 import { readWorkspaceArtifactFile, artifactFileAllowed, WorkspaceArtifactFileChangedError, WorkspaceArtifactFileUnsafeError } from "./file-policy.js";
 import { createWorkspaceArtifactRunner, workspaceArtifactFolderKey } from "./runner.js";
 import { WorkspaceArtifactStore, workspaceArtifactDigest } from "./store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const SHELL: WorkspaceArtifactSourceV1 = { name: "pulls", kind: "shell", command: `printf '[{"number":12}]'`, parse: "json" };
 const FILE: WorkspaceArtifactSourceV1 = { name: "todo", kind: "file", file: "TODO.md", parse: "lines" };
@@ -35,8 +35,7 @@ async function setup(
     runShell?: (shell: BoundedShellCommandOptions) => ReturnType<typeof runBoundedShellCommand>;
   } = {},
 ) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-runner-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifact-runner-");
   const folder = path.join(dir, "workspace");
   await fs.mkdir(folder);
   await fs.writeFile(path.join(folder, "TODO.md"), "ship it\n\nreview #12\n");
@@ -564,8 +563,7 @@ test("a file Aiden may not read says it cannot be read, not that it changed whil
 
 test("a file replaced mid-read by a link to a file Aiden may not read counts as a change, and never says whether the link's target can be read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
   const { folder } = await setup(t, { sources: [FILE] });
-  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
-  t.after(() => fs.rm(outside, { recursive: true, force: true }));
+  const outside = await temporaryDirectory(t, "aiden-artifact-outside-");
   const locked = path.join(outside, "locked.txt");
   await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
   await fs.chmod(locked, 0o000);
@@ -603,8 +601,7 @@ test("a folder on the path replaced mid-read by a link to a folder with a file A
   const { folder } = await setup(t, { sources: [FILE] });
   await fs.mkdir(path.join(folder, "notes"));
   await fs.writeFile(path.join(folder, "notes", "TODO.md"), "ship it\n");
-  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
-  t.after(() => fs.rm(outside, { recursive: true, force: true }));
+  const outside = await temporaryDirectory(t, "aiden-artifact-outside-");
   const locked = path.join(outside, "TODO.md");
   await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
   await fs.chmod(locked, 0o000);
@@ -624,8 +621,7 @@ test("a folder on the path replaced mid-read by a link to a folder with a file A
 
 test("a workspace folder swapped mid-read for a link to a folder with a file Aiden may not read never says whether that file can be read", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
   const { folder } = await setup(t, { sources: [FILE] });
-  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-outside-"));
-  t.after(() => fs.rm(outside, { recursive: true, force: true }));
+  const outside = await temporaryDirectory(t, "aiden-artifact-outside-");
   const locked = path.join(outside, "TODO.md");
   await fs.writeFile(locked, "PRIVATE_FIXTURE_VALUE");
   await fs.chmod(locked, 0o000);

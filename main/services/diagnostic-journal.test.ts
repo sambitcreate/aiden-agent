@@ -24,6 +24,7 @@ import {
 } from "./diagnostic-journal.js";
 import { BotCapabilityUnavailableError } from "./bot-capability-store-core.js";
 import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
+import { deferred } from "../shared/async-test-support.js";
 
 async function withJournal(
   profile: "development" | "production",
@@ -566,12 +567,6 @@ test("unusable paths never throw and expose an in-memory failure status", async 
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  return { promise, resolve };
-}
 
 async function withHeldDeletion(
   context: test.TestContext,

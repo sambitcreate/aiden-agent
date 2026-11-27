@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -37,39 +36,22 @@ import {
 } from "./web-search-provider-registry.js";
 import { WebSearchError } from "./web-search-core.js";
 import type { WebSearchAdapterRequest, WebSearchFetch } from "./web-search-provider-registry.js";
+import { adapterTestSupport, fixture, oversizedStreamResponse } from "./web-search-adapter-test-support.js";
 
 const PRIVATE_KEY = "wave1-ai-private-key-1f4a9c";
 const PRIVATE_BODY = "WAVE1_AI_PRIVATE_UPSTREAM_BODY_1f4a9c";
 
-async function fixture(
-  provider: "parallel-mcp" | "perplexity" | "gemini",
-  name: string,
-): Promise<string> {
-  return readFile(new URL(`./fixtures/${provider}/${name}`, import.meta.url), "utf8");
-}
+const { assertSecureRequest, createAdapterRequest } = adapterTestSupport({
+  key: PRIVATE_KEY,
+  body: PRIVATE_BODY,
+});
 
-function request(
+const request = (
   credentialMode: "anonymous" | "api-key",
-  credential: string | undefined = credentialMode === "api-key" ? PRIVATE_KEY : undefined,
-  signal = new AbortController().signal,
-): WebSearchAdapterRequest {
-  return {
-    query: "current provider documentation",
-    numResults: 2,
-    credentialMode,
-    credential,
-    signal,
-  };
-}
-
-function assertSecureRequest(init: RequestInit | undefined, keyExpected: boolean): void {
-  assert.equal(init?.redirect, "error");
-  assert.equal(init?.credentials, "omit");
-  assert.equal(init?.cache, "no-store");
-  assert.equal(init?.referrerPolicy, "no-referrer");
-  assert.equal(JSON.stringify(init).includes(PRIVATE_BODY), false);
-  assert.equal(JSON.stringify(init).includes(PRIVATE_KEY), keyExpected);
-}
+  credential?: string,
+  signal?: AbortSignal,
+): WebSearchAdapterRequest =>
+  createAdapterRequest({ query: "current provider documentation", credentialMode, credential, signal });
 
 test("Parallel MCP builder uses the fixed hosted endpoint and optional bearer auth", () => {
   const anonymous = buildParallelMcpRequest("  current Parallel docs  ", 2, {
@@ -439,19 +421,7 @@ test("AI adapters enforce response byte bounds before parsing and do not echo se
   }
 
   const streamed = createGeminiWebSearchAdapter({
-    fetch: async () => {
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array(MAX_GEMINI_RESPONSE_BYTES));
-          controller.enqueue(new Uint8Array(1));
-          controller.close();
-        },
-      });
-      return new Response(stream, {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    },
+    fetch: async () => oversizedStreamResponse(MAX_GEMINI_RESPONSE_BYTES),
   });
   await assert.rejects(
     streamed.search(request("api-key")),

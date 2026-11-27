@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import test from "node:test";
 import { AdvisorAttemptStore } from "./advisor-attempt-store.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("advisor attempt journal reconciles prepared and dispatched calls without replay", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-advisor-attempt-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-advisor-attempt-");
   let now = 100;
   const first = new AdvisorAttemptStore({ root: () => directory, now: () => now });
   await first.initialize();
@@ -28,8 +25,7 @@ test("advisor attempt journal reconciles prepared and dispatched calls without r
 });
 
 test("advisor attempt journal enforces ordered settlement and usage evidence", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-advisor-attempt-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-advisor-attempt-");
   const store = new AdvisorAttemptStore({ root: () => directory, now: () => 100 });
   await store.initialize();
   await store.prepare("attempt", "provider", "model");

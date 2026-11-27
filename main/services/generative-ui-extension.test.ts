@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { test } from "node:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   createGenerativeUiExtension,
@@ -21,18 +20,13 @@ import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js
 import { AIDEN_UI_CATALOG } from "../../renderer/shared/aiden-ui/catalog.js";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_GUIDE_EXAMPLE } from "./generative-ui-guide.js";
+import { createTempDirRegistry } from "../shared/temp-dir-test-support.js";
 
-const temporaryDirectories: string[] = [];
+const tempDirs = createTempDirRegistry();
 
-afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
-});
 
 async function workspace(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-genui-"));
-  temporaryDirectories.push(directory);
+  const directory = await tempDirs.create("aiden-genui-");
   return directory;
 }
 

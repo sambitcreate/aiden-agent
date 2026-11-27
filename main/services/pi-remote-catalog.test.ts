@@ -46,6 +46,7 @@ import {
 import { piModelMetadataFor } from "./pi-model-metadata.js";
 import { googleProviderModels } from "./google-provider.js";
 import { isSelectableGoogleCatalogModel } from "../../renderer/shared/google-provider.js";
+import { deferred } from "../shared/async-test-support.js";
 
 // Catalog chronology fixtures deliberately use a fixed baseline so updating
 // the installed release cannot turn every valid remote generation into a stale one.
@@ -647,12 +648,6 @@ test("provider-scoped refresh aborts a non-mutating auth check without invoking 
   assert.equal(result.errors.get("hung-auth")?.name, "AbortError");
   assert.equal(mutatingAuthCalls, 0);
 });
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
-}
 
 for (const invalidation of ["abort", "replace", "remove", "credential-change", "logout"] as const) {
   for (const persistence of ["write", "delete", "none"] as const) {

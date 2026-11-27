@@ -1,6 +1,7 @@
 // Fixtures for the Bot `hand_off` and `sign_in` tests: the tools' arguments
 // and the tool entries a Bot turn would offer.
 
+import type { BotPendingHandoff } from "../../../../renderer/shared/bot-handoffs.js";
 import type { BotToolEntry } from "../bot-extension.js";
 import { botHandoffCandidate, type BotHandoffDeps } from "../bot-handoff-tool.js";
 import type { BotHandoffs } from "../bot-handoffs.js";
@@ -33,4 +34,16 @@ export function handoffEntries(handoffs: BotHandoffs, botId = "bot-h", deps: Bot
 /** The sign-in tool as a Bot turn offers it, answered through `handoffs`. */
 export function signInEntries(handoffs: BotHandoffs, botId = "bot-s", deps: BotSignInDeps = {}): BotToolEntry[] {
   return [entryOf(signInCandidate(botId, handoffs, deps))];
+}
+
+export function handoffCard(overrides: Partial<BotPendingHandoff> = {}): BotPendingHandoff {
+  return {
+    botId: "bot:ada",
+    waitId: "w-1",
+    toolCallId: "call-1",
+    kind: "action",
+    action: "Enter the 2FA code for your bank",
+    source: "tool",
+    ...overrides,
+  };
 }

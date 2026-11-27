@@ -5,6 +5,7 @@ import { createScheduleStore } from "./schedule-store.js";
 import { createScheduledTaskApplicationService, scheduledTaskRevision } from "./scheduled-task-application-service.js";
 import { scheduledSettingsPatch } from "./scheduled-settings-core.js";
 import type { ScheduledRun, ScheduledTask, ScheduledTaskInput } from "./types.js";
+import { MemoryPersistence } from "./task-persistence-test-support.js";
 
 function fixture() {
   let clock = 100;
@@ -236,17 +237,6 @@ test("scheduled task mutations require foreground confirmation and stale edits f
     /settings are invalid/u,
   );
 });
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-  async load(): Promise<T> { return structuredClone(this.data); }
-  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    this.data = draft;
-    return result;
-  }
-}
 
 test("a phone edit keeps the chat a task posts into, and the phone never sees which chat it is", async () => {
   const store = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]), () => 1_800_000_000_000);

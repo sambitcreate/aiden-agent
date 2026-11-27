@@ -7,12 +7,13 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, type Message } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { CompactionEntry, Harness, MemoryStorage, type Conversation, type EntryRecord } from "@earendil-works/pi-durable";
+import { CompactionEntry, type Conversation, type EntryRecord } from "@earendil-works/pi-durable";
 import { BOT_MEMORY_REVIEW_ENTRY_KIND } from "../../../renderer/shared/bot-memory.js";
-import { createBotRegistry, type BotCompaction, type BotExtensionDeps, type BotToolEntry } from "../bot-runtime/bot-extension.js";
+import { type BotCompaction, type BotExtensionDeps, type BotToolEntry } from "../bot-runtime/bot-extension.js";
 import { createBotSessionService } from "../bot-runtime/bot-session-service.js";
 import { botIngressAllowsTool } from "../bot-runtime/bot-tool-policy.js";
 import { fakeMemoryAuthority, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
+import { openBotHarness } from "../bot-runtime/test-support/harness.js";
 import { BOT_NOTICE_ENTRY_KIND } from "../bot-runtime/bot-session-service.js";
 import { createFauxModels, FAUX_MODEL, FAUX_MODEL_REF, FAUX_PROVIDER, type FauxModels } from "../bot-runtime/test-support/faux.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering,withUnattendedSummaryLabels,steeredSummaryPrompt } from "./compaction.js";
@@ -77,11 +78,8 @@ async function harnessFor(
     memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
     beforeCompact: steering,
   };
-  const registry = createBotRegistry(BOT, deps);
-  await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry, settings }, ctx);
-  registry.attachHarness(harness);
-  conversation = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { harness, root } = await openBotHarness({ botId: BOT, deps, fauxModels, ctx, settings });
+  conversation = root;
   return { harness, conversation };
 }
 

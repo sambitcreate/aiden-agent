@@ -20,6 +20,7 @@ import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
 import { runToolCall } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 function byName(tools: readonly AgentTool[], name: string): AgentTool {
   const tool = tools.find((candidate) => candidate.name === name);
@@ -637,8 +638,7 @@ test("multiple late aliases preserve the single lateLocation and reject duplicat
 
 
 test("the production fixed-location policy prevents consent forgery through direct, linked and nested writes", async (t) => {
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "bot-consent-fence-"));
-  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const parent = await temporaryDirectory(t, "bot-consent-fence-");
   const profile = path.join(parent, "profile");
   await fs.mkdir(profile);
   const open = () => new ToolApprovalRuleBook(new DataStore(TOOL_APPROVAL_RULES_FILE, emptyToolApprovalRulesDocument(), () => profile,

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import type { AuthContext, ImageApi, ImageModel } from "@earendil-works/pi-ai";
@@ -11,6 +10,7 @@ import {
   type ImageGenerationSettingsStore,
 } from "./settings-store.js";
 import { bytes, fakeFetch, imageModel, json, MemoryCredentialStore, png } from "./test-support.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const CHAT_KEY = "sk-or-chat-only-key";
 
@@ -33,8 +33,7 @@ interface Setup {
 }
 
 async function setup(t: test.TestContext, options: Setup = {}) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-runtime-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-image-runtime-");
   const credentials = new MemoryCredentialStore({ openrouter: { type: "api_key", key: CHAT_KEY } });
   const env = options.env ?? {};
   const authContext: AuthContext = { env: async (name) => env[name], fileExists: async () => false };

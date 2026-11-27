@@ -17,7 +17,6 @@ import path from "node:path";
 import { after, describe, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Harness, MemoryStorage } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import type { BotOpenWorkItem, BotOpenWorkSnapshot } from "../../renderer/shared/bot-open-work.js";
@@ -26,10 +25,11 @@ import { createBotMemoryService } from "./bot-memory/service.js";
 import { createBotMemoryStore } from "./bot-memory/store.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "./bot-memory/tool.js";
 import { botOpenWorkPromptTail } from "./bot-open-work/prompt.js";
-import { createBotRegistry, type BotExtensionDeps } from "./bot-runtime/bot-extension.js";
+import { type BotExtensionDeps } from "./bot-runtime/bot-extension.js";
 import { botIngressAllowsTool } from "./bot-runtime/bot-tool-policy.js";
-import { createFauxModels, FAUX_MODEL_REF } from "./bot-runtime/test-support/faux.js";
+import { createFauxModels } from "./bot-runtime/test-support/faux.js";
 import { recordingDeps } from "./bot-runtime/test-support/fixtures.js";
+import { openBotHarness } from "./bot-runtime/test-support/harness.js";
 import { composeBotSystemSections } from "./bot-system-prompt.js";
 import { assembleChatPrompt, buildWorkspaceChatBasePrompt, type ChatPromptAssembly } from "./chat-prompt-assembly.js";
 import { buildSystemPrompt, type ChatSystemPromptPermission } from "./chat-system-prompt.js";
@@ -321,12 +321,8 @@ async function botChat(options: { userMemory: string; openWork?: BotOpenWorkItem
   };
   const fauxModels = createFauxModels();
   const recorder = createPromptRequestRecorder({ model: fauxModels.faux.getModel(), midConversationSystem: options.midConversationSystem ?? false });
-  const registry = createBotRegistry(bot.id, deps);
-  await registry.refresh();
   const ctx = BACKGROUND_CONTEXT;
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
-  registry.attachHarness(harness);
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { harness, root, registry } = await openBotHarness({ botId: bot.id, deps, fauxModels, ctx });
   let turnNumber = 0;
   return {
     memory,

@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { COMPUTER_USE_ACCESS_SCOPES } from "../../../renderer/shared/computer-use-access.js";
 import type { ToolApprovalScope } from "../../../renderer/shared/tool-approval-scope.js";
@@ -17,6 +14,7 @@ import {
   resetComputerUseGrants,
   revokeComputerUseGrants,
 } from "./access-gate.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const READY = { ready: true, available: true, detail: "Ready." };
 const NEEDS_PERMISSIONS = {
@@ -31,8 +29,7 @@ const NEEDS_PERMISSIONS = {
  * next card the user sees.
  */
 async function desktop(t: TestContext) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-cu-access-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-cu-access-");
   const chatStore = createChatStore(async () => root);
   const settings: { computerUseAlwaysAllow?: boolean } = {};
   const cards: ToolApprovalPrompt[] = [];

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import type { Credential } from "@earendil-works/pi-ai";
@@ -14,6 +13,7 @@ import {
   type BotResolvedSkill,
 } from "./bot-capability-inventory-ports.js";
 import { createBotCapabilityStore } from "./bot-capability-store.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -104,8 +104,7 @@ test("Bot provider signatures survive an OAuth token refresh but not a different
 });
 
 test("production-shaped catalogs keep restart identity and public ids across exact-grant rotation", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-production-catalog-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-production-catalog-");
   let credential = hash("credential-a");
   let skills: BotResolvedSkill[] = [
     {
@@ -185,8 +184,7 @@ test("production-shaped catalogs keep restart identity and public ids across exa
 });
 
 test("Bot-targeted catalogs isolate managed-home skills and stay stable across restart", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-targeted-catalog-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-targeted-catalog-");
   let randomCounter = 0;
   const privateSkill = (botId: string): BotResolvedSkill => ({
     sourceId: `skill:${botId}:private`,
@@ -314,8 +312,7 @@ test("shipping Bot inventory is wired to canonical Pi providers and model drift 
 });
 
 test("global Skills pause preserves real incarnations and exact saved Bot grants across catalog reads, edits, and restart", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-paused-skills-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-paused-skills-");
   let skillsEnabled = true;
   let instruction = "Private unchanged instructions";
   let discoveries = 0;

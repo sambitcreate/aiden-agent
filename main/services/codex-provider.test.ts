@@ -15,16 +15,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { CodexProviderService, CodexRuntimeError } from "./codex-provider.js";
-
-function deferred<T>() {
-  let resolve = (_value: T | PromiseLike<T>): void => undefined;
-  let reject = (_reason?: unknown): void => undefined;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 function completedStream(
   model: Model<Api>,

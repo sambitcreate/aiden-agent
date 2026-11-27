@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { IpcMainInvokeEvent } from "electron";
 import { captureAnalyticsEvents } from "../services/analytics/test-support.js";
@@ -18,6 +15,7 @@ import { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "../services/workspace-operation-registry.js";
 import { createRendererChatMutationHandlers, type ChatDesignModeChange } from "./chat-renderer-mutations.js";
 import type { Workspace } from "../services/types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 
@@ -59,8 +57,7 @@ async function fixture(
     onChatRemoved?: (event: IpcMainInvokeEvent, chatId: string) => void;
   } = {},
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-renderer-chat-mutations-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-renderer-chat-mutations-");
   const chatStore = createChatStore(async () => root);
   // The real Inbox stores, as main wires them. Their writes after a send or a
   // delete are fire-and-forget, so each is tracked for a test to await.

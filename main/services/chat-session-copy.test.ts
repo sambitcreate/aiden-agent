@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { createChatStore } from "./chat-store-core.js";
 import { selectedHtmlArtifactMediaIds } from "./chat-copy-artifacts.js";
 import type { ChatMessage } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("artifact selection stops at a fork boundary in one pass", () => {
   const messageCount = 20_000;
@@ -40,8 +40,7 @@ test("artifact selection stops at a fork boundary in one pass", () => {
 });
 
 test("clone and fork copy visible linear history with fresh identities", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-copy-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-copy-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({
     title: "Visible session",
@@ -155,8 +154,7 @@ test("clone and fork copy visible linear history with fresh identities", async (
 });
 
 test("copies remap placement mediaIds together with their artifacts", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-placement-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-placement-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Placed", workspaceId: "w", providerId: "p", model: "m" });
   const sourceMediaId = `html_${"1".repeat(43)}`;
@@ -190,8 +188,7 @@ test("copies remap placement mediaIds together with their artifacts", async (t) 
 });
 
 test("forks record lineage, number titles, and can cut before a prompt", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-fork-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Plan trip", workspaceId: "workspace-fork" });
   const first = await store.appendMessage(chat.id, { role: "user", content: "Where to go?" });
@@ -284,8 +281,7 @@ test("forks record lineage, number titles, and can cut before a prompt", async (
 });
 
 test("a fork with a summary holds new messages until the summary settles", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-summary-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-fork-summary-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Source", workspaceId: "workspace-summary" });
   await store.appendMessage(chat.id, { role: "user", content: "First" });
@@ -338,8 +334,7 @@ test("a fork with a summary holds new messages until the summary settles", async
 });
 
 test("a corrupt fork lineage is dropped without hiding the chat", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-fork-lineage-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-fork-lineage-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Source", workspaceId: "workspace-lineage" });
   await store.appendMessage(chat.id, { role: "user", content: "Hello" });
@@ -364,8 +359,7 @@ test("a corrupt fork lineage is dropped without hiding the chat", async (t) => {
 });
 
 test("bulk copies use collision-resistant identities even when Math.random repeats", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-copy-ids-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-copy-ids-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Bulk copy", workspaceId: "workspace-copy" });
   const storedPath = path.join(directory, `${chat.id}.json`);
@@ -393,8 +387,7 @@ test("bulk copies use collision-resistant identities even when Math.random repea
 });
 
 test("dependent copy preparation fails before the target chat is installed", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-copy-prepare-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-copy-prepare-");
   const store = createChatStore(async () => directory);
   const source = await store.create({ title: "Prepared copy", workspaceId: "workspace-copy" });
   await store.appendMessage(source.id, { role: "user", content: "Copy me" });
@@ -419,8 +412,7 @@ test("dependent copy preparation fails before the target chat is installed", asy
 });
 
 test("copy rejects malformed visible fields and unbounded retained metadata", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-copy-invalid-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-copy-invalid-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Invalid copy", workspaceId: "workspace-copy" });
   const storedPath = path.join(directory, `${chat.id}.json`);
@@ -458,8 +450,7 @@ const NATIVE_VISUAL = {
 };
 
 test("native visuals persist across restart, drop malformed entries, and survive a copy", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-ui-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-ui-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "Native", workspaceId: "w", providerId: "p", model: "m" });
   await store.appendMessage(chat.id, { role: "user", content: "Show it" });

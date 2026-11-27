@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import { createServer } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
@@ -31,6 +30,7 @@ import { BotMutationGate } from "./bot-mutation-gate.js";
 import { createChatStore } from "./chat-store-core.js";
 import { chatSummaryRevision } from "./chat-summary-revision.js";
 import type { ChatMeta } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 function metadata(id: string, updatedAt: number, overrides: Partial<ChatMeta> = {}): ChatMeta {
   return {
@@ -252,8 +252,7 @@ test("summaries project attention row states and honest unread from shared marke
 });
 
 test("revision 52 summaries carry a live run's times and the chat's triage", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-signals-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-remote-signals-");
   const pinnedAt = Date.parse("2026-11-01T09:00:00.000Z");
   let now = pinnedAt;
   const triage = new ChatTriageStore(() => directory, { now: () => now });
@@ -289,8 +288,7 @@ test("revision 52 summaries carry a live run's times and the chat's triage", asy
 });
 
 test("summaries carry the host's Inbox bucket and sort time for each kind of row", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-buckets-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-remote-buckets-");
   const minute = 60_000;
   const hour = 60 * minute;
   const day = 24 * hour;
@@ -684,8 +682,7 @@ test("deterministic performance fixtures record full-history and summary costs",
 });
 
 test("chat store performs bounded legacy summary migration without transcript reads", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-summary-store-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-summary-store-");
   await fs.writeFile(
     path.join(directory, "index.json"),
     JSON.stringify([metadata("chat-legacy", 2_000, { preview: "Index-only preview" })]),
@@ -794,8 +791,7 @@ test("read reports require chat:read, validate the body, and advertise only when
 });
 
 test("triage writes need chat:write and an Idempotency-Key, replay, and refuse a stale ifRevision", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-triage-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-remote-triage-");
   let now = Date.parse("2026-11-02T10:00:00.000Z");
   const triage = new ChatTriageStore(() => directory, { now: () => now });
   const fixture = summaryService([metadata("chat-a", 2_000), metadata("bot-chat", 2_100, { botId: "bot-1" })], { triage });
@@ -889,8 +885,7 @@ test("triage writes need chat:write and an Idempotency-Key, replay, and refuse a
 });
 
 test("a Remote delete drops the chat's read marker and triage through the shared deletion", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-delete-inbox-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-remote-delete-inbox-");
   const chatStore = createChatStore(async () => directory);
   await chatStore.create({ id: "chat-gone", title: "Gone" });
   await chatStore.create({ id: "chat-kept", title: "Kept" });

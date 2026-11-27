@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import {
@@ -9,6 +8,7 @@ import {
 } from "./bot-inbound-attachment-inbox.js";
 import type { BotInboundAttachmentHomeLease } from "./bot-inbound-attachment-home.js";
 import { MAX_TELEGRAM_DOWNLOAD_BYTES } from "./telegram/telegram-inbound.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..", "..");
 const testingBinary = path.join(
@@ -59,8 +59,7 @@ test("resolves the Bot inbox writer in development and packaged layouts", () => 
 
 test("Bot inbox stores binary bytes through the descriptor-relative native helper", async (t) => {
   if (process.platform !== "darwin") return;
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-inbox-"));
-  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const parent = await temporaryDirectory(t, "aiden-bot-inbox-");
   const home = await fs.realpath(parent);
   const bytes = Buffer.from([0, 255, 10, 13, 0, 42]);
   const destination = await writeBotInboundAttachment({
@@ -75,8 +74,7 @@ test("Bot inbox stores binary bytes through the descriptor-relative native helpe
 
 test("swap-and-restore after the final inbox pin cannot create anything outside", async (t) => {
   if (process.platform !== "darwin") return;
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-inbox-swap-"));
-  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const parent = await temporaryDirectory(t, "aiden-bot-inbox-swap-");
   const home = path.join(parent, "home");
   const parked = path.join(home, ".aiden-pinned");
   const outside = path.join(parent, "outside");
@@ -105,8 +103,7 @@ test("swap-and-restore after the final inbox pin cannot create anything outside"
 
 test("a pre-existing symlinked inbox parent fails closed without outside creation", async (t) => {
   if (process.platform !== "darwin") return;
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-inbox-link-"));
-  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const parent = await temporaryDirectory(t, "aiden-bot-inbox-link-");
   const home = path.join(parent, "home");
   const outside = path.join(parent, "outside");
   await Promise.all([fs.mkdir(home), fs.mkdir(outside)]);
@@ -152,8 +149,7 @@ test("rejects unsafe components and bytes above Telegram's existing ceiling", as
 
 test("a Bot inbox write stalled on its volume is killed at the deadline", { timeout: 10_000 }, async (t) => {
   if (process.platform === "win32") return;
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-inbox-stall-"));
-  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const parent = await temporaryDirectory(t, "aiden-bot-inbox-stall-");
   const home = path.join(parent, "home");
   await fs.mkdir(home);
   const canonicalHome = await fs.realpath(home);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { test } from "node:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,8 +17,9 @@ import {
   readPickedAttachments,
 } from "./attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
+import { createTempDirRegistry } from "../shared/temp-dir-test-support.js";
 
-const temporaryDirectories: string[] = [];
+const tempDirs = createTempDirRegistry();
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 const ONE_PIXEL_PNG = Buffer.from(ONE_PIXEL_PNG_BASE64, "base64");
@@ -31,17 +32,9 @@ function paddedPngBytes(size: number): Buffer {
   return bytes;
 }
 
-afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
-});
 
 async function temporaryFile(name: string, contents: Uint8Array): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-attachments-"));
-  temporaryDirectories.push(directory);
+  const directory = await tempDirs.create("aiden-attachments-");
   const filePath = path.join(directory, name);
   await fs.writeFile(filePath, contents);
   return filePath;
@@ -133,8 +126,7 @@ test("picked images must match the raster type selected by their extension", asy
 });
 
 test("picked attachment reads reject an ancestor redirected before open", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-attachment-ancestor-"));
-  temporaryDirectories.push(directory);
+  const directory = await tempDirs.create("aiden-attachment-ancestor-");
   const selectedDirectory = path.join(directory, "selected");
   const displacedDirectory = path.join(directory, "selected-original");
   const attackerDirectory = path.join(directory, "attacker");
@@ -156,8 +148,7 @@ test("picked attachment reads reject an ancestor redirected before open", async 
 });
 
 test("picked attachment reads reject an ancestor directory replaced during identity capture", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-attachment-capture-race-"));
-  temporaryDirectories.push(directory);
+  const directory = await tempDirs.create("aiden-attachment-capture-race-");
   const selectedDirectory = path.join(directory, "selected");
   const displacedDirectory = path.join(directory, "selected-original");
   await fs.mkdir(selectedDirectory);
@@ -192,8 +183,7 @@ test("picked attachment reads reject same-inode content replacement before open"
 });
 
 test("picked attachment reads reject a picker path already redirected through an ancestor", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-attachment-preopen-"));
-  temporaryDirectories.push(directory);
+  const directory = await tempDirs.create("aiden-attachment-preopen-");
   const selectedDirectory = path.join(directory, "selected");
   const displacedDirectory = path.join(directory, "selected-original");
   const attackerDirectory = path.join(directory, "attacker");

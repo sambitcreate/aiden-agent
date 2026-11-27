@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm, writeFile, stat, readFile, readdir } from "node:fs/promises";
-import os from "node:os";
+import { writeFile, stat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { botMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { createBotMessageLedger, type BotMessageDelivery } from "./ledger.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 export function delivery(from = "A", to = "B", now = 1): BotMessageDelivery {
   const id = randomUUID();
   return {
@@ -35,8 +35,7 @@ export function delivery(from = "A", to = "B", now = 1): BotMessageDelivery {
   };
 }
 async function fixture(t: TestContext) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "bot-ledger-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "bot-ledger-");
   let now = new Date(2026, 10, 3, 12).getTime();
   const file = path.join(dir, "bots", "bot-messages.json");
   const open = () => createBotMessageLedger({ file: () => file, now: () => now });

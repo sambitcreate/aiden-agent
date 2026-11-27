@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, test } from "node:test";
+import { test } from "node:test";
 import { build } from "esbuild";
+import { createTempDirRegistry } from "../shared/temp-dir-test-support.js";
 
 // The real secrets service runs against a synthetic Electron boundary: a fake
 // safeStorage (a reversible byte transform that never contains the plaintext)
@@ -67,15 +67,8 @@ const bundled = build({
   ],
 }).then((result) => result.outputFiles[0].text);
 
-const temporaryDirectories: string[] = [];
+const tempDirs = createTempDirRegistry();
 
-afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
-});
 
 function fakeSafeStorage(): FakeSafeStorage {
   return {
@@ -102,8 +95,7 @@ function fakeSafeStorage(): FakeSafeStorage {
 }
 
 async function harness() {
-  const userData = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-secrets-"));
-  temporaryDirectories.push(userData);
+  const userData = await tempDirs.create("aiden-secrets-");
   const safeStorage = fakeSafeStorage();
   const logged: unknown[][] = [];
   (globalThis as Record<string, unknown>).__aidenSecretsTestPlatform = {

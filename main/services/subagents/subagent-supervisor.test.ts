@@ -95,6 +95,8 @@ test("completed-summary projection preserves supplementary characters at both cu
 });
 import { createSubagentAuthorityV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 import type { SubagentContextCapture } from "./forked-context.js";
+import { deferred } from "../../shared/async-test-support.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const TEST_SUPERVISOR_SCOPE = {
   chatId: "chat-test",
@@ -158,14 +160,6 @@ function request(labels: readonly string[] = ["One"]): {
 
 function completed(label: string, summary = `Result for ${label}`): SubagentTaskResult {
   return { role: "scout", label, status: "completed", summary };
-}
-
-function deferred<T = void>() {
-  let resolve = (_value: T | PromiseLike<T>): void => undefined;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function healthProbe(): {
@@ -2614,8 +2608,7 @@ test("child runner returns only the terminal assistant answer", async () => {
 });
 
 test("child workspace-read prompt follows assembled tools even when the V2 grant permits more", async (t) => {
-  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-prompt-tools-"));
-  t.after(() => fs.rm(workspaceRoot, { recursive: true, force: true }));
+  const workspaceRoot = await temporaryDirectory(t, "aiden-prompt-tools-");
   for (const inheritedCeiling of [[], ["read_file"]] as const) {
     const authority = phase6Authority({ runId: "prompt-tools", contextRevision: "d".repeat(64), delegate: false });
     assert.equal(authority.capabilities.workspaceRead, true);

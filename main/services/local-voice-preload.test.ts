@@ -2,14 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { VoiceProviderResolution } from "../../renderer/shared/voice-provider.js";
 import { createLocalVoicePreloader, localVoicePreloadRelevant } from "./local-voice-preload.js";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 function subject(options: {
   enabled?: boolean;

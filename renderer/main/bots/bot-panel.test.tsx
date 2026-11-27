@@ -1,4 +1,4 @@
-import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
+import { botPanel, emitBotTestNotification, installBotTestIpc } from "./test-dom";
 // Before anything loads react-dom, so React reports its commits to the probe.
 import { countRenders } from "./test-render-probe";
 import assert from "node:assert/strict";
@@ -32,6 +32,7 @@ import { shouldRestoreEnvironmentFocus } from "../../lib/environment-panel-state
 import { botFixture } from "./test-fixtures";
 import { mountWithBotRouter } from "./test-providers";
 import { clearHandoffTaken } from "../../components/bots/handoff-taken";
+import { deferred } from "../../../main/shared/async-test-support.js";
 
 beforeEach(() => {
   installBotTestIpc();
@@ -619,12 +620,6 @@ async function mountBotChat(handlers: Record<string, (...args: unknown[]) => unk
   return { calls, ...mounted };
 }
 
-// A closed panel is aria-hidden, which leaves it without an accessible name; find it by its id.
-const botPanel = (): HTMLElement => {
-  const panel = document.getElementById("bot-panel");
-  assert.ok(panel, "the Bot panel is mounted");
-  return panel;
-};
 const panelTab = (name: string) => within(botPanel()).getByRole("tab", { name });
 
 test("the panel toggle opens the Bot panel with only Bot tabs, focused on the selected tab, and Close gives focus back", async () => {
@@ -968,16 +963,6 @@ test("the Activity log's scroller can be reached by keyboard, inside a tab panel
   assert.equal(scroller?.tabIndex, 0, "the scroller takes a tab stop");
   assert.equal(within(botPanel()).queryByRole("region", { name: "Activity" }) === null, true, "no second landmark repeats the name");
 });
-
-function deferred<T>() {
-  let resolve: (value: T) => void = () => undefined;
-  let reject: (error: unknown) => void = () => undefined;
-  const promise = new Promise<T>((done, fail) => {
-    resolve = done;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
 
 test("coming back to Files keeps the list and the open file on screen while they are read again", async () => {
   let listCalls = 0;

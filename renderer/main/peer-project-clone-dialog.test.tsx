@@ -34,7 +34,9 @@ test("the real clone dialog waits for folder approval and sends only explicit en
   let finish!: (value: unknown) => void;
   let cancel = 0;
   const calls = installBotTestIpc({
-    "settings:get": () => null, "shortcut:get": () => null, "app:renderer-ready": () => null,
+    "settings:get": () => null,
+    "app:renderer-ready": () => null,
+    "shortcut:get": () => null,
     "remote:peerHostStatuses": () => [status],
     "workspaces:peerClonePreview": () => source,
     "workspaces:peerClone": (input: unknown) => { transfer.push(input); return new Promise(resolve => { finish = resolve; }); },
@@ -90,7 +92,9 @@ test("Stop or unmount during folder selection never starts a later clone", async
     let created = 0;
     const selection = new Promise(resolve => { releaseSelection = resolve; });
     installBotTestIpc({
-      "settings:get": () => null, "shortcut:get": () => null, "app:renderer-ready": () => null,
+      "settings:get": () => null,
+      "app:renderer-ready": () => null,
+      "shortcut:get": () => null,
       "remote:peerHostStatuses": () => [status], "workspaces:peerClonePreview": () => source,
       "workspaces:peerCloneCancel": () => { cancelCalls++; return false; },
       "workspaces:peerClone": () => { cloneCalls++; return { ok: true, value: { id: "cloned", name: "Widget" } }; },

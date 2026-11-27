@@ -4,7 +4,6 @@
 
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { DataStore } from "./data-store.js";
@@ -14,16 +13,11 @@ import {
   emptyPortableConfig,
   type PortableConfigShape,
 } from "./portable-config-core.js";
-
-function deferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function portableStore(t: test.TestContext) {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-roundtrip-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-roundtrip-");
   const portableRoot = path.join(base, "dot-aiden");
   const stores = createPortableConfigStores(
     () => portableRoot,
@@ -65,8 +59,7 @@ test("a save round-trips through disk unchanged", async (t) => {
 });
 
 test("portable publication fences observe the previous and next MCP configuration", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-roundtrip-fence-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-roundtrip-fence-");
   const observations: Array<{ source: "app" | "external"; previous: PortableConfigShape | null; next: PortableConfigShape }> = [];
   const stores = createPortableConfigStores(
     () => path.join(base, "dot-aiden"),
@@ -216,8 +209,7 @@ test("writes retain process-lifetime predecessors for descriptor recovery", asyn
 });
 
 test("a concurrent DataStore on the same file sees a whole document, never a partial one", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-atomic-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-atomic-");
   const writer = new DataStore<PortableConfigShape>(
     PORTABLE_CONFIG_FILENAME,
     emptyPortableConfig(),

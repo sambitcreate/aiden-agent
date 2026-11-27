@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test from "node:test";
 import { fauxProvider, type Api, type Model } from "@earendil-works/pi-ai";
 import { createChatStore } from "./chat-store-core.js";
@@ -12,12 +9,12 @@ import {
   syncChatMessagesToPiSession,
 } from "./pi-compaction-session-store.js";
 import { buildChatRenamePrompt } from "./chat-title-policy.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const BLOCKED = "deploy with key sk-live-BLOCKED-7f3a";
 
 async function tempDir(t: test.TestContext, prefix: string): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, prefix);
   return directory;
 }
 

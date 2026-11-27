@@ -43,6 +43,7 @@ import { botImageReference } from "./bot-images.js";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import { BotResumeOperationsDoc, BotCostReceiptScopeDoc, botCostReceiptScope, consumeBotResumeOperation } from "./bot-resume-operations.js";
 import { BotExecutionDoc } from "./bot-execution.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 const ctx = BACKGROUND_CONTEXT;
 // Synthetic issuer persists across in-process harness reopen; protected-store cases use the real issuer.
 const responseProofs = new Map<string, Set<string>>();
@@ -1021,8 +1022,7 @@ test("Mail source reads remain model-free with a missing Bot default, then queue
 });
 
 test("Bot-message input keeps host provenance, deadline and approval ownership under immutable execution models", async t => {
-  const folder = await mkdtemp(path.join(os.tmpdir(), "aiden-message-execution-"));
-  t.after(() => rm(folder, { recursive: true, force: true }));
+  const folder = await temporaryDirectory(t, "aiden-message-execution-");
   const env = await environment(path.join(folder, "unused.sqlite"), {}, { compaction: { enabled: false } });
   await env.harness.close(ctx);
   const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
+import { type Conversation } from "@earendil-works/pi-durable";
 import { botRuleLabel, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { BOT_COMPUTER_GIVE_BACK_NOTE, createBotComputerControl } from "../bot-computers/control.js";
 import { createBotComputerShellTool } from "../bot-computers/computer-shell-tool.js";
@@ -20,14 +20,15 @@ import type { BotComputerConnection, BotComputerScreen } from "../bot-computers/
 import type { BotOrdinaryCapabilityKind } from "../bot-capability-catalog-core.js";
 import { botComputerAction } from "./bot-computer-approval.js";
 import { botComputerCandidates } from "./bot-computer-candidates.js";
-import { createBotRegistry, type BotExtensionDeps } from "./bot-extension.js";
+import { type BotExtensionDeps } from "./bot-extension.js";
 import { createBotHandoffs, ruleHandoffRequest } from "./bot-handoffs.js";
 import { ruleAskUnattendedBlock } from "./bot-handoff-text.js";
 import { OLDER_COMPUTER_SCREENSHOT_NOTE } from "../screenshot-trimming.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, type BotToolFacts } from "./bot-tool-policy.js";
 import { assemblyDeps, assemblyState, FULL_GRANTS, testAuthority, type AssemblyDepsOptions } from "./test-support/assembly-fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
+import { createFauxModels, waitFor, type FauxModels } from "./test-support/faux.js";
+import { botToolResults, openBotHarness, type BotToolResultModel } from "./test-support/harness.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const BOT = "bot-1";
@@ -343,24 +344,13 @@ function computerDeps(
 }
 
 async function botTurn(deps: BotExtensionDeps, fauxModels: FauxModels) {
-  const registry = createBotRegistry(BOT, deps);
-  await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
-  registry.attachHarness(harness);
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { harness, root } = await openBotHarness({ botId: BOT, deps, fauxModels, ctx });
   return { harness, root };
 }
 
-type ToolResultModel = { isError: boolean; toolName: string; content: Array<{ type?: string; text?: string }> };
+const toolResults = (conversation: Conversation) => botToolResults(conversation, ctx);
 
-async function toolResults(conversation: Conversation): Promise<ToolResultModel[]> {
-  const view = await conversation.context(ctx);
-  return view.entries
-    .filter((entry) => entry.kind === ToolResultEntry.kind)
-    .map((entry) => (entry as unknown as { model: ToolResultModel[] }).model[0]!);
-}
-
-const textOf = (result: ToolResultModel | undefined) => (result?.content ?? []).map((part) => part.text ?? "").join("");
+const textOf = (result: BotToolResultModel | undefined) => (result?.content ?? []).map((part) => part.text ?? "").join("");
 
 const capture = (id: string) => fauxAssistantMessage([fauxToolCall("computer", { action: "capture" }, { id })], { stopReason: "toolUse" });
 const placeOrder = fauxAssistantMessage(

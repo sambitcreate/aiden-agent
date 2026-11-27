@@ -1,18 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { createChatStore } from "./chat-store-core.js";
 import {
   APPEND_RECONCILIATION_REQUIRED,
   AppendReconciliationRequiredError,
   appendChatMessageWithReconciliation,
 } from "./chat-append-commit.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("a post-install store rejection reconciles as one committed renderer send", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-append-reconcile-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-append-reconcile-");
   let rejectDirectorySyncAt: number | undefined;
   let directorySyncs = 0;
   const store = createChatStore(async () => directory, undefined, {

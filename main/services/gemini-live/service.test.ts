@@ -16,6 +16,7 @@ import type { GeminiLiveComputerUseController } from "./computer-use-bridge.js";
 import type { GeminiLiveDisplayMediaBinding } from "./display-media-contract.js";
 import { ComputerUseParameters } from "../computer-use/schema.js";
 import { prepareLiveToolProviders } from "./live-tool-providers.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 class FakeOwner implements RendererDocumentOwner {
   destroyed = false;
@@ -216,16 +217,6 @@ test("explicit acceptance recorder corroborates ready, provider audio, and Stop 
   service.stop(owner);
   assert.deepEqual(evidence, ["ready", "provider_response", "stop_requested", "stopped"]);
 });
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 test("fake transport projects bounded playback while secrets and tool arguments never cross IPC", async () => {
   const subject = serviceHarness();

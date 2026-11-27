@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DesignSystemOffers, findWorkspaceDesignSystem } from "./design-system-offers.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function tempDir(t: test.TestContext): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-system-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-design-system-");
   return directory;
 }
 

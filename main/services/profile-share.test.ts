@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
+import { deferred } from "../shared/async-test-support.js";
 
 // Execute the service with controlled Electron/filesystem boundaries so races
 // are deterministic and never open a native menu or read a user's profile.
@@ -12,12 +13,6 @@ const serviceCode = transformSync(
   { loader: "ts", format: "cjs" },
 ).code;
 const require = createRequire(import.meta.url);
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  return { promise, resolve };
-}
 
 function harness() {
   const removed: string[] = [];

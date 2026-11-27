@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { DEFAULT_BOT_AVATAR } from "../../shared/bots";
 import type { BotPlanDecision, BotPlanView } from "../../shared/bot-plans";
 import { PlanCard } from "./plan-card";
+import { deferred } from "../../../main/shared/async-test-support.js";
 
 afterEach(cleanup);
 
@@ -23,12 +24,6 @@ const PLAN: BotPlanView = {
   ],
 };
 
-function deferred() {
-  let resolve!: () => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
-  return { promise, resolve, reject };
-}
 function card(plan = PLAN, onRespond: (decision: BotPlanDecision) => Promise<void> = async () => {}) {
   return <PlanCard plan={plan} botName="Ada" avatar={DEFAULT_BOT_AVATAR} onRespond={onRespond} />;
 }

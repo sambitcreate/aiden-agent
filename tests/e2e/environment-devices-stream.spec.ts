@@ -1,14 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { readJsonLines, seedInstalledFakeHub, writeFakeXcrun } from "./device-fixtures";
 import {
   E2E_ASSISTANT_RESPONSE,
   expect,
   finishLmStudioOnboarding,
   waitForToastsToClear,
-  REPOSITORY_ROOT,
   test,
 } from "./fixtures";
 
@@ -19,7 +17,6 @@ import {
 const DEVICE_UDID = "5A1E2E00-0000-4000-8000-00000000E2E0";
 const DEVICE_NAME = "iPhone 17 Pro";
 const MSG_TOUCH = 0x03;
-const HUB_VERSION = "0.12.0";
 
 const fakeRoot = mkdtempSync(path.join(os.tmpdir(), "aiden-e2e-devices-"));
 const fakeBin = path.join(fakeRoot, "bin");
@@ -38,24 +35,7 @@ const simctlList = JSON.stringify({
     ],
   },
 });
-mkdirSync(fakeBin, { recursive: true });
-writeFileSync(
-  path.join(fakeBin, "xcrun"),
-  [
-    "#!/bin/sh",
-    '[ "$1" = "simctl" ] || exit 1',
-    'case "$2" in',
-    '  help) echo "usage: simctl"; exit 0 ;;',
-    `  list) printf '%s\\n' '${simctlList}'; exit 0 ;;`,
-    '  ui) [ -n "$5" ] && exit 0',
-    '      case "$4" in appearance) echo light ;; content_size) echo large ;; increase_contrast) echo disabled ;; esac',
-    "      exit 0 ;;",
-    "  *) exit 0 ;;",
-    "esac",
-    "",
-  ].join("\n"),
-);
-chmodSync(path.join(fakeBin, "xcrun"), 0o755);
+writeFakeXcrun(fakeBin, simctlList);
 
 type HubLogEntry = {
   kind: "http" | "ws-open" | "ws-message";
@@ -68,27 +48,7 @@ type HubLogEntry = {
   body?: { type?: string } | null;
 };
 
-async function readHubLog(): Promise<HubLogEntry[]> {
-  const text = await readFile(hubLog, "utf8");
-  return text
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as HubLogEntry);
-}
-
-async function seedInstalledFakeHub(userDataDir: string): Promise<void> {
-  const baseDir = path.join(userDataDir, "devices");
-  const installDir = path.join(baseDir, "tools", "expo-device-hub", HUB_VERSION);
-  const entryDir = path.join(installDir, "node_modules", "expo-device-hub", "dist", "server");
-  await mkdir(entryDir, { recursive: true });
-  const fakeHub = pathToFileURL(path.join(REPOSITORY_ROOT, "tests", "e2e", "device-hub-fake.mjs")).href;
-  await writeFile(path.join(entryDir, "cli.mjs"), `import ${JSON.stringify(fakeHub)};\n`);
-  await writeFile(path.join(installDir, ".install-complete"), `${HUB_VERSION}\n`);
-  await writeFile(
-    path.join(baseDir, "consent.json"),
-    `${JSON.stringify({ version: 1, streaming: true, agentAccess: false })}\n`,
-  );
-}
+const readHubLog = (): Promise<HubLogEntry[]> => readJsonLines<HubLogEntry>(hubLog);
 
 test.describe("Simulator stream", () => {
   // Local iOS Simulators need Xcode; devicesEnabled() is false off macOS.

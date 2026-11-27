@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { realpath } from "node:fs/promises";
 import test from "node:test";
 import {
   assertPreparedSubagentFileMutation,
@@ -13,14 +11,14 @@ import {
   SubagentFileMutationPreparer,
   SubagentFilePreparationError,
 } from "./subagent-file-mutation-core.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 async function workspace(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-effect-core-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-effect-core-");
   return root;
 }
 

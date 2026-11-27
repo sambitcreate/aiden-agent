@@ -2,18 +2,17 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { readFileSync, type FSWatcher } from "node:fs";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
 import { BotSkillContentWatcher } from "./bot-skill-content-watcher.js";
 import { SkillRegistry } from "./skill-registry.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const WATCHER_EVENT_TIMEOUT_MS = 5_000;
 
 test("editing an admitted discovered skill aborts the live Bot inventory lease", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-watch-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-skill-watch-");
   const skillDirectory = path.join(root, "skill");
   const skillFile = path.join(skillDirectory, "SKILL.md");
   await fs.mkdir(skillDirectory);
@@ -46,8 +45,7 @@ test("editing an admitted discovered skill aborts the live Bot inventory lease",
 });
 
 test("watcher ignores unrelated files beside a skill", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-watch-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-skill-watch-");
   const skillFile = path.join(root, "SKILL.md");
   await fs.writeFile(skillFile, "Skill", "utf8");
   let changes = 0;
@@ -66,8 +64,7 @@ test("watcher ignores unrelated files beside a skill", async (t) => {
 });
 
 test("a watched edit invalidates a warm runtime skill snapshot immediately", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-cache-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-skill-cache-");
   const skillFile = path.join(root, "SKILL.md");
   await fs.writeFile(skillFile, "Before", "utf8");
   const workspace = {
@@ -133,8 +130,7 @@ async function waitForChange(readChanges: () => number): Promise<void> {
 }
 
 test("each delivered skill event invalidates independently of delayed earlier events", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-events-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-skill-events-");
   const skillFile = path.join(root, "SKILL.md");
   await fs.writeFile(skillFile, "Before");
   let deliveringEvent: string | undefined;
@@ -192,8 +188,7 @@ test("each delivered skill event invalidates independently of delayed earlier ev
 });
 
 test("real filesystem smoke observes current content across an atomic save and edit", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-atomic-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-skill-atomic-");
   const skillDirectory = path.join(root, "skill");
   await fs.mkdir(skillDirectory);
   const skillFile = path.join(skillDirectory, "SKILL.md");
@@ -219,8 +214,7 @@ test("real filesystem smoke observes current content across an atomic save and e
 });
 
 test("disposal fences an in-flight skill registration", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-dispose-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-skill-dispose-");
   const skillFile = path.join(root, "SKILL.md");
   await fs.writeFile(skillFile, "Before");
   let changes = 0;
@@ -239,8 +233,7 @@ test("disposal fences an in-flight skill registration", async (t) => {
 });
 
 test("disposed skill watchers cannot be registered again", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-disposed-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-skill-disposed-");
   const skillFile = path.join(root, "SKILL.md");
   await fs.writeFile(skillFile, "Before");
   let changes = 0;
@@ -257,8 +250,7 @@ test("disposed skill watchers cannot be registered again", async (t) => {
 });
 
 test("disposal closes installed watchers and permits a fresh independent instance", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-skill-close-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-skill-close-");
   const skillFile = path.join(root, "SKILL.md");
   await fs.writeFile(skillFile, "Before");
   let retiredChanges = 0;

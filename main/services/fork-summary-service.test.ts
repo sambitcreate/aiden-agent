@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 import {
   createModels,
@@ -28,6 +25,7 @@ import {
 } from "./pi-compaction-session-store.js";
 import { createInMemoryPiSession } from "./pi-session-repository-port.js";
 import type { Chat, ChatMessage } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const PROVIDER = "fork-summary";
 const MODEL = "fork-summary-model";
@@ -190,8 +188,7 @@ test("a fork summary covers only what the source did after the fork point", asyn
 });
 
 test("with Skills on, the summary reads the source journal after the cut", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-fork-summary-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-fork-summary-");
   const store = new PiCompactionSessionStore({ root: async () => root });
   const { faux, model, runtime } = runtimeFixture();
   const reply = (content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"] = "stop") =>

@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test from "node:test";
 import { ChatTriageStore } from "../../main/services/chat-triage";
 import { snoozeOptions, type ChatTriageEntry, type ChatTriagePatch } from "../shared/chat-triage";
@@ -26,6 +23,7 @@ import {
 } from "./inbox-triage";
 import { inboxState, type InboxSignals } from "./sidebar-inbox";
 import { projectOrderKey } from "./sidebar-organization";
+import { temporaryDirectory } from "../../main/shared/temp-dir-test-support.js";
 
 const HOUR = 3_600_000;
 const NOW = new Date(2026, 9, 31, 12, 0).getTime();
@@ -47,8 +45,7 @@ function signals(overrides: Partial<InboxSignals> = {}): InboxSignals {
 }
 
 test("the optimistic entry is the one the host's store writes", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-inbox-triage-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-inbox-triage-");
   let now = NOW;
   const store = new ChatTriageStore(() => root, { now: () => now });
   const steps: ChatTriagePatch[] = [
@@ -221,8 +218,7 @@ test("the Undo toast names a snooze time only when every merged chat wakes then"
 });
 
 test("Undo lands only where nothing changed since, by the store's ifRevision", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-inbox-undo-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-inbox-undo-");
   const store = new ChatTriageStore(() => root, { now: () => NOW });
   const done = await store.set("a", { done: true });
   const pinned = await store.set("b", { pinned: true });
@@ -248,8 +244,7 @@ test("Undo lands only where nothing changed since, by the store's ifRevision", a
 });
 
 test("Undo of Done on a chat newer output had reopened puts it back where it was, not hidden again", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-inbox-undo-reopened-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-inbox-undo-reopened-");
   let now = 1_000;
   const store = new ChatTriageStore(() => root, { now: () => now });
   const shelf = (entry: ChatTriageEntry | null | undefined, lastAssistantAt: number) =>

@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 import { createChatStore } from "./chat-store-core.js";
 import {
@@ -10,6 +7,7 @@ import {
   type GenerationInitializationTerminalMessage,
   type GenerationInitializationTerminalMeta,
 } from "./generation-initialization-terminal.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("initialization terminal persistence is ordered, exact, and once-only", async () => {
   const events: string[] = [];
@@ -87,8 +85,7 @@ test("initialization terminal persistence is authority gated and unknown outcome
 });
 
 test("a run that fails while starting saves its outcome in the chat while it still owns it, and an in-chat task run leaves the chat's model alone", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-init-terminal-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-init-terminal-");
   const store = createChatStore(async () => directory);
 
   // With the append llm-client's generation start hands it, over a real chat store.

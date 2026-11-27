@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { OutputRef } from "../../../renderer/shared/images/run-types.js";
@@ -13,6 +12,7 @@ import {
   type CreateImagesExportsOptions,
   type ExportFileSystem,
 } from "./image-export.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const ASSET = "ab12cd34".padEnd(64, "0");
 const OTHER = "ef56ab78".padEnd(64, "1");
@@ -21,8 +21,7 @@ const ref = (assetId = ASSET, mediaType: OutputRef["mediaType"] = "image/png") =
 const AT = new Date(2026, 9, 31, 7, 5, 9).getTime();
 
 async function directory(t: TestContext): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-export-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-image-export-");
   return root;
 }
 

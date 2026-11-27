@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { GitService } from "./git.js";
 import { createGitExecutableResolver, resolveGitExecutable } from "./git-executable.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -243,8 +243,7 @@ test("memoized resolver on Linux skips a workspace-relative PATH entry", async (
 });
 
 async function createTempRepoWithWorktree(t: test.TestContext, gitBinary?: string) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-git-proof-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-git-proof-");
   const repo = path.join(root, "repo");
   const worktreesRoot = path.join(root, "worktrees");
   await fs.mkdir(repo, { recursive: true });
@@ -311,8 +310,7 @@ test(
   "VerifiedRepoIdentityProof refuses to cache pure-FS admission for a shebang wrapper git binary",
   { skip: process.platform === "win32" },
   async (t) => {
-    const wrapperDir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-git-wrap-"));
-    t.after(() => fs.rm(wrapperDir, { recursive: true, force: true }));
+    const wrapperDir = await temporaryDirectory(t, "aiden-git-wrap-");
     const wrapperPath = path.join(wrapperDir, "git-wrapper");
     const countFile = path.join(wrapperDir, "calls.log");
     const realGit = await resolveGitExecutable("git", wrapperDir, process.env);

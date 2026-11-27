@@ -31,26 +31,7 @@ import {
 } from "./scheduled-bot-routines.js";
 import type { ScheduledTask } from "./types.js";
 import type { HookDispatcher, HookEvent, HookPayload, HookScope } from "./hooks/hook-types.js";
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-
-  async load(): Promise<T> {
-    return structuredClone(this.data);
-  }
-
-  async update<R>(
-    mutation: (draft: T) => R | Promise<R>,
-    isCurrent: () => boolean = () => true,
-  ): Promise<R> {
-    if (!isCurrent()) throw new Error("Stale persistence operation.");
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    if (!isCurrent()) throw new Error("Stale persistence operation.");
-    this.data = draft;
-    return result;
-  }
-}
+import { MemoryPersistence } from "./task-persistence-test-support.js";
 
 /**
  * In-memory stand-in for the Bot session: it dedupes by requestId the way

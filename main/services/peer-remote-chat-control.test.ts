@@ -2,9 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HostRunRegistry } from "./host-run-registry.js";
 import { PEER_WAKE_COALESCE_MS } from "./peer-host-manager.js";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { projectAidenRemoteChatTriage } from "./aiden-remote-chats.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { ChatTriageStore } from "./chat-triage.js";
@@ -14,6 +11,7 @@ import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js
 import { ChatSessionControl } from "../../renderer/lib/hosts/chat-session-control.js";
 import { HostChatControlError, isOutcomeUnknown, type HostChatAdapter } from "../../renderer/lib/hosts/host-chat-adapter.js";
 import { LocalHostAdapter } from "../../renderer/lib/hosts/local-host-adapter.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 /**
  * Controlling a chat on another Mac end to end: the pane's session control
@@ -474,8 +472,7 @@ test("an unreachable host refuses every mutation, and nothing is sent once it is
 });
 
 test("triage from this Mac lands once on the host across a lost answer, and a stale Undo is refused", async (t) => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-triage-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-peer-triage-");
   const store = new ChatTriageStore(() => directory, { now: () => Date.parse("2026-11-02T10:00:00.000Z") });
   const host = new FakeHost("host_b", numbered(2));
   host.features = [...FEATURES, "chat-triage-v1"];

@@ -13,18 +13,9 @@ import {
   type HostChatStatus,
   type HostChatTurnReceipt,
 } from "./host-chat-adapter";
+import { deferred } from "../../../main/shared/async-test-support.js";
 
 const ALL: HostChatCapability[] = ["send", "cancel", "respondApproval", "answerQuestion", "steer", "rename", "remove", "attach", "skills"];
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((done, fail) => {
-    resolve = done;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
 
 /**
  * A host that keeps one turn per idempotency key, like the real ledger, and

@@ -19,6 +19,7 @@ import {
 } from "../lib/chat-draft";
 import { draftWorkInOptions } from "../lib/draft-git-menu";
 import type { GitBranches, Workspace } from "../lib/types";
+import { createTestQueryClient, settle } from "../lib/test-harness";
 
 // The real branch menu over the real draft store, with Git reads faked.
 // Boolean oracles: a failing assert on a happy-dom node would print the DOM.
@@ -72,6 +73,7 @@ beforeEach(() => {
     hasRemote: true,
   };
   calls = installBotTestIpc({
+    "settings:get": () => null,
     // A managed worktree has its own branch checked out.
     "git:branches": (workspaceId) =>
       String(workspaceId).startsWith("wt-")
@@ -80,11 +82,8 @@ beforeEach(() => {
     "git:worktrees": () => [],
     "git:checkout": () => null,
     "git:createBranch": () => null,
-    "settings:get": () => null,
   });
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
   draftId = createChatDraft(REPO.id).chat.id;
 });
 
@@ -127,12 +126,6 @@ function DraftHarness({ workspaces, uncommitted = 0 }: { workspaces: Workspace[]
       draft={props}
     />
   );
-}
-
-async function settle() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
 }
 
 async function mount(element: React.ReactElement) {

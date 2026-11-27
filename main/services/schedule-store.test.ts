@@ -8,25 +8,7 @@ import {
   validateTimezone,
 } from "./schedule-store.js";
 import { TASK_CONNECTOR_NEEDS_SOURCE, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-
-  async load(): Promise<T> {
-    return structuredClone(this.data);
-  }
-
-  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    this.data = draft;
-    return result;
-  }
-
-  snapshot(): T {
-    return structuredClone(this.data);
-  }
-}
+import { MemoryPersistence } from "./task-persistence-test-support.js";
 
 function testStore(now = 1_800_000_000_000) {
   return createScheduleStore(

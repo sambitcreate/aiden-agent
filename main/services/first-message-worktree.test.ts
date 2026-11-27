@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { promisify } from "node:util";
 import { parseChatFirstMessage } from "../handlers/chat-first-message-params.js";
 import {
   createFirstMessageCommitter,
@@ -24,17 +22,8 @@ import type { RegisteredSkill } from "./skill-registry.js";
 import { WorkspaceOperationRegistry, admitOwnedWorkspaceOperation } from "./workspace-operation-registry.js";
 import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-application-service.js";
 import type { FirstMessageWorktreeProgress } from "../../renderer/shared/worktree-on-send.js";
-
-const execFileAsync = promisify(execFile);
-
-async function git(cwd: string, args: string[]): Promise<string> {
-  const result = await execFileAsync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LANG: "C", LC_ALL: "C" },
-  });
-  return String(result.stdout).trim();
-}
+import { fakeDocumentOwner as documentOwner } from "../shared/document-owner-test-support.js";
+import { git } from "./git-test-support.js";
 
 async function temporaryDirectory(t: test.TestContext, prefix = "aiden-wt-send-"): Promise<string> {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
@@ -76,23 +65,6 @@ async function repositories(t: test.TestContext) {
     );
   }
   return { root, origin, seed, repository, marker };
-}
-
-function documentOwner() {
-  let destroyed = false;
-  const listeners = new Set<() => void>();
-  return {
-    documentId: randomUUID(),
-    isDestroyed: () => destroyed,
-    onInvalidated: (listener: () => void) => {
-      listeners.add(listener);
-      return () => { listeners.delete(listener); };
-    },
-    invalidate: () => {
-      destroyed = true;
-      for (const listener of [...listeners]) listener();
-    },
-  };
 }
 
 /** The real managed-worktree service over a real GitService, with an in-memory workspace list. */

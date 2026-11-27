@@ -6,12 +6,12 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, type Message } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, type Conversation, type EntryRecord } from "@earendil-works/pi-durable";
+import { type Conversation, type EntryRecord } from "@earendil-works/pi-durable";
 import { BOT_MEMORY_REVIEW_ENTRY_KIND } from "../../../renderer/shared/bot-memory.js";
-import { createBotRegistry } from "../bot-runtime/bot-extension.js";
 import { BOT_NOTICE_ENTRY_KIND } from "../bot-runtime/bot-session-service.js";
 import { fakeMemoryAuthority, holdNextRead, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL, FAUX_MODEL_REF, FAUX_PROVIDER, waitFor, type FauxModels } from "../bot-runtime/test-support/faux.js";
+import { openBotHarness } from "../bot-runtime/test-support/harness.js";
+import { createFauxModels, FAUX_MODEL, FAUX_PROVIDER, waitFor, type FauxModels } from "../bot-runtime/test-support/faux.js";
 import { createBotMemoryReview, personTurns as projectPersonTurns, provenanceOfHistory, type BotMemoryReviewDeps } from "./review.js";
 import { createBotMemoryService } from "./service.js";
 import { createBotMemoryStore } from "./store.js";
@@ -55,11 +55,12 @@ async function setup(steps: FauxResponseStep[], overrides: Partial<BotMemoryRevi
   mkdirSync(path.join(root, "bots", BOT), { recursive: true });
   const memory = createBotMemoryService({ store: createBotMemoryStore({ profileDir: root }) });
   const fauxModels: FauxModels = createFauxModels(steps);
-  const registry = createBotRegistry(BOT, { ...recordingDeps(), currentTools: async () => [botMemoryToolEntry(BOT, memory)] });
-  await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
-  registry.attachHarness(harness);
-  const conversation = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { harness, root: conversation } = await openBotHarness({
+    botId: BOT,
+    deps: { ...recordingDeps(), currentTools: async () => [botMemoryToolEntry(BOT, memory)] },
+    fauxModels,
+    ctx,
+  });
   const errors: unknown[] = [];
   const authority = fakeMemoryAuthority();
   const review = createBotMemoryReview({

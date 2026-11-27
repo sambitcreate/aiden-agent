@@ -22,6 +22,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { processRunning } from "../../shared/process-liveness-test-support.js";
 
 import { createDeviceStreamClient, type DeviceStreamRuntime } from "../../../renderer/lib/device-stream.js";
 import {
@@ -66,20 +67,6 @@ after(() => {
 
 const never = () => new AbortController().signal;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** Whether a process still runs. An exited fake VM nobody reaped (a zombie) has stopped. */
-function processRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  try {
-    return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.startsWith("Z") !== true;
-  } catch {
-    return true;
-  }
-}
 
 /**
  * Stands in for Electron's nativeImage: it scales the way the production

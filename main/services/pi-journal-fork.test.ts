@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 import { fauxProvider, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -14,6 +11,7 @@ import {
 } from "./pi-compaction-session-store.js";
 import type { PiSessionPort } from "./pi-session-port.js";
 import type { ChatMessage } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const model = fauxProvider({
   api: "openai-completions",
@@ -67,8 +65,7 @@ function texts(messages: readonly AgentMessage[]): string[] {
 }
 
 async function storeFixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-fork-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-fork-");
   return { root, store: new PiCompactionSessionStore({ root: async () => root }) };
 }
 

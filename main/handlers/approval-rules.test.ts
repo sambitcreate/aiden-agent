@@ -4,9 +4,6 @@
 // through its own store, so a removed allow-list entry is never restored.
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { test, type TestContext } from "node:test";
 
 import { APPROVAL_RULE_CHANNELS, type ApprovalRuleRow, type ApprovalRulesView } from "../../renderer/shared/approval-rules.js";
@@ -20,12 +17,12 @@ import { ApprovalRuleBook, memoryApprovalRuleStore } from "../services/approval-
 import { fileApprovalRuleStore } from "../services/approval-rules/file-store.js";
 import { createApprovalRulesPage, type ApprovalRulesPageWorkspace } from "../services/approval-rules/rules-page.js";
 import { registerApprovalRuleHandlers } from "./approval-rules.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const CAL = { kind: "connection", serverId: "calendar", tool: "create_event" } as const;
 
 async function setup(t: TestContext, options: { fileBook?: true } = {}) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "approval-rules-ipc-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "approval-rules-ipc-");
   let document = emptyToolApprovalRulesDocument(), tail: Promise<unknown> = Promise.resolve(), id = 0;
   const bots = new Map([["bot:ada", "Ada"], ["bot:jo", "Jo"]]);
   const store: ToolApprovalRuleStore = {

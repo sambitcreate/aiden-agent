@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { IpcMainInvokeEvent } from "electron";
 import { parseChatAppend } from "./chat-append-params.js";
@@ -23,6 +20,7 @@ import {
 import { ChatTurnAdmission } from "../services/chat-turn-admission.js";
 import { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "../services/workspace-operation-registry.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 // Private Pi protocol stored on an assistant message. It must stay on disk and
 // never appear in anything the renderer channels return.
@@ -65,8 +63,7 @@ async function fixture(
     unresolvedGuiArtifactMessage?: (chatId: string) => Promise<string | undefined>;
   } = {},
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-append-contract-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-chat-append-contract-");
   const chatStore = createChatStore(async () => root);
   await chatStore.create({ id: "chat-1", title: "Chat" });
   await chatStore.create({ id: "chat-2", title: "Other chat" });

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -30,6 +29,7 @@ import {
   aidenRemoteOperationStoreOptions,
   openAidenRemoteOperationLedger,
 } from "./aiden-remote-operation-store.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const SCOPE = { deviceId: "device-1", route: "POST /things", resourceId: "thing-1", key: "operation-key-0001" };
 const OTHER_SCOPE = { ...SCOPE, key: "operation-key-0002" };
@@ -40,8 +40,7 @@ function code(expected: string) {
 }
 
 async function operationStore(t: test.TestContext) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-durable-operation-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-durable-operation-");
   const open = () =>
     new DataStore<AidenIdempotencySnapshot>(
       "operations.json",

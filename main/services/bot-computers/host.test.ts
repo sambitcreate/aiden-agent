@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { analyticsSettled, captureAnalyticsEvents } from "../analytics/test-support.js";
+import { processRunning } from "../../shared/process-liveness-test-support.js";
 
 import type { BoundedProcessOptions, BoundedProcessResult } from "./bounded-process.js";
 import { createGuestCuaDriverHostFactory } from "./guest-driver.js";
@@ -14,21 +15,6 @@ import { BOT_COMPUTER_GUEST_PASSWORD_SECRET, BotComputerError } from "./types.js
 import { BOT_COMPUTER_BASE_VM, botComputerVmName } from "./vm-names.js";
 
 const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
-
-/** Whether a process still runs. An exited fake VM nobody reaped (a zombie) has stopped. */
-function processRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  try {
-    // /proc/<pid>/stat: "pid (comm) state …"
-    return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.startsWith("Z") !== true;
-  } catch {
-    return true;
-  }
-}
 
 const fake = path.resolve("tests/e2e/lume-fake.mjs");
 const restoreImage = Buffer.from("fake macOS restore image for host tests\n".repeat(64));

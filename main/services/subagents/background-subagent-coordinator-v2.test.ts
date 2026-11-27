@@ -13,6 +13,7 @@ import {
   type BackgroundSubagentChildStartV2,
   type PreparedBackgroundSubagentRunV2,
 } from "./background-subagent-coordinator-v2.js";
+import { deferred, type Deferred } from "../../shared/async-test-support.js";
 
 class MemoryStore implements BackgroundSubagentStoreV2 {
   readonly records = new Map<string, BackgroundSubagentRunV2>();
@@ -36,19 +37,6 @@ class MemoryStore implements BackgroundSubagentStoreV2 {
   async list() {
     return structuredClone([...this.records.values()]);
   }
-}
-
-interface Deferred {
-  promise: Promise<void>;
-  resolve(): void;
-}
-
-function deferred(): Deferred {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 interface FakeChild {

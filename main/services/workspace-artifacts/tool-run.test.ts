@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import type { WorkspaceArtifactActionV1, WorkspaceArtifactPermission } from "../../../renderer/shared/workspace-artifacts.js";
@@ -10,6 +9,7 @@ import { readWorkspaceFile } from "../workspace-files.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
 import { WorkspaceArtifactStore } from "./store.js";
 import { createWorkspaceArtifactTool, workspaceArtifactCallApproval, type WorkspaceArtifactToolOptions } from "./tool.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const PAGE = `<Visual title="Notes"><Text>{len($notes)} notes</Text><Button action={run("note", "hello")}>Note</Button></Visual>`;
 const NOTES = { name: "notes", kind: "file", file: "notes.txt", parse: "lines" };
@@ -25,8 +25,7 @@ const NOTE: WorkspaceArtifactActionV1 = {
  * goes through the same `runner.runAction` the Artifacts tab's buttons use.
  */
 async function setup(t: test.TestContext, permission: WorkspaceArtifactPermission) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-run-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifact-run-");
   const folder = path.join(dir, "workspace");
   await fs.mkdir(folder);
   await fs.writeFile(path.join(folder, "notes.txt"), "first\n");

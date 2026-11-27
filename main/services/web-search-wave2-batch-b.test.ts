@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -34,38 +33,21 @@ import type {
   WebSearchAdapterRequest,
   WebSearchFetch,
 } from "./web-search-provider-registry.js";
+import { adapterTestSupport, fixture, oversizedStreamResponse } from "./web-search-adapter-test-support.js";
 
 const PRIVATE_KEY = "wave2-batch-b-provider-key-7c18e2";
 const PRIVATE_BODY = "WAVE2_BATCH_B_PRIVATE_UPSTREAM_BODY_7c18e2";
 
-async function fixture(
-  provider: "kagi-search" | "ollama-cloud-search" | "serper-search",
-  name: string,
-): Promise<string> {
-  return readFile(new URL(`./fixtures/${provider}/${name}`, import.meta.url), "utf8");
-}
+const { assertSecureRequest, createAdapterRequest } = adapterTestSupport({
+  key: PRIVATE_KEY,
+  body: PRIVATE_BODY,
+});
 
-function adapterRequest(
-  signal = new AbortController().signal,
+const adapterRequest = (
+  signal?: AbortSignal,
   _providerId: "kagi" | "ollama" | "serper" = "kagi",
-): WebSearchAdapterRequest {
-  return {
-    query: "current provider documentation",
-    numResults: 2,
-    credentialMode: "api-key",
-    credential: PRIVATE_KEY,
-    signal,
-  };
-}
-
-function assertSecureRequest(init: RequestInit | undefined): void {
-  assert.equal(init?.redirect, "error");
-  assert.equal(init?.credentials, "omit");
-  assert.equal(init?.cache, "no-store");
-  assert.equal(init?.referrerPolicy, "no-referrer");
-  assert.equal(JSON.stringify(init).includes(PRIVATE_BODY), false);
-  assert.equal(JSON.stringify(init).includes(PRIVATE_KEY), true);
-}
+): WebSearchAdapterRequest =>
+  createAdapterRequest({ query: "current provider documentation", signal });
 
 test("Kagi builder uses the reviewed hosted JSON contract and header-only credential", () => {
   const request = buildKagiWebSearchRequest("  current Kagi docs  ", 2, {
@@ -372,19 +354,7 @@ test("declared and streamed response byte bounds apply to each batch adapter", a
     );
 
     const streamedOversize = factory({
-      fetch: async () => {
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array(WEB_SEARCH_JSON_RESPONSE_MAX_BYTES));
-            controller.enqueue(new Uint8Array(1));
-            controller.close();
-          },
-        });
-        return new Response(stream, {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      },
+      fetch: async () => oversizedStreamResponse(WEB_SEARCH_JSON_RESPONSE_MAX_BYTES),
     });
     await assert.rejects(
       streamedOversize.search(adapterRequest()),

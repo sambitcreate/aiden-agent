@@ -1,16 +1,15 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { StudioAssetGrants } from "./delivery-core.js";
 import { installStudioAssetProtocol, startStudioAssets } from "./startup-core.js";
 import { StudioAssetStore } from "./store.js";
 import { fakeThumbnailer, pngBytes } from "./test-fixture.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function setup(t: TestContext) {
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-studio-startup-"));
-  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const parent = await temporaryDirectory(t, "aiden-studio-startup-");
   const root = path.join(parent, "studio-assets");
   let rootResolved = false;
   const store = new StudioAssetStore({

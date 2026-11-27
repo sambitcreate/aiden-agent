@@ -12,14 +12,7 @@ import {
 } from "./dictation-coordinator.js";
 import { HYBRID_TAP_THRESHOLD_MS } from "../../renderer/shared/dictation-preferences.js";
 import { MAX_TIMER_DELAY_MS } from "../../renderer/lib/dictation-operation-gate.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 function dormantTimer(): NodeJS.Timeout {
   const timer = setTimeout(() => {}, 60_000);

@@ -4,29 +4,8 @@ import { scheduledJobs, type Cron } from "croner";
 import { createCatchUpQueue, createScheduleServiceCore, type ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-
-  beforeCommit?: (draft: T) => Promise<void>;
-
-  async load(): Promise<T> {
-    return structuredClone(this.data);
-  }
-
-  async update<R>(
-    mutation: (draft: T) => R | Promise<R>,
-    isCurrent: () => boolean = () => true,
-  ): Promise<R> {
-    if (!isCurrent()) throw new Error("Stale persistence operation.");
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    await this.beforeCommit?.(draft);
-    if (!isCurrent()) throw new Error("Stale persistence operation.");
-    this.data = draft;
-    return result;
-  }
-}
+import { deferred } from "../shared/async-test-support.js";
+import { MemoryPersistence } from "./task-persistence-test-support.js";
 
 function harness(globallyEnabled: () => Promise<boolean> = async () => true) {
   const taskPersistence = new MemoryPersistence<unknown[]>([]);
@@ -538,16 +517,6 @@ test("aborted resume preserves an already-enabled task", async () => {
   await assert.rejects(testbed.service.resume(task.id, { signal: controller.signal }), /cancelled/iu);
   assert.equal((await testbed.store.get(task.id))?.enabled, true);
 });
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 test("disabling schedules during startup overrides the pending settings read", async (t) => {
   const settings = deferred<boolean>();

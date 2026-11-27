@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import {
@@ -12,6 +11,7 @@ import {
 } from "./chat-export.js";
 import type { Chat } from "./types.js";
 import { jsonStringBytesBounded } from "./json-representation.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const chat: Chat = {
   id: "private-storage-id",
@@ -64,8 +64,7 @@ test("Aiden export is versioned and projects only visible linear chat fields", (
 });
 
 test("Aiden export writes one owner-only JSON file through a same-directory stage", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-export-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-export-");
   const target = path.join(directory, safeExportFileName(chat.title));
   await writeAidenChatExport(target, chat);
   const parsed = JSON.parse(await fs.readFile(target, "utf8")) as { version: number };
@@ -140,8 +139,7 @@ test("suggested export filenames stay visible for dotfile and normalized-dot tit
 });
 
 test("a dotfile-titled chat exports under a visible name without changing its title", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-visible-export-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-visible-export-");
   const titledChat = { ...chat, title: ".env setup" };
   const target = path.join(directory, safeExportFileName(titledChat.title));
   await writeAidenChatExport(target, titledChat);

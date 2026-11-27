@@ -3,11 +3,11 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Message } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, type Conversation, type EntryRecord } from "@earendil-works/pi-durable";
-import { createBotRegistry } from "../bot-runtime/bot-extension.js";
+import { type Conversation, type EntryRecord } from "@earendil-works/pi-durable";
 import { BOT_NOTICE_ENTRY_KIND } from "../bot-runtime/bot-session-service.js";
 import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, waitFor } from "../bot-runtime/test-support/faux.js";
+import { openBotHarness } from "../bot-runtime/test-support/harness.js";
+import { createFauxModels, waitFor } from "../bot-runtime/test-support/faux.js";
 import { BOT_RECALL_EXCERPT_CHARS, botRecallToolEntry, recallTerms, searchBotHistory } from "./recall.js";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -48,11 +48,12 @@ const step: FauxResponseStep = (context) => {
 
 async function setup() {
   const fauxModels = createFauxModels(Array.from({ length: 80 }, () => step));
-  const registry = createBotRegistry(BOT, { ...recordingDeps(), currentTools: async () => [botRecallToolEntry()] });
-  await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
-  registry.attachHarness(harness);
-  const conversation = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { harness, root: conversation } = await openBotHarness({
+    botId: BOT,
+    deps: { ...recordingDeps(), currentTools: async () => [botRecallToolEntry()] },
+    fauxModels,
+    ctx,
+  });
   const say = async (content: string) => {
     await (await conversation.submit({ type: "input", content }, ctx)).wait(ctx);
   };

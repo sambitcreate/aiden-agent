@@ -18,8 +18,8 @@ import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
 import { createBotPlans } from "./plans.js";
 import type { BotPlanProposal } from "./validate.js";
 import { createBotPlanAuthority, botPlanBindingRevision, type BotPlanAuthorityDeps } from "./authority.js";
+import { deferred } from "../../shared/async-test-support.js";
 
-function deferred() { let resolve!: () => void; const promise = new Promise<void>((r) => { resolve = r; }); return { promise, resolve }; }
 const connector = { connector: "Mail", action: "send updates", tools: [SEND_EMAIL_TOOL], max: 2 };
 const input = (covers: unknown[] = [connector]) => ({ title: "Organize", why: "Complete the work", steps: [{ text: "Do the work" }], covers });
 const textOf = (result: { content: readonly { type: string; text?: string }[] }) => result.content.flatMap((c) => c.type === "text" ? [c.text ?? ""] : []).join("\n");
