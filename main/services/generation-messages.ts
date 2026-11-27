@@ -174,6 +174,23 @@ export function draftUserPiMessage(
   return userMessage(content, attachments, supportsImages, Date.now(), false, true, grabbedElements);
 }
 
+function assistantTextMessage(
+  content: string,
+  model: Model<Api>,
+  timestamp: number,
+): Message {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: content }],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: ZERO_USAGE,
+    stopReason: "stop",
+    timestamp,
+  };
+}
+
 /** Rehydrate Aiden chat history using the generation's exact Pi image gate. */
 export function toPiMessages(
   params: ChatStartParams,
@@ -183,16 +200,7 @@ export function toPiMessages(
   const now = Date.now();
   return params.messages.map((message): Message => {
     if (message.role === "assistant") {
-      return {
-        role: "assistant",
-        content: [{ type: "text", text: message.content }],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: ZERO_USAGE,
-        stopReason: "stop",
-        timestamp: now,
-      };
+      return assistantTextMessage(message.content, model, now);
     }
 
     return userMessage(
@@ -231,34 +239,26 @@ export function chatMessageToPiMessage(
       false,
     );
   }
-  if (message.role === "assistant" && message.pi) {
-    return structuredClone(message.pi);
-  }
-  const displayedImageCount =
-    message.role === "assistant" && !message.content.trim()
+  if (message.role === "assistant") {
+    if (message.pi) return structuredClone(message.pi);
+    const displayedImageCount = !message.content.trim()
       ? withoutVisualSnapshots(message.attachments ?? []).filter(
           (attachment) => attachment.kind === "image",
         ).length
       : 0;
-  const content =
-    displayedImageCount > 0
-      ? `[Assistant displayed ${displayedImageCount} inline image${displayedImageCount === 1 ? "" : "s"}.]`
-      : message.content;
-  const params: ChatStartParams = {
-    chatId: "journal-rehydration",
-    providerId: model.provider,
-    model: model.id,
-    messages: [
-      {
-        role: message.role,
-        content,
-        attachments: message.attachments,
-        ...(message.role === "user" && message.grabbedElements
-          ? { grabbedElements: message.grabbedElements }
-          : {}),
-      },
-    ],
-  };
-  const converted = toPiMessages(params, model, supportsImages)[0];
-  return { ...converted, timestamp: message.createdAt };
+    const content =
+      displayedImageCount > 0
+        ? `[Assistant displayed ${displayedImageCount} inline image${displayedImageCount === 1 ? "" : "s"}.]`
+        : message.content;
+    return assistantTextMessage(content, model, message.createdAt);
+  }
+  return userMessage(
+    message.content,
+    message.attachments,
+    supportsImages,
+    message.createdAt,
+    false,
+    true,
+    message.grabbedElements,
+  );
 }
