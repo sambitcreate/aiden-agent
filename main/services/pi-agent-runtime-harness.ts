@@ -894,22 +894,11 @@ async function waitForManagedHook(
   hook: Promise<void> | void,
   signal: AbortSignal,
 ): Promise<{ cancelled: boolean; error?: unknown }> {
-  if (signal.aborted) return { cancelled: true };
-  let removeAbort = () => {};
-  const aborted = new Promise<{ cancelled: true }>((resolve) => {
-    const onAbort = () => resolve({ cancelled: true });
-    signal.addEventListener("abort", onAbort, { once: true });
-    removeAbort = () => signal.removeEventListener("abort", onAbort);
-  });
-  const settled = Promise.resolve(hook).then(
-    () => ({ cancelled: false as const }),
-    (error: unknown) => ({ cancelled: false as const, error }),
-  );
-  try {
-    return await Promise.race([settled, aborted]);
-  } finally {
-    removeAbort();
-  }
+  const settled = await waitForManagedPromise(Promise.resolve(hook), signal);
+  if (settled.kind === "cancelled") return { cancelled: true };
+  return settled.kind === "failed"
+    ? { cancelled: false, error: settled.error }
+    : { cancelled: false };
 }
 
 async function waitForManagedPromise<T>(
