@@ -744,7 +744,6 @@ private struct AidenWorkspaceHTMLPreviewPane: View {
     @Environment(\.aidenCodeTypography) private var codeTypography
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.openURL) private var openURL
     @State private var pendingLink: URL?
     @State private var failed = false
     @State private var reloadKey = 0
@@ -771,22 +770,7 @@ private struct AidenWorkspaceHTMLPreviewPane: View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(palette.canvas.ignoresSafeArea())
-            .alert(
-                "Open link?",
-                isPresented: Binding(
-                    get: { pendingLink != nil },
-                    set: { if !$0 { pendingLink = nil } }
-                ),
-                presenting: pendingLink
-            ) { link in
-                Button("Open") {
-                    pendingLink = nil
-                    openURL(link)
-                }
-                Button("Cancel", role: .cancel) { pendingLink = nil }
-            } message: { link in
-                Text(link.host() ?? link.absoluteString)
-            }
+            .aidenOpenLinkConfirmation($pendingLink)
     }
 
     @ViewBuilder

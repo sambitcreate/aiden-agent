@@ -12,7 +12,6 @@ struct AidenVisualViewer: View {
     @Environment(\.aidenThemePreset) private var themePreset
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
 
     let title: String
     let loadDocument: (AidenVisualViewerAppearance) async -> AidenVisualDocumentLoad
@@ -73,22 +72,7 @@ struct AidenVisualViewer: View {
         .task(id: LoadKey(appearance: appearance, attempt: attempt)) {
             await load(appearance)
         }
-        .alert(
-            "Open link?",
-            isPresented: Binding(
-                get: { pendingLink != nil },
-                set: { if !$0 { pendingLink = nil } }
-            ),
-            presenting: pendingLink
-        ) { link in
-            Button("Open") {
-                pendingLink = nil
-                openURL(link)
-            }
-            Button("Cancel", role: .cancel) { pendingLink = nil }
-        } message: { link in
-            Text(link.host() ?? link.absoluteString)
-        }
+        .aidenOpenLinkConfirmation($pendingLink)
     }
 
     @ViewBuilder
