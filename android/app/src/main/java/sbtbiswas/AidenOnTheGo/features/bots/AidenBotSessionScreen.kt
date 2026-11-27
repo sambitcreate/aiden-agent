@@ -750,20 +750,11 @@ private fun AidenBotSessionSkeleton(shimmer: Boolean) {
 private fun AidenBotSessionMessageRow(message: AidenBotSessionEntry.Message) {
     val palette = AidenTheme.palette
     when (message.role) {
-        AidenBotMessageRole.USER -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-            message.label?.let { label ->
-                Text(label, style = MaterialTheme.typography.labelSmall, color = palette.secondary, modifier = Modifier.padding(bottom = 4.dp, end = 4.dp))
-            }
-            val colors = aidenBotUserBubbleColors(MaterialTheme.colorScheme, palette.accentFill, faded = false)
-            Surface(color = colors.container, shape = AidenBotUserBubbleShape, modifier = Modifier.widthIn(max = 320.dp)) {
-                Text(
-                    message.text,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = colors.content,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                )
-            }
-        }
+        AidenBotMessageRole.USER -> AidenBotPendingBubbleView(
+            text = message.text,
+            faded = false,
+            label = message.label
+        )
         AidenBotMessageRole.ASSISTANT -> Column(Modifier.fillMaxWidth()) {
             AidenBotAssistantBubble(text = message.text, streaming = false)
             if (message.interrupted == true) {
