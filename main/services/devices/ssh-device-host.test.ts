@@ -316,3 +316,12 @@ test("runSshCommand tolerates stdin write errors when a child exits before drain
   );
   assert.equal(result.code, 0);
 });
+
+test("runSshCommand rejects its promise when ssh cannot spawn, so the host's .catch reports it", async () => {
+  // A NUL byte makes spawn throw synchronously; the SSH host's run() turns a rejection into code 127.
+  const result = await runSshCommand(process.execPath, ["-e", "\0"], { timeoutMs: 5_000 }).catch(
+    (error: unknown): SshCommandResult => ({ code: 127, stdout: "", stderr: (error as Error).message }),
+  );
+  assert.equal(result.code, 127);
+  assert.match(result.stderr, /null bytes/u);
+});

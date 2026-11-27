@@ -605,10 +605,11 @@ export function runSshCommand(
   args: readonly string[],
   options: { stdin?: string; timeoutMs: number },
 ): Promise<SshCommandResult> {
-  const child = spawn(sshPath, [...args], {
-    stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-  });
-  return runCapturedChild(child, {
+  const spawnSsh = () =>
+    spawn(sshPath, [...args], {
+      stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    });
+  return runCapturedChild(spawnSsh, {
     timeoutMs: options.timeoutMs,
     stdin: options.stdin,
     timeoutStderrNote: "\nThe SSH command timed out.",

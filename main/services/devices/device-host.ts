@@ -154,7 +154,7 @@ export class DeviceHostError extends Error {
 
 const CAPTURED_CHILD_OUTPUT_LIMIT = 4 * 1024 * 1024;
 
-export interface RunCapturedChildOptions {
+export interface RunCapturedChildOptions<Child extends ChildProcess = ChildProcess> {
   timeoutMs: number;
   stdin?: string;
   /** Appended to stderr right before SIGTERM when `timeoutMs` elapses. */
@@ -162,12 +162,17 @@ export interface RunCapturedChildOptions {
   /** Ignore write/EPIPE errors when ending stdin on an already-closing child. */
   ignoreStdinError?: boolean;
   /** Runs synchronously inside settlement right before the returned promise resolves. */
-  onSettle?: () => void;
+  onSettle?: (child: Child) => void;
 }
 
-export function runCapturedChild(
-  child: ChildProcess,
-  options: RunCapturedChildOptions,
+/**
+ * Spawns inside the promise executor, so a synchronous spawn failure (an
+ * argument or env value with a NUL byte, say) rejects the returned promise
+ * instead of throwing past the caller's `.catch`.
+ */
+export function runCapturedChild<Child extends ChildProcess>(
+  spawnChild: () => Child,
+  options: RunCapturedChildOptions<Child>,
 ): Promise<DeviceCommandResult> {
   return new Promise((resolve) => {
     let stdout = "";
@@ -177,13 +182,12 @@ export function runCapturedChild(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      options.onSettle?.();
+      options.onSettle?.(child);
       resolve({ stdout, stderr, code });
     };
+    const child = spawnChild();
     const timer = setTimeout(() => {
-      if (options.timeoutStderrNote) {
-        stderr = (stderr + options.timeoutStderrNote).slice(-CAPTURED_CHILD_OUTPUT_LIMIT);
-      }
+      if (options.timeoutStderrNote) stderr += options.timeoutStderrNote;
       child.kill("SIGTERM");
     }, options.timeoutMs);
     child.stdout?.setEncoding("utf8");

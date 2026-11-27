@@ -796,16 +796,21 @@ export function runChildCommand(
   if (commandsCancelledForQuit) {
     return Promise.resolve({ stdout: "", stderr: "Aiden is quitting, so the device helper command did not start.", code: 124 });
   }
-  const child = nodeSpawn(command, [...args], {
-    env: options.env,
-    stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-  });
-  runningCommands.add(child);
-  return runCapturedChild(child, {
-    timeoutMs: options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
-    stdin: options.stdin,
-    onSettle: () => runningCommands.delete(child),
-  });
+  return runCapturedChild(
+    () => {
+      const child = nodeSpawn(command, [...args], {
+        env: options.env,
+        stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      });
+      runningCommands.add(child);
+      return child;
+    },
+    {
+      timeoutMs: options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
+      stdin: options.stdin,
+      onSettle: (child) => runningCommands.delete(child),
+    },
+  );
 }
 
 /** Asks the OS for a free loopback port. The hub needs an explicit `--port`. */
