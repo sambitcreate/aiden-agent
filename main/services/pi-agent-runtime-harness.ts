@@ -294,8 +294,6 @@ export interface PiRuntimeSessionBinding {
    */
   beforeQueuedUser?: (message: AgentMessage, signal: AbortSignal) => Promise<string>;
   signal?: AbortSignal;
-  /** Foreground continue() does not emit its already-journaled user tail. */
-  journalUserMessages?: boolean;
   onJournalError?: (error: unknown) => void;
   /**
    * Section keys of system patches the host adds between model steps that
