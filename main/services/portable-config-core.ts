@@ -29,6 +29,7 @@ import * as path from "path";
 import { randomUUID } from "node:crypto";
 import { ensurePrivateDirectory, hardenPrivateFile } from "./private-storage.js";
 import { DataStore, DataStoreExternalChangeError, isDataStoreRecoveryFile } from "./data-store.js";
+import { syncDirectory, syncFile } from "./durable-fs.js";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -245,6 +246,25 @@ export function providerAliasSourcesAreInactive(
   return Object.keys(aliases).every((source) => !active.has(source));
 }
 
+export function isWorktreeIndex(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+export function isProvisionedWorktreeFile(entry: unknown): entry is string {
+  return (
+    typeof entry === "string" &&
+    entry.length > 0 &&
+    entry.length <= 512 &&
+    !path.isAbsolute(entry) &&
+    !entry.includes("\\") &&
+    !entry.includes("\u0000") &&
+    path.posix.normalize(entry) === entry &&
+    entry !== "." &&
+    entry !== ".." &&
+    !entry.startsWith("../")
+  );
+}
+
 function isManagedWorktree(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
@@ -257,30 +277,12 @@ function isManagedWorktree(value: unknown): boolean {
     (value.worktreeGitDir === undefined ||
       (typeof value.worktreeGitDir === "string" && path.isAbsolute(value.worktreeGitDir))) &&
     (value.ownershipToken === undefined || typeof value.ownershipToken === "string") &&
-    (value.worktreeDevice === undefined ||
-      (typeof value.worktreeDevice === "number" &&
-        Number.isSafeInteger(value.worktreeDevice) &&
-        value.worktreeDevice >= 0)) &&
-    (value.worktreeInode === undefined ||
-      (typeof value.worktreeInode === "number" &&
-        Number.isSafeInteger(value.worktreeInode) &&
-        value.worktreeInode >= 0)) &&
+    (value.worktreeDevice === undefined || isWorktreeIndex(value.worktreeDevice)) &&
+    (value.worktreeInode === undefined || isWorktreeIndex(value.worktreeInode)) &&
     (value.provisionedFiles === undefined ||
       (Array.isArray(value.provisionedFiles) &&
         value.provisionedFiles.length <= 4_096 &&
-        value.provisionedFiles.every(
-          (entry) =>
-            typeof entry === "string" &&
-            entry.length > 0 &&
-            entry.length <= 512 &&
-            !path.isAbsolute(entry) &&
-            !entry.includes("\\") &&
-            !entry.includes("\u0000") &&
-            path.posix.normalize(entry) === entry &&
-            entry !== "." &&
-            entry !== ".." &&
-            !entry.startsWith("../"),
-        )))
+        value.provisionedFiles.every(isProvisionedWorktreeFile)))
   );
 }
 
@@ -506,20 +508,18 @@ function normalizeStoredProvider(value: unknown): StoredProvider | undefined {
   };
 }
 
-function normalizeLegacyMcpServers(value: unknown): McpServer[] {
-  if (!Array.isArray(value)) return [];
-  const valid = value.filter(isMcpServer);
+function uniqueById<T extends { id: string }>(values: readonly T[]): T[] {
   const counts = new Map<string, number>();
-  for (const server of valid) counts.set(server.id, (counts.get(server.id) ?? 0) + 1);
-  return valid.filter((server) => counts.get(server.id) === 1);
+  for (const value of values) counts.set(value.id, (counts.get(value.id) ?? 0) + 1);
+  return values.filter((value) => counts.get(value.id) === 1);
+}
+
+function normalizeLegacyMcpServers(value: unknown): McpServer[] {
+  return Array.isArray(value) ? uniqueById(value.filter(isMcpServer)) : [];
 }
 
 function normalizeLegacySkills(value: unknown): Skill[] {
-  if (!Array.isArray(value)) return [];
-  const valid = value.filter(isSkill);
-  const counts = new Map<string, number>();
-  for (const skill of valid) counts.set(skill.id, (counts.get(skill.id) ?? 0) + 1);
-  return valid.filter((skill) => counts.get(skill.id) === 1);
+  return Array.isArray(value) ? uniqueById(value.filter(isSkill)) : [];
 }
 
 function normalizeTelegramProfiles(value: unknown): AppSettings["telegramProfiles"] {
@@ -928,13 +928,9 @@ function normalizeLocalConfigShape(value: unknown): LocalConfigShape {
   const validWorkspaces = Array.isArray(workspaces)
     ? workspaces.filter(isWorkspace).map(withCleanCapabilityLists)
     : [];
-  const workspaceIdCounts = new Map<string, number>();
-  for (const workspace of validWorkspaces) {
-    workspaceIdCounts.set(workspace.id, (workspaceIdCounts.get(workspace.id) ?? 0) + 1);
-  }
   return {
     ...rest,
-    workspaces: validWorkspaces.filter((workspace) => workspaceIdCounts.get(workspace.id) === 1),
+    workspaces: uniqueById(validWorkspaces),
     seeded: seeded === true,
     ...(typeof aidenDirMigratedAt === "number" ? { aidenDirMigratedAt } : {}),
     ...(webSearchProfileKind === "fresh" || webSearchProfileKind === "upgrade"
@@ -1010,24 +1006,14 @@ async function writeFileAtomicallyIfAbsent(
   ownedPublicationPaths.add(staged);
   try {
     await fs.writeFile(staged, contents, { flag: "wx", mode: 0o600 });
-    const stagedHandle = await fs.open(staged, "r");
-    try {
-      await stagedHandle.sync();
-    } finally {
-      await stagedHandle.close();
-    }
+    await syncFile(staged);
     try {
       // A hard link publishes the fully copied sibling in one no-overwrite
       // operation. A crash before this point leaves only a disposable temp;
       // after it, the final archive necessarily names the complete file.
       await fs.link(staged, destination);
       published = true;
-      const directoryHandle = await fs.open(path.dirname(destination), "r");
-      try {
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
-      }
+      await syncDirectory(path.dirname(destination));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
@@ -1271,6 +1257,13 @@ function appendMissingSettings(
   return merged;
 }
 
+type StorePublishTestHooks<Prefix extends string, T> = {
+  [K in
+    | `before${Prefix}ExternalCacheCommit`
+    | `before${Prefix}WritePublish`
+    | `after${Prefix}WritePublish`]?: (previous: T | null, next: T) => void;
+};
+
 /**
  * Build the four stores plus the one-time migration that fills them.
  *
@@ -1283,37 +1276,9 @@ export function createPortableConfigStores(
   testHooks: {
     beforeLocalProtectedPublish?: () => Promise<void>;
     beforeLegacyArchive?: () => Promise<void>;
-    beforePortableExternalCacheCommit?: (
-      previous: PortableConfigShape | null,
-      next: PortableConfigShape,
-    ) => void;
-    beforePortableWritePublish?: (
-      previous: PortableConfigShape | null,
-      next: PortableConfigShape,
-    ) => void;
-    afterPortableWritePublish?: (
-      previous: PortableConfigShape | null,
-      next: PortableConfigShape,
-    ) => void;
-    beforeSettingsExternalCacheCommit?: (
-      previous: SettingsShape | null,
-      next: SettingsShape,
-    ) => void;
-    beforeSettingsWritePublish?: (previous: SettingsShape | null, next: SettingsShape) => void;
-    afterSettingsWritePublish?: (previous: SettingsShape | null, next: SettingsShape) => void;
-    beforeProviderModelExternalCacheCommit?: (
-      previous: ProviderModelCacheShape | null,
-      next: ProviderModelCacheShape,
-    ) => void;
-    beforeProviderModelWritePublish?: (
-      previous: ProviderModelCacheShape | null,
-      next: ProviderModelCacheShape,
-    ) => void;
-    afterProviderModelWritePublish?: (
-      previous: ProviderModelCacheShape | null,
-      next: ProviderModelCacheShape,
-    ) => void;
-  } = {},
+  } & StorePublishTestHooks<"Portable", PortableConfigShape> &
+    StorePublishTestHooks<"Settings", SettingsShape> &
+    StorePublishTestHooks<"ProviderModel", ProviderModelCacheShape> = {},
 ) {
   const archivePublicationPaths = new Set<string>();
   async function protectConfigDirectory(
@@ -1536,6 +1501,11 @@ export function createPortableConfigStores(
     }
   }
 
+  async function deferMigration(): Promise<false> {
+    await ensureReadme();
+    return false;
+  }
+
   async function runMigration(): Promise<boolean> {
     const legacyPath = await local.path();
     const archivePath = `${legacyPath}${LEGACY_CONFIG_ARCHIVE_SUFFIX}`;
@@ -1544,8 +1514,7 @@ export function createPortableConfigStores(
     // below before the file is slimmed.
     const loaded = (await local.load()) as LocalConfigShape & LegacyConfigShape;
     if ((await local.loadedFromCorruptFile()) || (await local.loadedFromUnsafeFile())) {
-      await ensureReadme();
-      return false;
+      return deferMigration();
     }
     const loadedLegacyContents = await local.loadedDiskContents();
     if (typeof loaded.aidenDirMigratedAt === "number") return true;
@@ -1554,72 +1523,47 @@ export function createPortableConfigStores(
     const portablePath = await portable.path();
     const portableExists = await exists(portablePath);
     const loadedPortable = portableExists ? await portable.load() : {};
-    if (portableExists && (await portable.loadedFromCorruptFile())) {
-      await ensureReadme();
-      return false;
-    }
-    if (portableExists && !isRecord(loadedPortable)) {
-      await ensureReadme();
-      return false;
-    }
+    if (portableExists && (await portable.loadedFromCorruptFile())) return deferMigration();
+    if (portableExists && !isRecord(loadedPortable)) return deferMigration();
     const existingPortable = loadedPortable as Partial<PortableConfigShape>;
     const has = (key: string) => Object.prototype.hasOwnProperty.call(existingPortable, key);
     const existingProviders = existingPortable.providers;
     const validExistingProviders = isPortableProviderList(existingProviders)
       ? existingProviders
       : undefined;
-    if (has("providers") && !validExistingProviders) {
-      await ensureReadme();
-      return false;
-    }
+    if (has("providers") && !validExistingProviders) return deferMigration();
     const existingAliases = existingPortable.providerIdAliases;
     const safeExistingAliases = isProviderAliasMap(existingAliases) ? existingAliases : undefined;
-    if (has("providerIdAliases") && !safeExistingAliases) {
-      await ensureReadme();
-      return false;
-    }
+    if (has("providerIdAliases") && !safeExistingAliases) return deferMigration();
     if (
       safeExistingAliases &&
       validExistingProviders &&
       !providerAliasSourcesAreInactive(safeExistingAliases, validExistingProviders)
     ) {
-      await ensureReadme();
-      return false;
+      return deferMigration();
     }
     const existingMcpServers = withoutRetiredMcpServers(existingPortable.mcpServers);
     const safeExistingMcpServers = isMcpServerList(existingMcpServers)
       ? existingMcpServers
       : undefined;
-    if (has("mcpServers") && !safeExistingMcpServers) {
-      await ensureReadme();
-      return false;
-    }
+    if (has("mcpServers") && !safeExistingMcpServers) return deferMigration();
     const safeExistingSkills = isSkillList(existingPortable.skills)
       ? existingPortable.skills
       : undefined;
-    if (has("skills") && !safeExistingSkills) {
-      await ensureReadme();
-      return false;
-    }
+    if (has("skills") && !safeExistingSkills) return deferMigration();
 
     // Do not archive a connection string containing embedded credentials or
     // URL-only state that the portable schema intentionally forbids.
     if (Array.isArray(legacy.providers) && legacy.providers.some(hasSensitiveProviderUrl)) {
-      await ensureReadme();
-      return false;
+      return deferMigration();
     }
-    const structurallyValidLegacyProviders = Array.isArray(legacy.providers)
-      ? legacy.providers.flatMap((candidate) => {
-          const normalized = normalizeStoredProvider(candidate);
-          return normalized ? [normalized] : [];
-        })
-      : [];
-    const legacyProviderIdCounts = new Map<string, number>();
-    for (const candidate of structurallyValidLegacyProviders) {
-      legacyProviderIdCounts.set(candidate.id, (legacyProviderIdCounts.get(candidate.id) ?? 0) + 1);
-    }
-    const legacyProviders = structurallyValidLegacyProviders.filter(
-      (candidate) => legacyProviderIdCounts.get(candidate.id) === 1,
+    const legacyProviders = uniqueById(
+      Array.isArray(legacy.providers)
+        ? legacy.providers.flatMap((candidate) => {
+            const normalized = normalizeStoredProvider(candidate);
+            return normalized ? [normalized] : [];
+          })
+        : [],
     );
     const legacySplit = legacyProviders.map((provider) => splitStoredProvider(provider));
     // If an earlier attempt published the portable split and archived snapshot
@@ -1639,8 +1583,7 @@ export function createPortableConfigStores(
       safeExistingAliases &&
       !providerAliasSourcesAreInactive(safeExistingAliases, portableProviders)
     ) {
-      await ensureReadme();
-      return false;
+      return deferMigration();
     }
     const recoveredMcpServers = normalizeLegacyMcpServers(legacy.mcpServers);
     const recoveredSkills = normalizeLegacySkills(legacy.skills);

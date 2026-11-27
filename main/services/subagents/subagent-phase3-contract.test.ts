@@ -101,12 +101,22 @@ test("private run-store I/O is descriptor-bound, generation-checked, and package
   );
   assert.match(
     verifier,
-    /verifyUniversalMacOSHelper\(subagentRunStore,\s+"Private subagent run store"\)/u,
+    /\{ executable: SUBAGENT_RUN_STORE_EXECUTABLE, label: "Private subagent run store" \}/u,
   );
   assert.match(verifier, /run\("\/usr\/bin\/lipo", \["-archs", file\]\)/u);
   assert.match(verifier, /"-arch",\s+architecture,\s+"-show-build"/u);
-  assert.match(verifier, /verifySignature\(subagentRunStore/u);
-  assert.match(verifier, /readEntitlements\(subagentRunStore\)/u);
+  assert.match(
+    verifier,
+    /for \(const helper of MACOS_NATIVE_HELPERS\)[\s\S]{0,300}verifyUniversalMacOSHelper\(helper\.path, helper\.label\)/u,
+  );
+  assert.match(
+    verifier,
+    /for \(const helper of MACOS_NATIVE_HELPERS\)[\s\S]{0,300}verifySignature\(helper\.path/u,
+  );
+  assert.match(
+    verifier,
+    /for \(const helper of MACOS_NATIVE_HELPERS\)[\s\S]{0,300}readEntitlements\(helper\.path\)/u,
+  );
 });
 
 test("chat removal deletes private child history before the chat can disappear", async () => {

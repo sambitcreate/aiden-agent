@@ -22,14 +22,6 @@ test("Linux Wayland launches disable Chromium Vulkan before the main module load
   assert.doesNotMatch(flags, /disableHardwareAcceleration/u);
 });
 
-test("the Electron build enters through the profile bootstrap", () => {
-  const buildScript = readFileSync(
-    new URL("../scripts/build-electron.mjs", import.meta.url),
-    "utf8",
-  );
-  assert.match(buildScript, /entryPoints: \["main\/bootstrap\.ts"\]/u);
-});
-
 test("crash capture is off at bootstrap and only the explicit diagnostics handler can enable it", () => {
   const bootstrap = readFileSync(new URL("./bootstrap.ts", import.meta.url), "utf8");
   const diagnostics = readFileSync(new URL("./handlers/diagnostics.ts", import.meta.url), "utf8");

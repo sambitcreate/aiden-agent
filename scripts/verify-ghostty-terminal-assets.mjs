@@ -4,18 +4,9 @@ import { resolve } from "node:path";
 
 const rendererDirectory = resolve(import.meta.dirname, "../build/renderer");
 
-async function listFiles(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(
-    entries.map(async (entry) => {
-      const path = resolve(directory, entry.name);
-      return entry.isDirectory() ? listFiles(path) : [path];
-    }),
-  );
-  return nested.flat();
-}
-
-const files = await listFiles(rendererDirectory);
+const files = (await readdir(rendererDirectory, { recursive: true, withFileTypes: true }))
+  .filter((entry) => !entry.isDirectory())
+  .map((entry) => resolve(entry.parentPath, entry.name));
 
 function findAsset(pattern, label) {
   const match = files.find((path) => pattern.test(path));

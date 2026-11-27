@@ -5,7 +5,7 @@ import { SourceMap } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { URL, pathToFileURL, fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { electronBuildOptions } from "./build-electron.mjs";
 
@@ -37,6 +37,21 @@ async function buildFixture(options) {
   await build({ ...main, entryPoints: [entry], outfile, logLevel: "silent" });
   return { directory, entry, outfile };
 }
+
+test("the packaged main entry is built from the runtime-profile bootstrap", async () => {
+  // The bootstrap configures the runtime profile before main/index.ts can take
+  // its single-instance lock, so package.json "main" must be its bundle.
+  const { main: packagedMain } = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  for (const production of [false, true]) {
+    const bundles = electronBuildOptions({ production }).filter(
+      (options) => options.outfile === packagedMain,
+    );
+    assert.equal(bundles.length, 1);
+    assert.deepEqual(bundles[0].entryPoints, ["main/bootstrap.ts"]);
+  }
+});
 
 test("production main bundle is smaller but keeps names and symbolicates through an unreferenced external map", async (t) => {
   const development = await buildFixture(electronBuildOptions());

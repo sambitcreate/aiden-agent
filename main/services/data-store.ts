@@ -8,6 +8,8 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { createHash, randomUUID } from "node:crypto";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
+import { stagedPathFor, syncDirectory, syncFile } from "./durable-fs.js";
+import { createSerialQueue } from "../shared/serial-queue.js";
 
 /** Match the complete destination basename plus the fixed recovery suffix. */
 export function isDataStoreRecoveryFile(
@@ -110,7 +112,7 @@ export class DataStore<T> {
   private cache: T | null = null;
   private filePath: string | null = null;
   private loadPromise: Promise<T> | null = null;
-  private mutationTail: Promise<void> = Promise.resolve();
+  private readonly serialQueue = createSerialQueue();
   /** Predecessor names created by this process remain live until next startup. */
   private readonly liveHeldFiles = new Set<string>();
   /** Only this store’s active atomic publication may temporarily give its inode two names. */
@@ -228,15 +230,6 @@ export class DataStore<T> {
     return this.diskSnapshot ? Buffer.from(this.diskSnapshot) : null;
   }
 
-  private serialized<R>(operation: () => Promise<R>): Promise<R> {
-    const result = this.mutationTail.then(operation, operation);
-    this.mutationTail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  }
-
   /**
    * Park an unparseable or unreadable file beside itself so replacing it is
    * never destructive. A hard link keeps the exact bytes without needing read
@@ -279,12 +272,7 @@ export class DataStore<T> {
 
   private async syncDirectory(directory: string): Promise<void> {
     if (this.options.syncDirectory) return this.options.syncDirectory(directory);
-    const handle = await fs.open(directory, "r");
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
+    return syncDirectory(directory);
   }
 
   private async restoreHeldFile(
@@ -519,22 +507,14 @@ export class DataStore<T> {
       if (this.cache === null) await this.load();
       if (this.corrupt) await this.preserveCorrupt(destination);
     }
-    const staged = path.join(
-      path.dirname(destination),
-      `.${path.basename(destination)}.${randomUUID()}.tmp`,
-    );
+    const staged = stagedPathFor(destination);
     this.ownedPublicationPaths = [destination, staged];
     try {
       await fs.writeFile(staged, serialized, {
         encoding: "utf-8",
         ...(this.options.fileMode === undefined ? {} : { mode: this.options.fileMode }),
       });
-      const stagedHandle = await fs.open(staged, "r");
-      try {
-        await stagedHandle.sync();
-      } finally {
-        await stagedHandle.close();
-      }
+      await syncFile(staged);
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
       // Only the publish hooks read the predecessor, so stores without hooks
       // skip a deep clone of the whole document on every write.
@@ -576,7 +556,7 @@ export class DataStore<T> {
 
   async save(data: T, isCurrent: () => boolean = () => true): Promise<void> {
     const snapshot = structuredClone(data);
-    return this.serialized(async () => {
+    return this.serialQueue.run(async () => {
       const hadCache = this.cache !== null;
       const changed = this.options.reloadBeforeWrite ? await this.reloadNow() : false;
       if (this.options.rejectCorruptWrite && this.corrupt) {
@@ -602,7 +582,7 @@ export class DataStore<T> {
     receipt?: DataStorePublicationReceipt,
   ): Promise<R> {
     if (receipt) receipt.state = "not-published";
-    return this.serialized(async () => {
+    return this.serialQueue.run(async () => {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
       if (this.options.reloadBeforeWrite) await this.reloadNow();
       if (this.options.rejectCorruptWrite && this.corrupt) {
@@ -635,7 +615,7 @@ export class DataStore<T> {
    * method exists to catch. Re-reading a small config file is not worth that.
    */
   async reload(): Promise<boolean> {
-    return this.serialized(() => this.reloadNow());
+    return this.serialQueue.run(() => this.reloadNow());
   }
 
   private async reloadNow(): Promise<boolean> {

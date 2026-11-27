@@ -1,13 +1,12 @@
 /* global AbortController, Buffer, clearTimeout, console, process, setTimeout */
 
-import { randomUUID } from "node:crypto";
-import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   MAX_MODELS_DEV_SNAPSHOT_BYTES,
   serializeModelsDevSnapshot,
   validateModelsDevSnapshot,
+  writeFileAtomically,
 } from "./model-snapshot-core.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
@@ -101,15 +100,7 @@ export async function writeSnapshot(
   maximumBytes = MAX_MODELS_DEV_SNAPSHOT_BYTES,
 ) {
   const serialized = serializeModelsDevSnapshot(snapshot, maximumBytes);
-  const temporary = `${destinationPath}.tmp-${process.pid}-${randomUUID()}`;
-  await mkdir(dirname(destinationPath), { recursive: true });
-  try {
-    await writeFile(temporary, serialized, "utf8");
-    await rename(temporary, destinationPath);
-  } catch (error) {
-    await unlink(temporary).catch(() => undefined);
-    throw error;
-  }
+  await writeFileAtomically(serialized, destinationPath);
 }
 
 export async function updateModelCapabilities(options = {}) {

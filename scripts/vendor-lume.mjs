@@ -1,4 +1,4 @@
-/* global AbortController, clearTimeout, console, fetch, process, setTimeout */
+/* global console, fetch, process */
 
 // Vendors the pinned, upstream-signed Lume 0.6.1 bundle into
 // build/bot-computers/lume.app for packaging (npm run bot-computers:vendor).
@@ -7,13 +7,12 @@
 // would drop. Nothing here runs at app runtime.
 
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { assertSafeArchiveListing, downloadPinnedArchive } from "./vendor-archive.mjs";
 import {
   LUME_APP_TREE,
   LUME_ARCHIVE_MEMBERS,
@@ -64,18 +63,9 @@ export function validateArtifact(artifact) {
 
 /** Refuse unsafe names, then require exactly the pinned listing. */
 export function assertLumeArchiveListing(listing) {
-  const names = listing.split(/\r?\n/).filter((name) => name.length > 0);
-  for (const name of names) {
-    const segments = name.split("/");
-    if (
-      name.startsWith("/") ||
-      name.includes("\\") ||
-      name.includes("\0") ||
-      segments.some((segment) => segment === ".." || segment === ".")
-    ) {
-      throw new Error(`Refusing unsafe path in the pinned Lume archive: ${JSON.stringify(name)}`);
-    }
-  }
+  const names = assertSafeArchiveListing(listing, "the pinned Lume archive", {
+    rejectDotSegment: true,
+  });
   const actual = [...names].sort();
   const expected = [...LUME_ARCHIVE_MEMBERS].sort();
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -181,35 +171,16 @@ export async function downloadLumeArchive(
   archive,
   { fetchImpl = fetch, maxBytes = LUME_ARTIFACT_PROVENANCE.maxArchiveBytes, timeoutMs = DOWNLOAD_TIMEOUT_MS } = {},
 ) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    // GitHub release assets redirect to their object store; the pinned
-    // SHA-256 below is the authority for whatever arrives.
-    const response = await fetchImpl(LUME_ARTIFACT_PROVENANCE.url, {
-      redirect: "follow",
-      signal: controller.signal,
-    });
-    if (!response.ok || !response.body) throw new Error(`Download failed with HTTP ${response.status}.`);
-    const declaredBytes = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
-      await response.body.cancel().catch(() => {});
-      throw new Error(`The pinned Lume download exceeds ${maxBytes} bytes.`);
-    }
-    let downloadedBytes = 0;
-    const bound = new Transform({
-      transform(chunk, _encoding, callback) {
-        downloadedBytes += chunk.byteLength;
-        callback(
-          downloadedBytes > maxBytes ? new Error(`The pinned Lume download exceeds ${maxBytes} bytes.`) : undefined,
-          chunk,
-        );
-      },
-    });
-    await pipeline(Readable.fromWeb(response.body), bound, createWriteStream(archive, { flags: "wx", mode: 0o600 }));
-  } finally {
-    clearTimeout(timeout);
-  }
+  // GitHub release assets redirect to their object store; the pinned
+  // SHA-256 below is the authority for whatever arrives.
+  await downloadPinnedArchive({
+    url: LUME_ARTIFACT_PROVENANCE.url,
+    archive,
+    maxBytes,
+    timeoutMs,
+    downloadLabel: "The pinned Lume download",
+    fetchImpl,
+  });
 }
 
 async function pathExists(candidate) {

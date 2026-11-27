@@ -1,3 +1,9 @@
+import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import process from "node:process";
+
 function record(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
@@ -123,6 +129,15 @@ export function serializeModelsDevSnapshot(value, maximumBytes = MAX_MODELS_DEV_
   }
   return serialized;
 }
-import { Buffer } from "node:buffer";
-
 export const MAX_MODELS_DEV_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+
+export async function writeFileAtomically(contents, destination) {
+  const temporary = `${destination}.tmp-${process.pid}-${randomUUID()}`;
+  await mkdir(dirname(destination), { recursive: true });
+  try {
+    await writeFile(temporary, contents, { encoding: "utf8", flag: "wx" });
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}

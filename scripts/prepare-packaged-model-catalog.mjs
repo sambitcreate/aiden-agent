@@ -1,12 +1,12 @@
 /* global Buffer, process */
 
-import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   MAX_MODELS_DEV_SNAPSHOT_BYTES,
   validateModelsDevSnapshot,
+  writeFileAtomically,
 } from "./model-snapshot-core.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
@@ -49,14 +49,7 @@ export async function preparePackagedModelCatalog({
     throw new Error("Source models.dev capability snapshot must be a bounded regular file.");
   }
   const compact = compactModelCatalog(await readFile(source, "utf8"));
-  const temporary = `${destination}.tmp-${process.pid}-${randomUUID()}`;
-  await mkdir(path.dirname(destination), { recursive: true });
-  try {
-    await writeFile(temporary, compact, { encoding: "utf8", flag: "wx" });
-    await rename(temporary, destination);
-  } finally {
-    await rm(temporary, { force: true });
-  }
+  await writeFileAtomically(compact, destination);
   return {
     sourceBytes: sourceInfo.size,
     packagedBytes: Buffer.byteLength(compact, "utf8"),

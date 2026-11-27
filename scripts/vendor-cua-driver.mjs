@@ -1,8 +1,8 @@
-/* global AbortController, Buffer, clearTimeout, console, fetch, process, setTimeout */
+/* global Buffer, clearTimeout, console, process, setTimeout */
 
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { constants as fsConstants, createReadStream, createWriteStream } from "node:fs";
+import { constants as fsConstants, createReadStream } from "node:fs";
 import {
   access,
   chmod,
@@ -18,9 +18,8 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { assertSafeArchiveListing, downloadPinnedArchive } from "./vendor-archive.mjs";
 import {
   CUA_DRIVER_ARTIFACT_PROVENANCE,
   CUA_DRIVER_SHA256,
@@ -212,18 +211,7 @@ export const CUA_DRIVER_ARCHIVE_MEMBER = "cua-driver";
 
 /** Reject archive listings that could escape staging or hide the driver. */
 export function assertArchiveListing(listing) {
-  const names = listing.split(/\r?\n/).filter((name) => name.length > 0);
-  for (const name of names) {
-    const segments = name.split("/");
-    if (
-      name.startsWith("/") ||
-      name.includes("\\") ||
-      name.includes("\0") ||
-      segments.some((segment) => segment === "..")
-    ) {
-      throw new Error(`Refusing unsafe path in pinned cua-driver archive: ${JSON.stringify(name)}`);
-    }
-  }
+  const names = assertSafeArchiveListing(listing, "pinned cua-driver archive");
   const matches = names.filter((name) => name === CUA_DRIVER_ARCHIVE_MEMBER);
   if (matches.length !== 1) {
     throw new Error(
@@ -306,37 +294,13 @@ export async function verifySigstoreBundle(archive, bundlePath, runner = run) {
 }
 
 async function downloadArtifact(artifact, archive, maxBytes = MAX_ARCHIVE_BYTES) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
-  try {
-    const response = await fetch(artifact.url, { redirect: "follow", signal: controller.signal });
-    if (!response.ok || !response.body) {
-      throw new Error(`Download failed with HTTP ${response.status}.`);
-    }
-    const declaredBytes = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
-      throw new Error(`Pinned cua-driver download exceeds ${maxBytes} bytes.`);
-    }
-    let downloadedBytes = 0;
-    const bound = new Transform({
-      transform(chunk, _encoding, callback) {
-        downloadedBytes += chunk.byteLength;
-        callback(
-          downloadedBytes > maxBytes
-            ? new Error(`Pinned cua-driver download exceeds ${maxBytes} bytes.`)
-            : undefined,
-          chunk,
-        );
-      },
-    });
-    await pipeline(
-      Readable.fromWeb(response.body),
-      bound,
-      createWriteStream(archive, { flags: "wx", mode: 0o600 }),
-    );
-  } finally {
-    clearTimeout(timeout);
-  }
+  await downloadPinnedArchive({
+    url: artifact.url,
+    archive,
+    maxBytes,
+    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    downloadLabel: "Pinned cua-driver download",
+  });
 }
 
 async function installBinary(extractedBinary) {

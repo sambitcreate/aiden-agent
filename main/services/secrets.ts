@@ -24,6 +24,7 @@ import { writeFileAtomic } from "./durable-fs.js";
 import { MAX_PROVIDER_KEY_LENGTH } from "./types.js";
 import { assertProviderCredentialLength } from "./provider-credential-rotation-core.js";
 import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
+import { createSerialQueue } from "../shared/serial-queue.js";
 
 const FILE = "provider-keys.json";
 const PROVIDER_BINDING_PREFIX = "__aiden_internal_provider_binding_v1__:";
@@ -33,7 +34,7 @@ const LEGACY_UNBOUND_PROVIDER_BINDING = "__aiden_legacy_unbound_provider_key_v1_
 
 type KeyMap = SecretKeyMap; // providerId -> base64 ciphertext
 type MutationGuard = () => boolean;
-let mutationTail: Promise<void> = Promise.resolve();
+const serialQueue = createSerialQueue();
 
 function assertMutationCurrent(isCurrent: MutationGuard): void {
   if (!isCurrent()) throw new Error("The renderer document is no longer active.");
@@ -98,17 +99,8 @@ async function writeMap(map: KeyMap, isCurrent: MutationGuard = () => true): Pro
   }
 }
 
-function serialized<R>(operation: () => Promise<R>): Promise<R> {
-  const result = mutationTail.then(operation, operation);
-  mutationTail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
-
 async function getKeyStrict(providerId: string): Promise<string | null> {
-  await mutationTail;
+  await serialQueue.idle();
   const b64 = secretKeyEntry(await readMap(), providerId);
   if (!b64) return null;
   return secureStorage.decryptString(Buffer.from(b64, "base64"));
@@ -130,7 +122,7 @@ function setKeyWithBound(
   maxLength: number,
   isCurrent: MutationGuard,
 ): Promise<void> {
-  return serialized(async () => {
+  return serialQueue.run(async () => {
     assertMutationCurrent(isCurrent);
     if (key.length > maxLength) {
       throw new Error(`Encrypted values cannot exceed ${maxLength} characters.`);
@@ -180,7 +172,7 @@ export const secrets = {
 
   async getProviderKey(providerId: string, binding: string): Promise<string | null> {
     try {
-      await mutationTail;
+      await serialQueue.idle();
       const map = await readMap();
       const storedBinding = await decryptedEntry(map, `${PROVIDER_BINDING_PREFIX}${providerId}`);
       if (storedBinding !== binding) return null;
@@ -198,7 +190,7 @@ export const secrets = {
    */
   async getOrBindLegacyProviderKey(providerId: string, binding: string): Promise<string | null> {
     try {
-      return await serialized(async () => {
+      return await serialQueue.run(async () => {
         const map = await readMap();
         const bindingId = `${PROVIDER_BINDING_PREFIX}${providerId}`;
         if (Object.prototype.hasOwnProperty.call(map, bindingId)) {
@@ -227,7 +219,7 @@ export const secrets = {
     binding: string,
     isCurrent: MutationGuard = () => true,
   ): Promise<void> {
-    return serialized(async () => {
+    return serialQueue.run(async () => {
       assertMutationCurrent(isCurrent);
       assertProviderCredentialLength(key);
       if (!secureStorage.isEncryptionAvailable()) {
@@ -258,7 +250,7 @@ export const secrets = {
       binding: string;
     }>,
   ): Promise<boolean> {
-    return serialized(async () => {
+    return serialQueue.run(async () => {
       const map = await readMap();
       const sourceTargets = new Map<string, string>();
       const byTarget = new Map<
@@ -339,7 +331,7 @@ export const secrets = {
   },
 
   async quarantineUnboundProviderKey(providerId: string): Promise<void> {
-    return serialized(async () => {
+    return serialQueue.run(async () => {
       const map = await readMap();
       if (!secretKeyEntry(map, providerId)) return;
       const bindingId = `${PROVIDER_BINDING_PREFIX}${providerId}`;
@@ -372,7 +364,7 @@ export const secrets = {
     providerId: string,
     desiredBinding: string | null,
   ): Promise<void> {
-    return serialized(async () => {
+    return serialQueue.run(async () => {
       const map = await readMap();
       const active = {
         valueId: providerId,
@@ -397,7 +389,7 @@ export const secrets = {
   },
 
   async hasKey(providerId: string): Promise<boolean> {
-    await mutationTail;
+    await serialQueue.idle();
     try {
       return Boolean(secretKeyEntry(await readMap(), providerId));
     } catch (error) {
@@ -407,7 +399,7 @@ export const secrets = {
   },
 
   async deleteKey(providerId: string, isCurrent: MutationGuard = () => true): Promise<void> {
-    return serialized(async () => {
+    return serialQueue.run(async () => {
       assertMutationCurrent(isCurrent);
       const map = await readMap();
       assertMutationCurrent(isCurrent);
@@ -429,7 +421,7 @@ export const secrets = {
     providerId: string,
     isCurrent: MutationGuard = () => true,
   ): Promise<void> {
-    return serialized(async () => {
+    return serialQueue.run(async () => {
       assertMutationCurrent(isCurrent);
       const map = await readMap();
       assertMutationCurrent(isCurrent);
@@ -447,7 +439,7 @@ export const secrets = {
 
   /** Remove one namespaced credential and every colon-delimited child in one map write. */
   async deleteKeyFamily(providerId: string, isCurrent: MutationGuard = () => true): Promise<void> {
-    return serialized(async () => {
+    return serialQueue.run(async () => {
       assertMutationCurrent(isCurrent);
       const map = await readMap();
       assertMutationCurrent(isCurrent);
@@ -458,14 +450,14 @@ export const secrets = {
   },
 
   async clearAll(isCurrent: MutationGuard = () => true): Promise<void> {
-    return serialized(async () => {
+    return serialQueue.run(async () => {
       assertMutationCurrent(isCurrent);
       await writeMap({}, isCurrent);
     });
   },
 
   async migrateKeys(migrate: (map: KeyMap) => boolean): Promise<void> {
-    return serialized(async () => {
+    return serialQueue.run(async () => {
       const map = await readMap();
       if (migrate(map)) await writeMap(map);
     });
