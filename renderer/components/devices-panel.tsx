@@ -7,6 +7,7 @@ import { deviceTabKey } from "../lib/device-tabs";
 import { DeviceHostDiagnostics } from "./device-host-diagnostics";
 import { LiveGuard } from "./live-guard";
 import { devicesApi } from "../lib/ipc";
+import { useDocumentVisible } from "../lib/use-document-visible";
 import {
   DEVICE_PLATFORM_LABELS,
   DEVICE_SETUP_NOTICE,
@@ -562,18 +563,6 @@ export function DevicesPanelView({
       );
     }
   }
-}
-
-function useDocumentVisible(): boolean {
-  const [visible, setVisible] = React.useState(
-    () => typeof document === "undefined" || document.visibilityState !== "hidden",
-  );
-  React.useEffect(() => {
-    const update = () => setVisible(document.visibilityState !== "hidden");
-    document.addEventListener("visibilitychange", update);
-    return () => document.removeEventListener("visibilitychange", update);
-  }, []);
-  return visible;
 }
 
 export function DevicesPanel({

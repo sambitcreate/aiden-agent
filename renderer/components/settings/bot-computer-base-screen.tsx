@@ -8,7 +8,7 @@
 import * as React from "react";
 import { RefreshCw } from "lucide-react";
 import { Button, Text } from "../ui";
-import { useDocumentVisible } from "../device-mini-player";
+import { useDocumentVisible } from "../../lib/use-document-visible";
 import { DEVICE_SCREEN_CONTAINER_STYLE, fittedScreenStyle } from "../../lib/device-display-rotation";
 import { botComputersApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";

@@ -7,7 +7,8 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { FloatingPlayerFrame, useDocumentVisible } from "../../components/device-mini-player";
+import { FloatingPlayerFrame } from "../../components/device-mini-player";
+import { useDocumentVisible } from "../../lib/use-document-visible";
 import type { BrowserFloatingSize } from "../../lib/browser-floating-layout";
 import {
   DEFAULT_DEVICE_MINI_PLAYER_GEOMETRY,

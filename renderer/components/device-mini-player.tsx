@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ArrowLeft, GripHorizontal, House, PanelRight, RotateCw, Square, X } from "lucide-react";
 import { Button, Text } from "./ui";
 import { useDeviceStream } from "../lib/use-device-stream";
+import { useDocumentVisible } from "../lib/use-document-visible";
 import {
   DEVICE_SCREEN_CONTAINER_STYLE,
   deviceDisplayRotation,
@@ -48,19 +49,6 @@ const EDGES: ReadonlyArray<{ edge: DeviceMiniPlayerEdge; className: string }> = 
 
 /** A touch that travels less than this is a click on the handle, not a drag. */
 const DRAG_SLOP_PX = 4;
-
-/** Whether the window is on screen; floating players stream only then. */
-export function useDocumentVisible(): boolean {
-  const [visible, setVisible] = React.useState(
-    () => typeof document === "undefined" || document.visibilityState !== "hidden",
-  );
-  React.useEffect(() => {
-    const update = () => setVisible(document.visibilityState !== "hidden");
-    document.addEventListener("visibilitychange", update);
-    return () => document.removeEventListener("visibilitychange", update);
-  }, []);
-  return visible;
-}
 
 export interface FloatingPlayerFrameProps {
   /** Names the player and shows in its header. */

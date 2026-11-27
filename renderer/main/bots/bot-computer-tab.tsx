@@ -17,9 +17,9 @@ import { MousePointerClick, PictureInPicture2, Play, RefreshCw, Undo2 } from "lu
 import { AidenActivityMark } from "../../components/aiden-activity-mark";
 import { BotAvatar } from "../../components/bot-avatar";
 import { DeviceFloatingPlaceholder } from "../../components/device-floating-placeholder";
-import { useDocumentVisible } from "../../components/device-mini-player";
 import { Button, Text, toast } from "../../components/ui";
 import { DEVICE_SCREEN_CONTAINER_STYLE, fittedScreenStyle } from "../../lib/device-display-rotation";
+import { useDocumentVisible } from "../../lib/use-document-visible";
 import { botComputersApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { useBotComputersCache, useBotComputersStatus } from "../../lib/use-bot-computers";
