@@ -17,8 +17,6 @@ import {
   type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
 import {
-  mergeSubagentTranscript,
-  type LiveSubagentTranscripts,
   type MergedSubagentTranscript,
   type SubagentTranscriptMessageEntry,
   type SubagentTranscriptV1,
@@ -89,15 +87,6 @@ export function rememberSubagentHelperTranscript(
     next.delete(oldest);
   }
   return next;
-}
-
-/** The saved copy merged with the live updates for one helper. */
-export function subagentHelperTranscript(
-  runId: string,
-  saved: SavedSubagentHelperTranscripts,
-  live: LiveSubagentTranscripts | undefined,
-): MergedSubagentTranscript {
-  return mergeSubagentTranscript(saved.get(runId), live?.get(runId));
 }
 
 export interface SubagentHelperWorkSummary {

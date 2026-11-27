@@ -309,13 +309,6 @@ export function useSubagentHelperChatStore(): SubagentHelperChatStore | null {
   return React.useContext(SubagentHelperChatStoreContext);
 }
 
-/** Subscribe to the helper chat state; the empty state when there is no store. */
-export function useSubagentHelperChatState(): SubagentHelperChatState {
-  return useSubagentHelperChatSelector(selectWholeState);
-}
-
-const selectWholeState = (state: SubagentHelperChatState) => state;
-
 /**
  * Subscribe to one slice of the helper chat state. The component re-renders only
  * when the slice changes, so a streamed token does not redraw what ignores it.
