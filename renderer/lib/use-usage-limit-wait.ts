@@ -4,66 +4,25 @@
  */
 import * as React from "react";
 import { usageLimitsApi } from "./ipc";
+import { createSharedSnapshot } from "./shared-snapshot";
 import { usageLimitWaitFor, type UsageLimitWaitView } from "../shared/usage-limits";
 
 const NONE: UsageLimitWaitView[] = [];
-let cached: UsageLimitWaitView[] = NONE;
-let consumers = 0;
-let unsubscribe: (() => void) | null = null;
-let generation = 0;
-const listeners = new Set<() => void>();
 
-function publish(next: UsageLimitWaitView[]): void {
-  cached = next.length ? next : NONE;
-  for (const listener of [...listeners]) listener();
-}
-
-function acquire(): () => void {
-  consumers += 1;
-  if (consumers === 1) {
-    const current = ++generation;
-    let pushed = false;
-    unsubscribe = usageLimitsApi.onChanged((next) => {
-      if (current !== generation) return;
-      pushed = true;
-      publish(next);
-    });
-    void usageLimitsApi.list().then(
-      (next) => {
-        // A push that arrived first is newer than this read.
-        if (current === generation && !pushed) publish(next);
-      },
-      () => undefined,
-    );
-  }
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    consumers -= 1;
-    if (consumers > 0) return;
-    generation += 1;
-    unsubscribe?.();
-    unsubscribe = null;
-    cached = NONE;
-  };
-}
+const usageLimitSnapshot = createSharedSnapshot<UsageLimitWaitView[]>({
+  empty: NONE,
+  subscribe: (onValue) => usageLimitsApi.onChanged(onValue),
+  read: () => usageLimitsApi.list(),
+  normalize: (next) => (next.length ? next : NONE),
+  ignoreReadAfterPush: true,
+});
 
 /** The wait of one chat or Bot, while its reply waits for a usage limit. */
 export function useUsageLimitWait(
   ownerKind: UsageLimitWaitView["ownerKind"],
   ownerId: string | null | undefined,
 ): UsageLimitWaitView | undefined {
-  const enabled = Boolean(ownerId);
-  React.useEffect(() => (enabled ? acquire() : undefined), [enabled]);
-  const waits = React.useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => cached,
-    () => NONE,
-  );
+  const waits = usageLimitSnapshot.useSnapshot(Boolean(ownerId));
   return React.useMemo(
     () => (ownerId ? usageLimitWaitFor(waits, ownerKind, ownerId) : undefined),
     [waits, ownerKind, ownerId],
