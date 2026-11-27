@@ -104,11 +104,6 @@ export interface TelegramInlineKeyboardMarkup {
   inline_keyboard: TelegramInlineKeyboardButton[][];
 }
 
-export interface TelegramInputRichMessage {
-  markdown: string;
-  skip_entity_detection?: boolean;
-}
-
 export interface TelegramForumTopic {
   message_thread_id: number;
   name: string;

@@ -106,9 +106,6 @@ export interface WebSearchResultSet {
   untrusted: true;
 }
 
-/** Compatibility alias for callers that use response terminology. */
-export type WebSearchResponse = WebSearchResultSet;
-
 export interface WebSearchErrorSnapshot {
   kind: WebSearchErrorKind;
   providerId?: WebSearchProviderId;

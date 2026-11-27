@@ -53,17 +53,12 @@ export type WebSearchCredentialKind =
   | "endpoint-and-api-key"
   | "api-key-and-zone";
 
-/** Short aliases retained for adapter/contract callers that use the plan's names. */
-export type CredentialKind = WebSearchCredentialKind;
-
 export type WebSearchCostClass =
   | "built-in-free"
   | "provider-free"
   | "quota"
   | "paid"
   | "self-hosted";
-
-export type CostClass = WebSearchCostClass;
 
 export type WebSearchCapability =
   | "search"
@@ -74,13 +69,6 @@ export type WebSearchCapability =
   | "self-hosted";
 
 export type WebSearchReleaseState = "shipped" | "experimental" | "blocked";
-
-/**
- * Main-owned adapter factories are intentionally represented as an opaque
- * type here.  The core registry never stores or exposes a callable factory;
- * the main-only registry can intersect this metadata with its adapter map.
- */
-export type MainOnlyAdapterFactory = (...args: never[]) => unknown;
 
 /** Immutable metadata shared by main and renderer code. */
 export interface WebSearchProviderDefinition {

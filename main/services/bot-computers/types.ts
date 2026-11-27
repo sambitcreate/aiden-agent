@@ -205,5 +205,3 @@ export class BotComputerError extends Error {
     this.name = "BotComputerError";
   }
 }
-
-export type BotComputerSetupKind = BotComputerSetupState["kind"];
