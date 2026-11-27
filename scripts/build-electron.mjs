@@ -31,71 +31,38 @@ export function electronBuildOptions({ production = false, analytics } = {}) {
       ? { sourcemap: "external", minifyWhitespace: true, minifySyntax: true }
       : { sourcemap: true }),
   };
+  const mainBundle = (entryPoint, outfile, extra = {}) => ({
+    ...common,
+    entryPoints: [entryPoint],
+    outfile,
+    format: "esm",
+    packages: "external",
+    ...extra,
+  });
+  const preloadBundle = (entryPoint, outfile) => ({
+    ...common,
+    entryPoints: [entryPoint],
+    outfile,
+    format: "cjs",
+    external: ["electron"],
+  });
   return [
-    {
-      ...common,
-      entryPoints: ["main/services/pi-vcc/worker.ts"],
-      outfile: "build/main/pi-vcc-worker.js",
-      format: "esm",
-      packages: "external",
-    },
-    {
-      ...common,
-      entryPoints: ["main/bootstrap.ts"],
-      outfile: "build/main/index.js",
-      format: "esm",
-      packages: "external",
-    },
-    {
-      ...common,
-      entryPoints: ["main/services/subagents/subagent-inference-worker-bootstrap.ts"],
-      outfile: "build/main/subagent-inference-worker.js",
-      format: "esm",
-      packages: "external",
-      external: ["./subagent-inference-worker-runtime.js"],
-    },
-    {
-      ...common,
-      entryPoints: ["main/services/subagents/subagent-inference-worker.ts"],
-      outfile: "build/main/subagent-inference-worker-runtime.js",
-      format: "esm",
-      packages: "external",
-    },
-    {
-      ...common,
-      entryPoints: ["main/services/local-speech-worker.ts"],
-      outfile: "build/main/local-speech-worker.js",
-      format: "esm",
-      packages: "external",
-    },
-    {
-      ...common,
-      entryPoints: ["renderer/preload.ts"],
-      outfile: "build/preload/preload.cjs",
-      format: "cjs",
-      external: ["electron"],
-    },
-    {
-      ...common,
-      entryPoints: ["renderer/preload-pill.ts"],
-      outfile: "build/preload/preload-pill.cjs",
-      format: "cjs",
-      external: ["electron"],
-    },
-    {
-      ...common,
-      entryPoints: ["renderer/preload-quick-chat.ts"],
-      outfile: "build/preload/preload-quick-chat.cjs",
-      format: "cjs",
-      external: ["electron"],
-    },
-    {
-      ...common,
-      entryPoints: ["renderer/preload-bot-bubbles.ts"],
-      outfile: "build/preload/preload-bot-bubbles.cjs",
-      format: "cjs",
-      external: ["electron"],
-    },
+    mainBundle("main/services/pi-vcc/worker.ts", "build/main/pi-vcc-worker.js"),
+    mainBundle("main/bootstrap.ts", "build/main/index.js"),
+    mainBundle(
+      "main/services/subagents/subagent-inference-worker-bootstrap.ts",
+      "build/main/subagent-inference-worker.js",
+      { external: ["./subagent-inference-worker-runtime.js"] },
+    ),
+    mainBundle(
+      "main/services/subagents/subagent-inference-worker.ts",
+      "build/main/subagent-inference-worker-runtime.js",
+    ),
+    mainBundle("main/services/local-speech-worker.ts", "build/main/local-speech-worker.js"),
+    preloadBundle("renderer/preload.ts", "build/preload/preload.cjs"),
+    preloadBundle("renderer/preload-pill.ts", "build/preload/preload-pill.cjs"),
+    preloadBundle("renderer/preload-quick-chat.ts", "build/preload/preload-quick-chat.cjs"),
+    preloadBundle("renderer/preload-bot-bubbles.ts", "build/preload/preload-bot-bubbles.cjs"),
   ];
 }
 
