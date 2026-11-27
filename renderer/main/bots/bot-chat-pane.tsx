@@ -77,6 +77,11 @@ import { spendingNotice } from "../../shared/spending";
 
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
 
+function rethrowWithToast(error: unknown, fallback: string): never {
+  toast.error(userFacingErrorMessage(error, fallback));
+  throw error;
+}
+
 /** The Bot's pending-paused notice: Resume continues the turn, Dismiss drops it. */
 export function BotInterruptedCard({
   name,
@@ -1036,8 +1041,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       return (await botsApi.skillProposals.respond({ botId: current.id, proposalId, decision })).status;
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, decision === "add" ? "Aiden couldn’t add that skill." : "Aiden couldn’t save that choice."));
-      throw error;
+      rethrowWithToast(error, decision === "add" ? "Aiden couldn’t add that skill." : "Aiden couldn’t save that choice.");
     }
   };
   const respondToSettings = async (changeId: string, decision: "undo" | "apply" | "edited" | "dismiss"): Promise<BotSettingsChangeStatus> => {
@@ -1045,8 +1049,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       result = await botsApi.settingsChanges.respond({ botId: current.id, changeId, decision });
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
-      throw error;
+      rethrowWithToast(error, "Aiden couldn’t save that choice.");
     }
     if (!result.ok) {
       toast.error(result.message);
@@ -1060,8 +1063,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       return (await botsApi.eventRoutines.rotateLink({ botId: current.id, id: routineId })).link;
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, "Aiden couldn’t make a new link."));
-      throw error;
+      rethrowWithToast(error, "Aiden couldn’t make a new link.");
     }
   };
   const respondToProposal = async (
@@ -1076,13 +1078,10 @@ export function BotChatPane({ botId }: { botId: string }) {
       if (result.status === "accepted") void qc.invalidateQueries({ queryKey: botRoutinesKey(current.id) });
       return result;
     } catch (error) {
-      toast.error(
-        userFacingErrorMessage(
-          error,
-          decision === "accept" ? "Aiden couldn’t add that routine." : "Aiden couldn’t save that choice.",
-        ),
+      rethrowWithToast(
+        error,
+        decision === "accept" ? "Aiden couldn’t add that routine." : "Aiden couldn’t save that choice.",
       );
-      throw error;
     }
   };
 
@@ -1091,8 +1090,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       await botsApi.routines.runNow(current.id, routineId);
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, "Aiden couldn’t run that routine."));
-      throw error;
+      rethrowWithToast(error, "Aiden couldn’t run that routine.");
     }
   };
 
@@ -1121,8 +1119,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       await botsApi.issues.act({ botId: current.id, issueId, action });
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, "Aiden couldn’t do that."));
-      throw error;
+      rethrowWithToast(error, "Aiden couldn’t do that.");
     }
   };
 
@@ -1425,8 +1422,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             try {
               return (await botsApi.learning.respondLesson({ botId: current.id, lessonId, decision })).status;
             } catch (error) {
-              toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
-              throw error;
+              rethrowWithToast(error, "Aiden couldn’t save that choice.");
             }
           }}
           onUndoLearning={async (target) => {
@@ -1434,8 +1430,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             try {
               result = await botsApi.learning.undoInChat({ botId: current.id, target });
             } catch (error) {
-              toast.error(userFacingErrorMessage(error, "Aiden couldn’t undo that."));
-              throw error;
+              rethrowWithToast(error, "Aiden couldn’t undo that.");
             }
             if (!result.ok) {
               toast.error(result.code === "conflict" ? "This changed since. Edit it on the Memory page." : "Aiden couldn’t undo that.");
