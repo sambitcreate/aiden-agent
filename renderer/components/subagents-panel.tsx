@@ -90,7 +90,6 @@ export interface SubagentsPanelProps {
   detailError?: string | null;
   effectActivity?: readonly SubagentEffectActivityV1[];
   selectedRunId?: string | null;
-  defaultSelectedRunId?: string | null;
   onSelectedRunChange?: (runId: string) => void;
   onRetryDetail?: (runId: string) => void;
   onStopRun?: (run: SubagentRunSnapshot) => Promise<void> | void;
@@ -197,7 +196,6 @@ function OwnedSubagentsPanel({
   detailError = null,
   effectActivity = [],
   selectedRunId,
-  defaultSelectedRunId,
   onSelectedRunChange,
   onRetryDetail,
   onStopRun,
@@ -220,7 +218,7 @@ function OwnedSubagentsPanel({
   );
   const controlled = selectedRunId !== undefined;
   const [internalSelection, setInternalSelection] = React.useState<string | null>(
-    resolveSubagentSelection(runs, defaultSelectedRunId),
+    resolveSubagentSelection(runs, null),
   );
   const [compactView, setCompactView] = React.useState<"roster" | "detail">("roster");
   const [now, setNow] = React.useState(() => Date.now());
