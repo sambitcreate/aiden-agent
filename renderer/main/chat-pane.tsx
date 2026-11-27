@@ -168,7 +168,6 @@ import {
   useSubagentComposerPill,
 } from "../components/subagent-composer-pill";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
-import { ModelPicker } from "../components/model-picker";
 import { AgentModelPopover } from "../components/agent-model-popover";
 import { agentSliderComposerState, agentSliderStepTarget, agentSliderStopSetsEffort } from "../lib/agent-slider-view";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
@@ -4960,43 +4959,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   draft ? undefined : contextHistory.chatId === chatId ? contextHistory.pressure : null
                 }
                 modelPicker={
-                  chat.data?.botId ? (
-                    // A Bot's chat keeps the plain list: its model is the Bot's, not a slider stop.
-                    <ModelPicker
-                      providers={pickerProviders}
-                      providerId={providerId}
-                      model={model}
-                      onChange={(nextProviderId, nextModel) => {
-                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
-                      }}
-                      disabled={modelChangeBlocked}
-                      hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
-                    />
-                  ) : (
-                    <AgentModelPopover
-                      providers={pickerProviders}
-                      providerId={providerId}
-                      model={model}
-                      thinkingLevel={selectionThinkingLevel}
-                      slider={agentSlider}
-                      settingsLoaded={settings.data !== undefined}
-                      seedThinkingLevel={turnThinkingLevel(selectionThinkingLevel, {
-                        google: { supported: googleThinkingSupported, level: googleThinkingLevel },
-                        codex: { supported: codexThinkingSupported, level: codexThinkingLevel },
-                        anthropic: { supported: anthropicThinkingSupported, level: anthropicThinkingLevel },
-                        provider: { supported: providerThinkingSupported, level: providerThinkingLevel },
-                      })}
-                      onChange={(nextProviderId, nextModel) => {
-                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
-                      }}
-                      onSelectStop={(nextProviderId, nextModel, level) => {
-                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel, level ?? null);
-                      }}
-                      disabled={modelChangeBlocked}
-                      settingsBlockedReason={settingsBlockedReason}
-                      hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
-                    />
-                  )
+                  <AgentModelPopover
+                    providers={pickerProviders}
+                    providerId={providerId}
+                    model={model}
+                    thinkingLevel={selectionThinkingLevel}
+                    slider={agentSlider}
+                    settingsLoaded={settings.data !== undefined}
+                    seedThinkingLevel={turnThinkingLevel(selectionThinkingLevel, {
+                      google: { supported: googleThinkingSupported, level: googleThinkingLevel },
+                      codex: { supported: codexThinkingSupported, level: codexThinkingLevel },
+                      anthropic: { supported: anthropicThinkingSupported, level: anthropicThinkingLevel },
+                      provider: { supported: providerThinkingSupported, level: providerThinkingLevel },
+                    })}
+                    onChange={(nextProviderId, nextModel) => {
+                      if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
+                    }}
+                    onSelectStop={(nextProviderId, nextModel, level) => {
+                      if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel, level ?? null);
+                    }}
+                    disabled={modelChangeBlocked}
+                    settingsBlockedReason={settingsBlockedReason}
+                    hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
+                  />
                 }
               />
             )}
