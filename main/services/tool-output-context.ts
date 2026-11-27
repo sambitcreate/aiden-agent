@@ -114,9 +114,3 @@ export function createDurableToolOutputs(options: {
     }),
   };
 }
-
-export function withDurableToolOutputs(
-  options: Parameters<typeof createDurableToolOutputs>[0],
-): AgentTool[] {
-  return createDurableToolOutputs(options).tools;
-}

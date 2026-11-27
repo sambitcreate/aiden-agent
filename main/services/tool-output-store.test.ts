@@ -8,7 +8,7 @@ import { Type } from "typebox";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { compactGenerationContext } from "./generation-context.js";
 import { ToolOutputStore, toolOutputScope, MAX_STORED_TOOL_OUTPUT_CHARS, toolOutputCredentialFingerprint } from "./tool-output-store.js";
-import { boundedToolOutput, createDurableToolOutputs, withDurableToolOutputs, markToolOutputSource } from "./tool-output-context.js";
+import { boundedToolOutput, createDurableToolOutputs, markToolOutputSource } from "./tool-output-context.js";
 import { executeMcpAgentTool, MAX_MCP_RESULT_TEXT_CHARS } from "./mcp-tool-result.js";
 
 test("retained output survives restart but never crosses chat, authority, tool, deletion or expiry boundaries", async () => {
@@ -45,13 +45,13 @@ test("MCP previews retain recoverable normalized text with fresh authority check
   try {
     let current = true;
     const raw = "x".repeat(50_000) + "retained-tail";
-    const tools = withDurableToolOutputs({
+    const tools = createDurableToolOutputs({
       tools: [markToolOutputSource({ name: "mcp_test", label: "Test", description: "test", parameters: Type.Object({}),
         execute: async () => executeMcpAgentTool(async () => ({ content: [{ type: "text", text: raw }, { type: "resource_link", uri: "file:///secret" }] })),
       })],
       store: new ToolOutputStore(() => root), chatId: "a", scope: toolOutputScope("scope"),
       isCurrent: () => current, assertCurrent: async () => { if (!current) throw new Error("revoked"); },
-    });
+    }).tools;
     const result = await tools[0]!.execute("call", {});
     const preview = result.content[0];
     assert.equal(preview.type, "text");
@@ -132,10 +132,10 @@ test("global retention is bounded and non-source tool executions cannot spill pr
     await assert.rejects(store.read("a", scope, new Set(["run_command"]), first, 0, 1), /unavailable/u);
     const records = JSON.parse(await readFile(join(root, "tool-output-spills.json"), "utf8")) as { text: string }[];
     assert.ok(records.reduce((sum, row) => sum + row.text.length, 0) <= 4_000_000);
-    const tools = withDurableToolOutputs({ tools: [{
+    const tools = createDurableToolOutputs({ tools: [{
       name: "subagent", label: "Subagent", description: "test", parameters: Type.Object({}),
       execute: async () => ({ content: [{ type: "text", text: await boundedToolOutput("private-child".repeat(100), 100) }], details: null }),
-    }], store, scope, chatId: "a", assertCurrent: async () => {}, isCurrent: () => true });
+    }], store, scope, chatId: "a", assertCurrent: async () => {}, isCurrent: () => true }).tools;
     const result = await tools[0]!.execute("child", {});
     assert.match(JSON.stringify(result.content), /no retained output/u);
     assert.doesNotMatch(await readFile(join(root, "tool-output-spills.json"), "utf8"), /private-child/u);
@@ -153,10 +153,10 @@ test("publication after the final async authority check cannot return retained t
     const handle = await store.put("a", scope, "run_command", "private", () => true);
     let current = true;
     let checks = 0;
-    const tools = withDurableToolOutputs({ tools: [{ name: "run_command", label: "test", description: "test", parameters: Type.Object({}), execute: async () => ({ content: [], details: null }) }], store, chatId: "a", scope,
+    const tools = createDurableToolOutputs({ tools: [{ name: "run_command", label: "test", description: "test", parameters: Type.Object({}), execute: async () => ({ content: [], details: null }) }], store, chatId: "a", scope,
       isCurrent: () => current,
       assertCurrent: async () => { if (++checks === 2) queueMicrotask(() => { current = false; }); },
-    });
+    }).tools;
     await assert.rejects(tools[1]!.execute("read", { handle }), /access changed/u);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -183,14 +183,14 @@ test("elided output previews retain scoped recovery without repeating completed 
     const raw = "x".repeat(50_000) + "unique-result-after-preview";
     const store = new ToolOutputStore(() => root);
     const scope = toolOutputScope("elision");
-    const tools = withDurableToolOutputs({
+    const tools = createDurableToolOutputs({
       tools: [{ name: "run_command", label: "Run", description: "fixture", parameters: Type.Object({}),
         execute: async () => ({ content: [{ type: "text", text: await boundedToolOutput(raw, 16_000) }], details: null }),
       }],
       store, chatId: "chat", scope,
       isCurrent: () => current,
       assertCurrent: async () => { if (!current) throw new Error("revoked"); },
-    });
+    }).tools;
     const messages: AgentMessage[] = [{ role: "user", content: "Inspect command results", timestamp: 1 }];
     for (let index = 0; index < 8; index += 1) {
       const id = `command-${index}`;
@@ -249,13 +249,13 @@ test("text-only MCP image projection preserves scoped output recovery through tr
     let current = true;
     const raw = "x".repeat(50_000) + "retained-image-tool-tail";
     const image = { type: "image", mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==" };
-    const tools = withDurableToolOutputs({
+    const tools = createDurableToolOutputs({
       tools: [markToolOutputSource({ name: "mcp_image", label: "Image", description: "fixture", parameters: Type.Object({}),
         execute: async () => executeMcpAgentTool(async () => ({ content: [{ type: "text", text: raw }, image] })),
       })],
       store: new ToolOutputStore(() => root), chatId: "chat", scope: toolOutputScope("text-only"),
       isCurrent: () => current, assertCurrent: async () => { if (!current) throw new Error("revoked"); },
-    });
+    }).tools;
     const messages: AgentMessage[] = [{ role: "user", content: "Inspect the evidence", timestamp: 1 }];
     for (let index = 0; index < 3; index += 1) {
       const id = `image-${index}`;
