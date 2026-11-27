@@ -35,7 +35,7 @@ export function ownEntry<V>(record: Readonly<Record<string, V>>, key: string): V
  * like `__proto__` or `constructor` become own data entries rather than
  * mutating the prototype chain.
  */
-export function setOwnEntry<T>(record: Record<string, T>, key: string, value: T): void {
+export function setOwnEntry<T>(record: Record<string, T>, key: string, value: NoInfer<T>): void {
   Object.defineProperty(record, key, {
     value,
     enumerable: true,
