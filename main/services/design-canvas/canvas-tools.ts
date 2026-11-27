@@ -224,6 +224,15 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- Coordinates and sizes are canvas units. Where a tool takes a frame id, a page's workspace path also works: its frame on the page on screen, else its first. Say which file you changed.",
 ].join("\n");
 
+/** The DESIGN.md bullet the live flag adds to the design-mode section (spec S33). */
+export const DESIGN_MD_PROMPT_BULLET =
+  "- The app's DESIGN.md is its design system's source of truth, ahead of design/tokens.css. Use its tokens, never one-off values, and its prose as guidance. The canvas note names it and its lint counts; design_system reads, lints and exports it. When a change adds or alters a token, update DESIGN.md in the same turn, keeping its sections in order and its YAML valid, then run design_system lint.";
+
+/** The design-mode section for a turn: today's text, plus the DESIGN.md bullet when the live flag is on. Static per flag value. */
+export function designModePromptSection(designLive: boolean): string {
+  return designLive ? `${DESIGN_MODE_PROMPT_SECTION}\n${DESIGN_MD_PROMPT_BULLET}` : DESIGN_MODE_PROMPT_SECTION;
+}
+
 export type DesignCanvasToolDeps = {
   chatId: string;
   /** The chat's workspace folder. Frames may name only files inside it. */
@@ -278,6 +287,12 @@ export type DesignCanvasToolDeps = {
    * over a typical canvas region.
    */
   viewState?: DesignViewState;
+  /**
+   * The app's DESIGN.md in one sentence (quoted paths and counts), which
+   * canvas_read adds as `designMd`; "" or absent adds nothing. Given only
+   * with the live flag on.
+   */
+  designMdLine?(signal?: AbortSignal): Promise<string>;
 };
 
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
@@ -1059,13 +1074,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if ("error" in read) throw new CanvasToolError(read.error);
               pageId = read.pageId;
             }
-            const answer = describeCanvas(doc, {
+            const described = describeCanvas(doc, {
               pageId,
               chatView: view,
               ...(cursor ? { cursor } : {}),
               ...(deps.viewState ? { viewState: deps.viewState } : {}),
             });
-            const listed = new Set([...answer.inView, ...answer.outsideFrames].map((frame) => frame.id));
+            const designMd = deps.designMdLine ? await deps.designMdLine(signal) : "";
+            const answer = designMd ? { ...described, designMd } : described;
+            const listed = new Set([...described.inView, ...described.outsideFrames].map((frame) => frame.id));
             remember(doc.frames.filter((frame) => listed.has(frame.id)));
             if (p.snapshot !== true) return answer;
             const unavailable = (snapshotReason: string) => ({ ...answer, snapshot: "unavailable", snapshotReason });

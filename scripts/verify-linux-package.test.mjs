@@ -187,3 +187,18 @@ test("Linux package verification names every file other users could write", asyn
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Linux package leaves out the DESIGN.md CLI, its top-level spec files, its nested node_modules and the packages only its CLI needs", () => {
+  for (const rule of [
+    "!**/node_modules/@google/design.md/dist/index.js",
+    "!**/node_modules/@google/design.md/dist/spec.md",
+    "!**/node_modules/@google/design.md/dist/spec-config.yaml",
+    "!**/node_modules/@google/design.md/dist/linter/spec.md",
+    "!**/node_modules/@google/design.md/node_modules/**",
+    "!**/node_modules/{citty,consola,estree-util-visit,fault,format,mdast-util-frontmatter,mdast-util-mdx,micromark-extension-frontmatter,micromark-extension-mdx-expression,micromark-extension-mdx-jsx,micromark-extension-mdx-md,micromark-extension-mdxjs,micromark-extension-mdxjs-esm,micromark-factory-mdx-expression,micromark-util-events-to-acorn,remark-frontmatter,remark-mdx,unist-util-position-from-estree}/**",
+  ]) {
+    const untrimmed = JSON.parse(JSON.stringify(packageJson));
+    untrimmed.build.files = untrimmed.build.files.filter((entry) => entry !== rule);
+    assert.throws(() => assertLinuxBuildConfiguration(untrimmed), (error) => error.message.includes(rule), rule);
+  }
+});

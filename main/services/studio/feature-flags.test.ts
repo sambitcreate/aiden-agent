@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CREATE_IMAGES_FEATURE_FLAG,
+  DESIGN_LIVE_FEATURE_FLAG,
   DESIGN_MODE_KILL_SWITCH,
+  designFlagOn,
+  designLiveEnabled,
   designModeEnabled,
   studioAssetsEnabled,
   studioCapabilities,
@@ -14,15 +17,26 @@ const RETIRED_DESIGN_STUDIO_FLAG = "AIDEN_EXPERIMENTAL_DESIGN_STUDIO";
 const OLD_DESIGN_MODE_FLAG = "AIDEN_EXPERIMENTAL_DESIGN_MODE";
 const DESIGN_OFF = { [DESIGN_MODE_KILL_SWITCH]: "0" };
 
+/** Asserts the named capabilities, field by field, so a new capability needs no edit here. */
+function assertCapabilities(
+  environment: Record<string, string>,
+  expected: Partial<ReturnType<typeof studioCapabilities>>,
+  message?: string,
+): void {
+  const capabilities = studioCapabilities(environment);
+  for (const [name, value] of Object.entries(expected)) {
+    assert.equal(capabilities[name as keyof typeof capabilities], value, `${name}${message ? ` (${message})` : ""}`);
+  }
+}
+
 test("Create Images stays off unless its own experimental flag is set", () => {
-  assert.deepEqual(studioCapabilities(DESIGN_OFF), { createImages: false, designMode: false });
-  assert.deepEqual(studioCapabilities({ ...DESIGN_OFF, [CREATE_IMAGES_FEATURE_FLAG]: " TRUE " }), {
+  assertCapabilities(DESIGN_OFF, { createImages: false, designMode: false });
+  assertCapabilities({ ...DESIGN_OFF, [CREATE_IMAGES_FEATURE_FLAG]: " TRUE " }, {
     createImages: true,
     designMode: false,
   });
   for (const value of ["0", "", "yes", "on", "false"]) {
-    assert.deepEqual(
-      studioCapabilities({ ...DESIGN_OFF, [CREATE_IMAGES_FEATURE_FLAG]: value }),
+    assertCapabilities({ ...DESIGN_OFF, [CREATE_IMAGES_FEATURE_FLAG]: value },
       { createImages: false, designMode: false },
       value,
     );
@@ -30,10 +44,15 @@ test("Create Images stays off unless its own experimental flag is set", () => {
 });
 
 test("the retired Design Studio flag turns nothing on", () => {
-  assert.deepEqual(studioCapabilities({ ...DESIGN_OFF, [RETIRED_DESIGN_STUDIO_FLAG]: "1" }), {
+  assertCapabilities({ ...DESIGN_OFF, [RETIRED_DESIGN_STUDIO_FLAG]: "1" }, {
     createImages: false,
     designMode: false,
   });
+  assert.deepEqual(
+    Object.entries(studioCapabilities({ ...DESIGN_OFF, [RETIRED_DESIGN_STUDIO_FLAG]: "1" })).filter(([, on]) => on),
+    [],
+    "no capability is on",
+  );
   assert.equal(studioAssetsEnabled({ [RETIRED_DESIGN_STUDIO_FLAG]: "1" }), false);
 });
 
@@ -59,9 +78,9 @@ test("design mode is on unless AIDEN_DESIGN_MODE turns it off", () => {
 });
 
 test("design mode and Create Images are independent capabilities", () => {
-  assert.deepEqual(studioCapabilities({}), { createImages: false, designMode: true });
-  assert.deepEqual(studioCapabilities({ [CREATE_IMAGES_FEATURE_FLAG]: "1" }), { createImages: true, designMode: true });
-  assert.deepEqual(studioCapabilities({ ...DESIGN_OFF, [CREATE_IMAGES_FEATURE_FLAG]: "1" }), {
+  assertCapabilities({}, { createImages: false, designMode: true });
+  assertCapabilities({ [CREATE_IMAGES_FEATURE_FLAG]: "1" }, { createImages: true, designMode: true });
+  assertCapabilities({ ...DESIGN_OFF, [CREATE_IMAGES_FEATURE_FLAG]: "1" }, {
     createImages: true,
     designMode: false,
   });
@@ -69,4 +88,33 @@ test("design mode and Create Images are independent capabilities", () => {
 
 test("design mode does not open the shared asset store", () => {
   assert.equal(studioAssetsEnabled({}), false);
+});
+
+test("live apps are on only for 1, true, yes or on", () => {
+  assert.equal(DESIGN_LIVE_FEATURE_FLAG, "AIDEN_EXPERIMENTAL_DESIGN_LIVE");
+  assert.equal(designLiveEnabled({}), false);
+  for (const value of ["", "0", "false", "off", "no", "maybe"]) {
+    assert.equal(designLiveEnabled({ [DESIGN_LIVE_FEATURE_FLAG]: value }), false, value);
+    assert.equal(designFlagOn(value), false, value);
+  }
+  for (const value of ["1", "TRUE", " true ", "yes", "On"]) {
+    assert.equal(designLiveEnabled({ [DESIGN_LIVE_FEATURE_FLAG]: value }), true, value);
+    assert.equal(designFlagOn(value), true, value);
+  }
+  assert.equal(designFlagOn(undefined), false);
+});
+
+test("the live flag is a capability of its own, off unless set and whenever design mode is off", () => {
+  assertCapabilities({}, { designLive: false, designMode: true });
+  assertCapabilities({ [DESIGN_LIVE_FEATURE_FLAG]: "1" }, { designLive: true, designMode: true });
+  assertCapabilities({ ...DESIGN_OFF, [DESIGN_LIVE_FEATURE_FLAG]: "1" }, { designLive: false, designMode: false });
+});
+
+test("live apps are off whenever design mode is off", () => {
+  assert.equal(designLiveEnabled({ ...DESIGN_OFF, [DESIGN_LIVE_FEATURE_FLAG]: "1" }), false);
+  // The live flag never turns Create Images on.
+  assertCapabilities({ [DESIGN_LIVE_FEATURE_FLAG]: "1" }, {
+    createImages: false,
+    designMode: true,
+  });
 });

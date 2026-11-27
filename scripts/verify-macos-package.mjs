@@ -3,11 +3,11 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { lstat, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { extractFile, listPackage, statFile } from "@electron/asar";
 import { verifyPackagedRendererCsp } from "./verify-renderer-csp.mjs";
 import {
@@ -73,6 +73,55 @@ const PACKAGED_MODELS_DEV_ENTRY = "resources/model-capabilities.json";
 const PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY = "build/main/subagent-inference-worker.js";
 const PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY = "build/main/subagent-inference-worker-runtime.js";
 const PACKAGED_LOCAL_SPEECH_WORKER_ENTRY = "build/main/local-speech-worker.js";
+const PACKAGED_DESIGN_MD_PACKAGE = "node_modules/@google/design.md";
+/** The DESIGN.md lint worker and the one linter entry it loads (spec S42). */
+export const PACKAGED_DESIGN_MD_ENTRIES = Object.freeze([
+  "build/main/design-md-lint-worker.js",
+  `${PACKAGED_DESIGN_MD_PACKAGE}/package.json`,
+  `${PACKAGED_DESIGN_MD_PACKAGE}/dist/linter/index.js`,
+  `${PACKAGED_DESIGN_MD_PACKAGE}/dist/linter/spec-config.yaml`,
+]);
+/**
+ * Packages only @google/design.md's CLI needs: its linter is one bundled
+ * file, so none of them ships. unified, remark-parse, remark-stringify,
+ * unist-util-visit, yaml and zod do ship, since other dependencies use them.
+ */
+export const DESIGN_MD_ONLY_DEPENDENCIES = Object.freeze([
+  "citty",
+  "consola",
+  "estree-util-visit",
+  "fault",
+  "format",
+  "mdast-util-frontmatter",
+  "mdast-util-mdx",
+  "micromark-extension-frontmatter",
+  "micromark-extension-mdx-expression",
+  "micromark-extension-mdx-jsx",
+  "micromark-extension-mdx-md",
+  "micromark-extension-mdxjs",
+  "micromark-extension-mdxjs-esm",
+  "micromark-factory-mdx-expression",
+  "micromark-util-events-to-acorn",
+  "remark-frontmatter",
+  "remark-mdx",
+  "unist-util-position-from-estree",
+]);
+/** What only the package's CLI reads; `build.files` leaves it out. */
+export const DESIGN_MD_BUILD_FILE_RULES = Object.freeze([
+  `!**/${PACKAGED_DESIGN_MD_PACKAGE}/dist/index.js`,
+  `!**/${PACKAGED_DESIGN_MD_PACKAGE}/dist/spec.md`,
+  `!**/${PACKAGED_DESIGN_MD_PACKAGE}/dist/spec-config.yaml`,
+  `!**/${PACKAGED_DESIGN_MD_PACKAGE}/dist/linter/spec.md`,
+  `!**/${PACKAGED_DESIGN_MD_PACKAGE}/node_modules/**`,
+  `!**/node_modules/{${DESIGN_MD_ONLY_DEPENDENCIES.join(",")}}/**`,
+]);
+const TRIMMED_DESIGN_MD_ENTRIES = Object.freeze([
+  `${PACKAGED_DESIGN_MD_PACKAGE}/dist/index.js`,
+  `${PACKAGED_DESIGN_MD_PACKAGE}/dist/spec.md`,
+  `${PACKAGED_DESIGN_MD_PACKAGE}/dist/spec-config.yaml`,
+  `${PACKAGED_DESIGN_MD_PACKAGE}/dist/linter/spec.md`,
+]);
+const MAX_DESIGN_MD_ENTRY_BYTES = 8 * 1024 * 1024;
 const PACKAGED_SILERO_VAD_RESOURCE = path.join("speech", "silero_vad.onnx");
 // transcribe.cpp (Parakeet on Metal) loads these with dlopen, which cannot read
 // inside app.asar, so each must be an unpacked regular file.
@@ -438,6 +487,93 @@ export async function verifyPackagedLocalSpeechWorker(appAsar) {
     throw new Error(
       "Packaged on-device transcription worker must be a bounded packed regular file.",
     );
+  }
+}
+
+// Lints a fixed DESIGN.md with the extracted linter and prints what it found.
+const DESIGN_MD_LINT_PROBE = `const { lint } = await import(process.argv[1]);
+const report = lint("---\\nname: Probe\\ncolors:\\n  primary: \\"#1A1C1E\\"\\n  surface: \\"#FFFFFF\\"\\n---\\n\\n## Overview\\n\\nProbe.\\n");
+process.stdout.write(JSON.stringify({
+  summary: report.summary,
+  sections: report.sections,
+  rules: report.findings.map((finding) => finding.rule),
+}));`;
+
+/**
+ * The DESIGN.md linter ships packed and trimmed (spec S42): the lint worker,
+ * the linter entry and the spec config it reads are bounded packed regular
+ * files; the package's CLI, its top-level spec files, its nested
+ * node_modules and the packages only its CLI needs are absent; and the packed
+ * linter, extracted and run under
+ * Node, lints a fixed DESIGN.md with its rules.
+ */
+export async function verifyPackagedDesignMdLinter(appAsar) {
+  await assertRegularFile(appAsar);
+  for (const name of PACKAGED_DESIGN_MD_ENTRIES) {
+    const entry = statFile(appAsar, name, false);
+    if (
+      !entry ||
+      entry.unpacked === true ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size <= 0 ||
+      entry.size > MAX_DESIGN_MD_ENTRY_BYTES ||
+      typeof entry.offset !== "string" ||
+      "files" in entry ||
+      "link" in entry
+    ) {
+      throw new Error(`Packaged DESIGN.md linter entry must be a bounded packed regular file: ${name}`);
+    }
+  }
+  const entries = listPackage(appAsar, { isPack: false }).map((entry) =>
+    entry.replaceAll("\\", "/").replace(/^\//u, ""),
+  );
+  const shipped = new Set(entries);
+  const cliOnly = new Set(DESIGN_MD_ONLY_DEPENDENCIES);
+  const trimmed = [
+    ...TRIMMED_DESIGN_MD_ENTRIES.filter((entry) => shipped.has(entry)),
+    ...entries.filter((entry) => entry.startsWith(`${PACKAGED_DESIGN_MD_PACKAGE}/node_modules/`)).slice(0, 5),
+    ...entries
+      .filter((entry) => [...entry.matchAll(/(?:^|\/)node_modules\/([^/]+)(?=\/)/gu)].some((match) => cliOnly.has(match[1])))
+      .slice(0, 5),
+  ];
+  if (trimmed.length > 0) {
+    throw new Error(`Packaged app.asar ships trimmed DESIGN.md files: ${trimmed.join(", ")}`);
+  }
+
+  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-design-md-linter-probe-"));
+  try {
+    const linterPrefix = `${PACKAGED_DESIGN_MD_PACKAGE}/dist/linter/`;
+    for (const name of [`${PACKAGED_DESIGN_MD_PACKAGE}/package.json`, ...entries.filter((entry) => entry.startsWith(linterPrefix))]) {
+      const entry = statFile(appAsar, name, false);
+      if (!entry || "files" in entry || "link" in entry) continue;
+      const target = path.join(directory, ...name.slice(PACKAGED_DESIGN_MD_PACKAGE.length + 1).split("/"));
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, extractFile(appAsar, name, false));
+    }
+    let report;
+    try {
+      const { stdout } = await executeFile(
+        process.execPath,
+        ["--input-type=module", "-e", DESIGN_MD_LINT_PROBE, pathToFileURL(path.join(directory, "dist", "linter", "index.js")).href],
+        { cwd: directory, env: {}, timeout: 30_000, maxBuffer: 256 * 1024 },
+      );
+      report = JSON.parse(stdout);
+    } catch (error) {
+      const detail = typeof error?.stderr === "string" && error.stderr.trim() ? error.stderr.trim().slice(-2_000) : String(error?.message ?? error);
+      throw new Error(`Packaged DESIGN.md linter could not lint a fixture: ${detail}`);
+    }
+    // The fixture has no typography, so the rules must warn about it, and nothing else.
+    if (
+      report?.summary?.errors !== 0 ||
+      report?.summary?.warnings !== 1 ||
+      !Array.isArray(report.rules) ||
+      !report.rules.includes("missing-typography") ||
+      JSON.stringify(report.sections) !== JSON.stringify(["Overview"])
+    ) {
+      throw new Error(`Packaged DESIGN.md linter could not lint a fixture: unexpected report ${JSON.stringify(report).slice(0, 500)}`);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 }
 
@@ -1013,6 +1149,7 @@ export async function verifyMacPackage(appPath) {
   await verifyPackagedLocalSpeechWorker(appAsar);
   await verifyPackagedMetalSpeechEngine(appAsar);
   await verifyPackagedVccWorker(appAsar);
+  await verifyPackagedDesignMdLinter(appAsar);
   await verifyPackagedNodePtyResources(appAsar);
   await verifyPackagedGenerativeUiLibraries(paths.app);
   await verifyPackagedSpeechResources(path.join(paths.app, "Contents", "Resources"));

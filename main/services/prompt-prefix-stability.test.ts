@@ -45,7 +45,13 @@ import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
 import { canUseBrowserTools } from "./browser-tools.js";
 import { canUseDeviceTools } from "./devices/device-tools.js";
-import { designCanvasToolsAllowed } from "./design-canvas/canvas-tools.js";
+import { designCanvasToolsAllowed, designModePromptSection } from "./design-canvas/canvas-tools.js";
+import { withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import type { runDesignMdWorker } from "./design-canvas/design-md/lint-client.js";
+import { DesignMdOffers } from "./design-canvas/design-md/offers.js";
+import { DesignMdReader } from "./design-canvas/design-md/reader.js";
+import { createDesignMdTurn } from "./design-canvas/design-md/turn.js";
+import { DESIGN_LIVE_FEATURE_FLAG, designLiveEnabled } from "./studio/feature-flags.js";
 import type { AppControlContext, AppControlsService } from "./app-controls-core.js";
 import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, windowlessChatTurn, type ChatToolSurface, type ChatTurnAudience, type ChatTurnOwnerScope } from "./chat-turn-tool-policy.js";
 import { remoteGenerationSurface, scheduledGenerationSurface } from "./conversation-surface-generation.js";
@@ -1401,4 +1407,81 @@ test("a composed workspace turn sends its stable head as the fourth Anthropic br
   assert.ok(system[0]!.cache_control, "the stable head is cached on its own");
   assert.match(system[1]!.text, /Prefers short answers\./u, "the memory tail follows the head");
   assert.equal(system.map((block) => block.text).join(""), assembly.systemPrompt, "the model reads the same system text");
+});
+
+describe("prompt prefix stability: design mode with DESIGN.md (live flag on)", () => {
+  // A linter stand-in: each line starting `warn` is one warning.
+  const countingRun = (async (request: { content: string }) => ({
+    ok: true,
+    result: {
+      summary: { errors: 0, warnings: request.content.split("\n").filter((line) => line.startsWith("warn")).length, infos: 0 },
+      findings: [], sections: [], omitted: [], symbols: [], tailwindConfig: null,
+    },
+  })) as unknown as typeof runDesignMdWorker;
+  const canvasTool = textTool("canvas_read", "Read the design canvas.");
+
+  for (const { wire, midConversationSystem, label } of wires.slice(0, 2)) {
+    test(`${label}: two design turns whose DESIGN.md counts differ send the same system prompt and tools`, async (t) => {
+      const before = process.env[DESIGN_LIVE_FEATURE_FLAG];
+      process.env[DESIGN_LIVE_FEATURE_FLAG] = "1";
+      t.after(() => {
+        if (before === undefined) delete process.env[DESIGN_LIVE_FEATURE_FLAG];
+        else process.env[DESIGN_LIVE_FEATURE_FLAG] = before;
+      });
+      assert.equal(designLiveEnabled(), true);
+      const workspace = await mkdtemp(path.join(tmpdir(), "aiden-prefix-design-md-"));
+      tempRoots.push(workspace);
+      await writeFile(path.join(workspace, "DESIGN.md"), "---\nname: App\n---\nwarn one\n");
+      const reader = new DesignMdReader({ run: countingRun });
+      const offers = new DesignMdOffers({ file: () => path.join(workspace, ".offers.json") });
+      // As llm-client builds it on each design-mode turn: a new turn glue over the run's shared reader.
+      const designTurn = () => createDesignMdTurn({
+        workspaceRoot: workspace, reader, offers, appRoots: async () => ({ roots: ["."], more: 0 }),
+        offerable: false, askOffered: false,
+      });
+      const head = async (turn: ReturnType<typeof createDesignMdTurn>) => workspaceChat({
+        extensions: [{ id: "aiden.design-canvas", systemPrompt: designModePromptSection(designLiveEnabled()), tools: [canvasTool, turn.tool] }],
+      });
+      // The canvas status note goes to the turn's transcript with the DESIGN.md sentence appended.
+      const noteFor = (sentence: string) => (timestamp: number) =>
+        withCanvasStatusNote({ messages: [] as AgentMessage[] }, `1 page, 0 frames. ${sentence}`, timestamp).messages;
+      const first = designTurn();
+      const firstSentence = await first.statusSentence();
+      await writeFile(path.join(workspace, "DESIGN.md"), "---\nname: App\n---\nwarn one\nwarn two\nwarn three\n");
+      const second = designTurn();
+      const secondSentence = await second.statusSentence();
+      assert.equal(firstSentence, 'DESIGN.md: "DESIGN.md" (0 errors, 1 warning).');
+      assert.equal(secondSentence, 'DESIGN.md: "DESIGN.md" (0 errors, 3 warnings).');
+
+      const firstHead = await head(first);
+      const secondHead = await head(second);
+      assert.equal(secondHead.systemPrompt, firstHead.systemPrompt, "the assembled system prompt is byte-identical");
+      const { previous, current, harness } = await twoTurns(
+        { wire, midConversationSystem },
+        { assembly: firstHead, following: noteFor(firstSentence) },
+        { assembly: secondHead, following: noteFor(secondSentence) },
+      );
+      // The note is a section patch, which these wires fold into the system
+      // head: a changed count costs one miss there, as v1's canvas counts do,
+      // and the telemetry names the note as the only change.
+      const changed = comparePromptRequests(previous, current);
+      assert.equal(changed.transcript?.source, "system:design-canvas-status", "only the canvas note changed");
+      assert.deepEqual(current.wire[0], previous.wire[0], "the tool list is byte-identical");
+      assert.ok(current.carries("design_system"), "the tool stays declared");
+      assert.ok(current.carries("The app's DESIGN.md is its design system's source of truth"), "the flag-on section is in the prompt");
+      assert.ok(current.carries(secondSentence), "the new counts reach the model");
+      assert.ok(previous.carries(firstSentence) && !previous.carries(secondSentence));
+
+      // Unchanged counts: llm-client's note adds nothing over the journal, so the next turn extends the last exactly.
+      const third = designTurn();
+      assert.equal(await third.statusSentence(), secondSentence);
+      const journaled = (await (await harness.journal()).buildContext()).messages;
+      const line = `1 page, 0 frames. ${secondSentence}`;
+      assert.equal(withCanvasStatusNote({ messages: journaled }, line, Date.now()).messages, journaled, "the journal already holds this note");
+      const [unchanged] = await harness.turn({
+        prompt: "And the styles?", responses: reply("Here."), assembly: await head(third),
+      } as PromptPrefixTurnInput);
+      assert.deepEqual(comparePromptRequests(lastOf(harness.requests.slice(0, -1)), unchanged!), {}, "the prompt cache holds");
+    });
+  }
 });

@@ -4,7 +4,8 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DesignSystemOffers, findWorkspaceDesignSystem } from "./design-system-offers.js";
+import { DesignSystemOffers } from "./design-system-offers.js";
+import { findWorkspaceDesignSystem } from "./design-md/style-scan.js";
 
 async function tempDir(t: test.TestContext): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-system-"));

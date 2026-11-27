@@ -261,11 +261,8 @@ registerCustomSchemes({ studioAssets: studioAssetsEnabled(), designMode: designM
 
 // Commands behind a flag that is off claim no shortcut, so they never block a
 // person's own binding or leave a saved `disabled` override behind.
-setUnavailableCommandCapabilities(
-  Object.entries(studioCapabilities())
-    .filter(([, enabled]) => !enabled)
-    .map(([capability]) => capability as keyof ReturnType<typeof studioCapabilities>),
-);
+const studio = studioCapabilities();
+setUnavailableCommandCapabilities((["createImages", "designMode"] as const).filter((capability) => !studio[capability]));
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 

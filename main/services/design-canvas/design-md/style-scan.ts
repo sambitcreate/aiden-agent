@@ -1,0 +1,675 @@
+// The style scanner: finds the colours and fonts a folder's own style files
+// set up. Moved here from design-system.ts and design-system-offers.ts in
+// design mode v2 Phase DM (spec S37), unchanged: it feeds v1's tokens offer
+// and DESIGN.md drafts (draft.ts). Phase 5 adds the bridge's token collection
+// as a second source.
+//
+// Everything that reaches the model is reduced to a strict shape: colours are
+// hex or a colour function of numbers, names and font families are short runs
+// of letters, digits and a few separators. Nothing else a file holds is passed
+// on, so a style file cannot put words in front of Aiden.
+import { isProtectedCredentialPath } from "../../model-file-policy.js";
+import { listWorkspaceFiles, readWorkspaceFile } from "../../workspace-files.js";
+
+/** A style file the caller read: its workspace-relative path and its text. */
+export type DesignSystemFile = { path: string; text: string };
+
+export type DetectedColor = {
+  /** The token's name as the file wrote it (`--primary`, `$brand`, `brand-500`), or null for a bare value. */
+  name: string | null;
+  value: string;
+  /** Its value in the dark look, when the file gave one. */
+  dark?: string;
+  source: string;
+};
+
+export type DetectedFont = {
+  /** The variable or role the file gave it (`--font-sans`, `display`), or null. */
+  name: string | null;
+  family: string;
+  source: string;
+};
+
+export type DetectedDesignSystem = {
+  colors: DetectedColor[];
+  fonts: DetectedFont[];
+  /** The files the colours and fonts came from, most telling first. */
+  sources: string[];
+};
+
+/** At most this many colours and fonts are offered: enough to recognise the look, short enough for one note. */
+export const DESIGN_SYSTEM_MAX_COLORS = 16;
+export const DESIGN_SYSTEM_MAX_FONTS = 4;
+const MAX_SOURCES = 6;
+/** A bare value (no token name) counts only when it is used this often. */
+const MIN_BARE_COLOR_USES = 2;
+
+const SKIPPED_SEGMENTS = new Set(["node_modules", "vendor", "vendors", "third_party", "dist", "build", "out", "coverage"]);
+const TELLING_CSS = /^(?:globals?|theme|themes|tokens?|design-tokens|variables|vars|colou?rs|base|app|index|main|styles?|root)\.(?:css|scss|less)$/iu;
+
+/**
+ * How telling a workspace file is for its design system: 0 when it is not a
+ * style file worth reading, otherwise higher is read first. Aiden's own
+ * design/ folder, hidden folders, vendored code and minified CSS are skipped.
+ */
+export function designSystemFileRank(relativePath: string): number {
+  const segments = relativePath.split("/").filter(Boolean);
+  const name = segments[segments.length - 1]?.toLowerCase();
+  if (!name || segments.length === 0) return 0;
+  if (segments[0] === "design") return 0;
+  if (segments.some((segment) => segment.startsWith(".") || SKIPPED_SEGMENTS.has(segment.toLowerCase()))) return 0;
+  if (name.endsWith(".min.css")) return 0;
+  const shallow = segments.length <= 3 ? 1 : 0;
+  if (/^tailwind\.config\.(?:js|cjs|mjs|ts|cts|mts)$/u.test(name)) return 6 + shallow;
+  if (/(?:^|[.-])tokens?\.json$/u.test(name) || name === "theme.json" || /\.theme\.json$/u.test(name)) return 6 + shallow;
+  if (/\.(?:css|scss|less)$/u.test(name)) return (TELLING_CSS.test(name) ? 4 : 2) + shallow;
+  return 0;
+}
+
+const HEX = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/iu;
+const COLOR_FUNCTION = /^(rgba?|hsla?|oklch|oklab|lab|lch|hwb)\((?:[0-9.%+\-\s,/]|deg|turn|none)*\)$/iu;
+/** Space-separated HSL channels, as shadcn-style themes keep them in variables (`222.2 47.4% 11.2%`). */
+const HSL_CHANNELS = /^\d{1,3}(?:\.\d+)?\s+\d{1,3}(?:\.\d+)?%\s+\d{1,3}(?:\.\d+)?%$/u;
+
+/**
+ * `raw` trimmed and without a trailing `!important`. Checked from the end
+ * rather than with a regex, which would backtrack through every run of
+ * spaces in a long value.
+ */
+function withoutImportant(raw: string): string {
+  const value = raw.trim();
+  return value.slice(-10).toLowerCase() === "!important" ? value.slice(0, -10).trim() : value;
+}
+
+/** The colour `raw` names, in a strict form, or null when it is not a literal colour. */
+export function parseDesignColor(raw: string): string | null {
+  if (raw.length > 256) return null;
+  const value = withoutImportant(raw);
+  if (value.length > 64) return null;
+  if (HEX.test(value)) return value.toLowerCase();
+  if (COLOR_FUNCTION.test(value)) return value.replace(/\s+/gu, " ").toLowerCase();
+  if (HSL_CHANNELS.test(value)) return `hsl(${value.replace(/\s+/gu, " ")})`;
+  return null;
+}
+
+const TOKEN_NAME = /^(?:--|\$|@)?[A-Za-z0-9_][A-Za-z0-9_-]{0,39}$/u;
+/** Words in a token name (`--color-sidebar-primary-foreground` has five); a longer one reads like a sentence. */
+const MAX_TOKEN_NAME_WORDS = 5;
+/**
+ * A joined name longer than this once its separators are collapsed is not
+ * carried down to its children (one `tokenName` accepts is at most 42
+ * characters). Nested keys are joined only while they fit, so a long key is
+ * never copied into each child's name.
+ */
+const MAX_JOINED_TOKEN_NAME = 64;
+
+/** `raw` trimmed, with each run of dots, slashes and whitespace made one dash and each run of three or more dashes two. */
+export function collapsedName(raw: string): string {
+  return raw.trim().replace(/[.\s/]+/gu, "-").replace(/-{3,}/gu, "--");
+}
+
+/**
+ * A run of dashes, dots, slashes and whitespace cut to at most seven
+ * characters that `collapsedName` reads the same way wherever the run sits:
+ * it keeps a space at either end that had whitespace (so a trim still drops
+ * it), starts with the same kind of character (dash or not), and stops adding
+ * pieces once they make three dashes, after which every longer run collapses
+ * to the same two.
+ */
+function shortenedRun(run: string): string {
+  if (/^\s+$/u.test(run)) return " ";
+  const pieces = run.trim().match(/-+|[.\s/]+/gu) ?? [];
+  let middle = "";
+  let dashes = 0;
+  for (const piece of pieces) {
+    if (dashes >= 3) break;
+    const isDash = piece.startsWith("-");
+    middle += isDash ? "-".repeat(Math.min(piece.length, 3)) : "/";
+    dashes += isDash ? piece.length : 1;
+  }
+  return `${/^\s/u.test(run) ? " " : ""}${middle}${/\s$/u.test(run) ? " " : ""}`;
+}
+
+/**
+ * `raw` with each run of dashes, dots, slashes and whitespace cut short (see
+ * `shortenedRun`). `collapsedName` reads it exactly as it reads `raw`, even
+ * with more text joined on either side, and each run is at most seven
+ * characters, so it stays a few times the length of that collapsed name
+ * however `raw` was padded.
+ */
+export function shortenedName(raw: string): string {
+  return raw.replace(/[-.\s/]+/gu, shortenedRun);
+}
+
+
+function tokenName(raw: string | null): string | null {
+  if (raw === null) return null;
+  const name = collapsedName(raw);
+  if (!TOKEN_NAME.test(name)) return null;
+  const words = name.replace(/^(?:--|\$|@)/u, "").split(/[-_]+/u).filter(Boolean);
+  return words.length <= MAX_TOKEN_NAME_WORDS ? name : null;
+}
+
+const GENERIC_FAMILIES = new Set([
+  "serif",
+  "sans-serif",
+  "monospace",
+  "cursive",
+  "fantasy",
+  "math",
+  "emoji",
+  "fangsong",
+  "system-ui",
+  "ui-serif",
+  "ui-sans-serif",
+  "ui-monospace",
+  "ui-rounded",
+  "-apple-system",
+  "blinkmacsystemfont",
+  "inherit",
+  "initial",
+  "unset",
+  "revert",
+  "none",
+]);
+const FAMILY = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$/u;
+/**
+ * A family of more than one word (`IBM Plex Sans`, `Source Sans 3`) has at
+ * most four, each starting with a capital or a digit, so a stack cannot pass
+ * a sentence off as a font name.
+ */
+const FAMILY_WORD = /^[A-Z0-9]/u;
+const MAX_FAMILY_WORDS = 4;
+
+function plainFamily(family: string): boolean {
+  if (!FAMILY.test(family)) return false;
+  const words = family.split(/\s+/u);
+  return words.length === 1 || (words.length <= MAX_FAMILY_WORDS && words.every((word) => FAMILY_WORD.test(word)));
+}
+
+/** The first family a font stack names, when it is a real font rather than a generic or system one. */
+function leadingFamily(entries: readonly string[]): string | null {
+  const first = entries[0]?.trim().replace(/^["']|["']$/gu, "").trim();
+  if (!first || first.includes("var(") || GENERIC_FAMILIES.has(first.toLowerCase())) return null;
+  const family = first.replace(/\s+/gu, " ");
+  return plainFamily(family) ? family : null;
+}
+
+function fontStack(value: string): string[] {
+  return withoutImportant(value).split(",");
+}
+
+type Found = {
+  colors: Array<{ name: string | null; value: string; dark: boolean; source: string; order: number }>;
+  fonts: Array<{ name: string | null; family: string; source: string; order: number }>;
+};
+
+function addColor(found: Found, name: string | null, raw: unknown, dark: boolean, source: string): void {
+  if (typeof raw !== "string") return;
+  const value = parseDesignColor(raw);
+  if (!value) return;
+  found.colors.push({ name, value, dark, source, order: found.colors.length });
+}
+
+function addFont(found: Found, name: string | null, raw: unknown, source: string): void {
+  const entries = typeof raw === "string" ? fontStack(raw) : Array.isArray(raw) ? raw.filter((entry): entry is string => typeof entry === "string") : [];
+  const family = leadingFamily(entries);
+  if (family) found.fonts.push({ name, family, source, order: found.fonts.length });
+}
+
+/* ----------------------------- CSS, SCSS, Less ---------------------------- */
+
+const DARK_CONTEXT = /\bdark\b/iu;
+
+/** Each declaration in a style sheet, with whether a dark selector or dark media query encloses it. */
+function cssDeclarations(text: string): Array<{ property: string; value: string; dark: boolean }> {
+  const source = text.replace(/\/\*[\s\S]*?(?:\*\/|$)/gu, " ");
+  const declarations: Array<{ property: string; value: string; dark: boolean }> = [];
+  const blocks: boolean[] = [];
+  // How many of the open blocks are dark, kept as a count so a deeply nested sheet is not rescanned at every declaration.
+  let darkBlocks = 0;
+  let buffer = "";
+  let quote: string | null = null;
+  let parens = 0;
+  const flush = () => {
+    const colon = buffer.indexOf(":");
+    if (colon > 0) {
+      const property = buffer.slice(0, colon).trim();
+      const value = buffer.slice(colon + 1).trim();
+      // Top-level declarations are SCSS and Less variables only.
+      const allowed = blocks.length > 0 ? /^(?:--[\w-]+|[a-z-]+)$/iu.test(property) : /^[$@][\w-]+$/u.test(property);
+      if (allowed && value) declarations.push({ property, value, dark: darkBlocks > 0 });
+    }
+    buffer = "";
+  };
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index] as string;
+    if (quote) {
+      buffer += char;
+      if (char === "\\") buffer += source[++index] ?? "";
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      buffer += char;
+      continue;
+    }
+    if (char === "(") parens += 1;
+    else if (char === ")") parens = Math.max(0, parens - 1);
+    if (parens === 0 && char === "{") {
+      const dark = DARK_CONTEXT.test(buffer);
+      blocks.push(dark);
+      if (dark) darkBlocks += 1;
+      buffer = "";
+    } else if (parens === 0 && char === "}") {
+      flush();
+      if (blocks.pop()) darkBlocks -= 1;
+    } else if (parens === 0 && char === ";") {
+      flush();
+    } else {
+      buffer += char;
+    }
+  }
+  return declarations;
+}
+
+function readStyleSheet(found: Found, file: DesignSystemFile): void {
+  for (const { property, value, dark } of cssDeclarations(file.text)) {
+    const lower = property.toLowerCase();
+    if (lower === "font-family") {
+      addFont(found, null, value, file.path);
+      continue;
+    }
+    const variable = /^(?:--|\$|@)/u.test(property);
+    if (variable && /font|family|typeface/iu.test(property) && !parseDesignColor(value)) {
+      addFont(found, tokenName(property), value, file.path);
+      continue;
+    }
+    if (variable) {
+      addColor(found, tokenName(property), value, dark, file.path);
+    } else if (/^(?:color|background|background-color|border-color|fill|stroke|outline-color|accent-color)$/u.test(lower)) {
+      addColor(found, null, value, dark, file.path);
+    }
+  }
+}
+
+/* ------------------------------ Tailwind config --------------------------- */
+
+type Literal = string | Literal[] | { [key: string]: Literal } | undefined;
+
+/**
+ * At most this many values are read from one tailwind config or token JSON
+ * file. A real file's colours and fonts are a few hundred; past this the
+ * rest of the file is not read.
+ */
+export const DESIGN_SYSTEM_MAX_CONFIG_VALUES = 5_000;
+
+type LiteralBudget = { values: number };
+
+/**
+ * Reads the object, array or string literal at `start` of a JavaScript
+ * source, skipping anything else (calls, spreads, identifiers) as undefined.
+ * Enough for the `colors` and `fontFamily` blocks of a tailwind config.
+ * Each call reads on from where the last one ended, so a file is read once;
+ * once `budget` is spent it ends at the end of the text.
+ */
+function readLiteral(text: string, start: number, budget: LiteralBudget, depth = 0): { value: Literal; end: number } {
+  budget.values += 1;
+  if (budget.values > DESIGN_SYSTEM_MAX_CONFIG_VALUES) return { value: undefined, end: text.length };
+  let index = skipSpace(text, start);
+  const char = text[index];
+  if (depth > 12) return { value: undefined, end: skipExpression(text, index) };
+  if (char === '"' || char === "'" || char === "`") {
+    const { end, closed } = scanString(text, index);
+    if (!closed) return { value: undefined, end };
+    const body = text.slice(index + 1, end - 1);
+    return { value: char === "`" && body.includes("${") ? undefined : body, end };
+  }
+  if (char === "{") {
+    const object: { [key: string]: Literal } = Object.create(null) as { [key: string]: Literal };
+    index += 1;
+    while (index < text.length) {
+      index = skipSpace(text, index);
+      if (text[index] === "}") return { value: object, end: index + 1 };
+      if (text[index] === ",") {
+        index += 1;
+        continue;
+      }
+      const before = index;
+      const key = readKey(text, index);
+      if (!key) {
+        index = skipExpression(text, index);
+      } else {
+        index = skipSpace(text, key.end);
+        if (text[index] !== ":") {
+          index = skipExpression(text, index);
+        } else {
+          const entry = readLiteral(text, index + 1, budget, depth + 1);
+          if (entry.value !== undefined && !Object.prototype.hasOwnProperty.call(object, key.name)) object[key.name] = entry.value;
+          index = entry.end;
+        }
+      }
+      // A stray closing bracket of another kind ends the object rather than looping on it.
+      if (index <= before) return { value: object, end: Math.min(text.length, before + 1) };
+    }
+    return { value: object, end: index };
+  }
+  if (char === "[") {
+    const array: Literal[] = [];
+    index += 1;
+    while (index < text.length) {
+      index = skipSpace(text, index);
+      if (text[index] === "]") return { value: array, end: index + 1 };
+      if (text[index] === ",") {
+        index += 1;
+        continue;
+      }
+      const entry = readLiteral(text, index, budget, depth + 1);
+      if (entry.value !== undefined) array.push(entry.value);
+      if (entry.end <= index) return { value: array, end: Math.min(text.length, index + 1) };
+      index = entry.end;
+    }
+    return { value: array, end: index };
+  }
+  return { value: undefined, end: skipExpression(text, index) };
+}
+
+function skipSpace(text: string, index: number): number {
+  while (index < text.length) {
+    if (/\s/u.test(text[index] as string)) index += 1;
+    else if (text.startsWith("//", index)) index = text.indexOf("\n", index) === -1 ? text.length : text.indexOf("\n", index);
+    else if (text.startsWith("/*", index)) index = text.indexOf("*/", index) === -1 ? text.length : text.indexOf("*/", index) + 2;
+    else break;
+  }
+  return index;
+}
+
+/**
+ * The end of the string literal at `start`, and whether its own quote closed
+ * it. A '…' or "…" string cannot span a line in JavaScript, so an unclosed
+ * one ends at the line break: a stray quote (in a regex literal, say) then
+ * costs one line, not the rest of the file. Only a template literal runs on
+ * across lines.
+ */
+function scanString(text: string, start: number): { end: number; closed: boolean } {
+  const quote = text[start];
+  for (let index = start + 1; index < text.length; index += 1) {
+    const char = text[index];
+    // An escape skips the next character; a backslash before a CRLF line ending continues the line.
+    if (char === "\\") index += text.startsWith("\r\n", index + 1) ? 2 : 1;
+    else if (char === quote) return { end: index + 1, closed: true };
+    else if (quote !== "`" && (char === "\n" || char === "\r")) return { end: index, closed: false };
+  }
+  return { end: text.length, closed: false };
+}
+
+function stringEnd(text: string, start: number): number {
+  return scanString(text, start).end;
+}
+
+/**
+ * The end of the regex literal at `start`: past its closing slash, or at the
+ * line break that leaves it unclosed (a regex cannot span a line). A slash
+ * after a backslash or inside a class (`/[/]/`) does not close it.
+ */
+function regexEnd(text: string, start: number): number {
+  let inClass = false;
+  for (let index = start + 1; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\n" || char === "\r") return index;
+    if (char === "\\") {
+      if (text[index + 1] === "\n" || text[index + 1] === "\r") return index + 1;
+      index += 1;
+    } else if (inClass) {
+      if (char === "]") inClass = false;
+    } else if (char === "[") inClass = true;
+    else if (char === "/") return index + 1;
+  }
+  return text.length;
+}
+
+/** After one of these (or at the start of a value), a slash starts a regex literal rather than dividing. */
+const BEFORE_REGEX = "(,=:[!&|?{};+-*%<>~^";
+
+/** The end of the expression at `start`: the next `,` or closing bracket at its own depth. */
+function skipExpression(text: string, start: number): number {
+  let depth = 0;
+  let index = start;
+  // The last character read as code, and where it was, so a slash can tell a regex literal from a division.
+  let previous = "";
+  let previousIndex = -1;
+  while (index < text.length) {
+    const char = text[index] as string;
+    if (char === '"' || char === "'" || char === "`") {
+      index = stringEnd(text, index);
+      previous = char;
+      previousIndex = -1;
+      continue;
+    }
+    if (char === "/") {
+      // A comment is skipped whole, so a quote or bracket in it (`// we're on blue`, `// old: {`) is not read as code.
+      if (text[index + 1] === "/" || text[index + 1] === "*") {
+        index = skipSpace(text, index);
+        continue;
+      }
+      // So is a regex literal, so a slash, quote or bracket in it (`/a\//`, `/it's/`) is not either.
+      // After `i++` or `i--` it divides; after `a + +` (signs apart) it still starts a regex.
+      const afterIncrement = (previous === "+" || previous === "-") && text[previousIndex - 1] === previous;
+      if (previous === "" || (BEFORE_REGEX.includes(previous) && !afterIncrement)) {
+        index = regexEnd(text, index);
+        previous = "/";
+        previousIndex = -1;
+        continue;
+      }
+    }
+    if ("{[(".includes(char)) depth += 1;
+    else if ("}])".includes(char)) {
+      if (depth === 0) return index;
+      depth -= 1;
+    } else if (char === "," && depth === 0) return index;
+    if (!/\s/u.test(char)) {
+      previous = char;
+      previousIndex = index;
+    }
+    index += 1;
+  }
+  return index;
+}
+
+function readKey(text: string, start: number): { name: string; end: number } | null {
+  const char = text[start];
+  if (char === '"' || char === "'") {
+    const { end, closed } = scanString(text, start);
+    return closed ? { name: text.slice(start + 1, end - 1), end } : null;
+  }
+  const match = /^[A-Za-z0-9_$]+/u.exec(text.slice(start, start + 64));
+  return match ? { name: match[0], end: start + match[0].length } : null;
+}
+
+/**
+ * `prefix` and `key` joined by a dash (just `key` with no prefix) and
+ * shortened, or null once that collapses to more than `MAX_JOINED_TOKEN_NAME`
+ * characters, so padding around the separators never uses up the cap.
+ */
+function joinedName(prefix: string | null, key: string): string | null {
+  if (prefix === null) return null;
+  const joined = shortenedName(prefix ? `${prefix}-${key}` : key);
+  return collapsedName(joined).length > MAX_JOINED_TOKEN_NAME ? null : joined;
+}
+
+/** `prefix` is "" at the top of the block and null once the name is too long to keep. */
+function flattenColors(found: Found, value: Literal, prefix: string | null, source: string, depth = 0): void {
+  if (depth > 4 || value === undefined) return;
+  if (typeof value === "string") {
+    addColor(found, tokenName(prefix), value, false, source);
+    return;
+  }
+  if (Array.isArray(value)) return;
+  for (const [key, entry] of Object.entries(value)) {
+    const name = key === "DEFAULT" ? prefix : joinedName(prefix, key);
+    flattenColors(found, entry, name, source, depth + 1);
+  }
+}
+
+function readTailwindConfig(found: Found, file: DesignSystemFile): void {
+  const budget: LiteralBudget = { values: 0 };
+  let readTo = 0;
+  for (const match of file.text.matchAll(/\b(colors|fontFamily)\s*:\s*(?=\{)/gu)) {
+    // A `colors` key inside a block already read is part of that block, not a block of its own.
+    if ((match.index ?? 0) < readTo) continue;
+    if (budget.values >= DESIGN_SYSTEM_MAX_CONFIG_VALUES) break;
+    const read = readLiteral(file.text, (match.index ?? 0) + match[0].length, budget);
+    readTo = read.end;
+    const block = read.value;
+    if (!block || typeof block !== "object" || Array.isArray(block)) continue;
+    if (match[1] === "colors") flattenColors(found, block, "", file.path);
+    else for (const [role, stack] of Object.entries(block)) addFont(found, tokenName(role), stack, file.path);
+  }
+}
+
+/* -------------------------------- Token JSON ------------------------------ */
+
+function readTokenJson(found: Found, file: DesignSystemFile): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(file.text);
+  } catch {
+    return;
+  }
+  // Every object, array entry and string value counts toward the limit.
+  let visited = 0;
+  // `name` is the keys above `node` joined by dashes ("" at the top, null once too long to be a name);
+  // `font` is whether any of those keys mentions a font. Both are carried down rather than rebuilt from the
+  // whole trail at every value, so a long key costs once, not once per child.
+  const walk = (node: unknown, depth: number, name: string | null, font: boolean): void => {
+    visited += 1;
+    if (visited > DESIGN_SYSTEM_MAX_CONFIG_VALUES || depth > 8 || node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const entry of node) walk(entry, depth + 1, name, font);
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    const label = typeof record.slug === "string" ? record.slug : typeof record.name === "string" ? record.name : null;
+    // WordPress theme.json palettes and font families: [{slug, color}], [{slug, fontFamily}].
+    if (label !== null && (typeof record.color === "string" || typeof record.fontFamily === "string")) {
+      if (typeof record.color === "string") addColor(found, tokenName(label), record.color, false, file.path);
+      else addFont(found, tokenName(label), record.fontFamily, file.path);
+      return;
+    }
+    const tokenValue = "$value" in record ? record.$value : "value" in record ? record.value : undefined;
+    if (tokenValue !== undefined) {
+      const type = typeof record.$type === "string" ? record.$type : typeof record.type === "string" ? record.type : "";
+      if (/font/iu.test(type) || font) addFont(found, tokenName(name), tokenValue, file.path);
+      else addColor(found, tokenName(name), tokenValue, false, file.path);
+      return;
+    }
+    for (const [key, entry] of Object.entries(record)) {
+      if (key.startsWith("$")) continue;
+      // The keys are joined with dots for the font check, so "font" can never span two of them.
+      const childName = joinedName(name, key);
+      const childFont = font || /font/iu.test(key);
+      if (typeof entry === "string") {
+        visited += 1;
+        if (visited > DESIGN_SYSTEM_MAX_CONFIG_VALUES) return;
+        if (childFont) addFont(found, tokenName(childName), entry, file.path);
+        else addColor(found, tokenName(childName), entry, false, file.path);
+      } else {
+        walk(entry, depth + 1, childName, childFont);
+      }
+    }
+  };
+  walk(parsed, 0, "", false);
+}
+
+/* --------------------------------- Detection ------------------------------ */
+
+/**
+ * The colours and fonts `files` set up: named tokens first (CSS variables,
+ * SCSS and Less variables, tailwind `colors` and `fontFamily`, token JSON),
+ * with the dark value a `.dark`, `[data-theme="dark"]` or dark media query
+ * gives them, then bare colours the files use more than once. Files are read
+ * in the order given, so pass the most telling first.
+ */
+export function detectDesignSystem(files: readonly DesignSystemFile[]): DetectedDesignSystem {
+  const found: Found = { colors: [], fonts: [] };
+  for (const file of files) {
+    const name = file.path.split("/").pop()?.toLowerCase() ?? "";
+    if (/^tailwind\.config\./u.test(name)) readTailwindConfig(found, file);
+    else if (name.endsWith(".json")) readTokenJson(found, file);
+    else readStyleSheet(found, file);
+  }
+
+  const named = new Map<string, DetectedColor>();
+  const bare = new Map<string, { color: DetectedColor; uses: number }>();
+  for (const color of found.colors) {
+    if (color.name === null) {
+      if (color.dark) continue;
+      const seen = bare.get(color.value);
+      if (seen) seen.uses += 1;
+      else bare.set(color.value, { color: { name: null, value: color.value, source: color.source }, uses: 1 });
+      continue;
+    }
+    const seen = named.get(color.name);
+    if (!seen) {
+      named.set(color.name, color.dark ? { name: color.name, value: color.value, dark: color.value, source: color.source } : { name: color.name, value: color.value, source: color.source });
+    } else if (color.dark && seen.dark === undefined) {
+      seen.dark = color.value;
+    } else if (!color.dark && seen.dark === seen.value && seen.source === color.source) {
+      // A dark block came first; the light value follows.
+      seen.value = color.value;
+    }
+  }
+  const namedValues = new Set([...named.values()].map((color) => color.value));
+  const bareColors = [...bare.values()]
+    .filter(({ color, uses }) => uses >= MIN_BARE_COLOR_USES && !namedValues.has(color.value))
+    .sort((left, right) => right.uses - left.uses)
+    .map(({ color }) => color);
+  const colors = [...named.values()]
+    .map((color) => (color.dark === color.value ? { name: color.name, value: color.value, source: color.source } : color))
+    .concat(bareColors)
+    .slice(0, DESIGN_SYSTEM_MAX_COLORS);
+
+  const fonts: DetectedFont[] = [];
+  const families = new Set<string>();
+  for (const font of found.fonts) {
+    const key = font.family.toLowerCase();
+    if (families.has(key)) continue;
+    families.add(key);
+    fonts.push({ name: font.name, family: font.family, source: font.source });
+    if (fonts.length >= DESIGN_SYSTEM_MAX_FONTS) break;
+  }
+
+  const sources: string[] = [];
+  for (const { source } of [...colors, ...fonts]) {
+    if (!sources.includes(source) && sources.length < MAX_SOURCES) sources.push(source);
+  }
+  return { colors, fonts, sources };
+}
+
+/** Style files read per workspace, most telling first. */
+const MAX_FILES = 12;
+/** Bigger style files are generated or vendored, not where a design system is set up. */
+const MAX_FILE_BYTES = 256 * 1024;
+/** The colours and fonts the style files in `root` set up, reading at most a dozen small files. */
+export async function findWorkspaceDesignSystem(root: string, signal?: AbortSignal): Promise<DetectedDesignSystem> {
+  const index = await listWorkspaceFiles(root, signal);
+  const candidates = index.entries
+    .filter((entry) => entry.kind === "file" && !entry.symbolic && (entry.size ?? 0) <= MAX_FILE_BYTES)
+    .filter((entry) => !isProtectedCredentialPath(entry.path, "file"))
+    .map((entry) => ({ path: entry.path, rank: designSystemFileRank(entry.path) }))
+    .filter((entry) => entry.rank > 0)
+    .sort((left, right) => right.rank - left.rank || left.path.split("/").length - right.path.split("/").length || left.path.localeCompare(right.path))
+    .slice(0, MAX_FILES);
+  const files: DesignSystemFile[] = [];
+  for (const candidate of candidates) {
+    try {
+      const document = await readWorkspaceFile(root, candidate.path, signal, { maxBytes: MAX_FILE_BYTES });
+      files.push({ path: document.path, text: document.content });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      // A file that vanished or cannot be read just adds nothing.
+    }
+  }
+  return detectDesignSystem(files);
+}

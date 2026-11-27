@@ -2763,6 +2763,23 @@ export type DesignCanvasFocusRequest = { chatId: string; frameIds: string[]; pag
 /** The workspace design canvas, through one of its chats. Available only while design mode's flag is on. */
 export const designCanvasApi = {
   getDesignCanvas: (chatId: string) => invoke<DesignCanvas>("designCanvas:get", chatId),
+  /**
+   * The app's DESIGN.md, read only: its status, counts, sections and at most
+   * 50 findings. `unavailable` unless the live design flag is on and this is
+   * an attended chat in a workspace folder. No UI reads it yet (Phase 5 will).
+   */
+  designSystem: (chatId: string, appRoot?: string) =>
+    invoke<
+      | {
+          status: string;
+          appRoot: string;
+          path?: string;
+          summary?: { errors: number; warnings: number; infos: number };
+          sections?: string[];
+          findings?: { severity: string; rule?: string; path?: string; message: string }[];
+        }
+      | { error: "unavailable" }
+    >("designCanvas:designSystem", appRoot === undefined ? { chatId } : { chatId, appRoot }),
   /** A page's file or an artifact's HTML, for the side panel's Code and Tweaks tabs. */
   designFrameSource: (chatId: string, frameId: string) =>
     invoke<{ text: string; truncated: boolean } | { error: "unavailable" | "missing" }>("designCanvas:source", chatId, frameId),

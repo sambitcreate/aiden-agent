@@ -17,6 +17,7 @@
 - [Chats that run other chats](chats-that-run-chats.md)
 - [Tasks that run when something changes](scheduled-task-triggers.md)
 - [Workspace artifacts](workspace-artifacts.md)
+- [Design mode guide (DESIGN.md)](design-mode.md)
 - [Design mode specification](superpowers/specs/2026-10-31-design-mode-design.md)
 - [Chats without a workspace](no-workspace-chats.md)
 - [Shared browser and annotations](environment-browser.md)

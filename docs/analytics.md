@@ -51,6 +51,8 @@ Feature events fire once, at the moment the action succeeded, from the service t
 | `design_mode_exited` | A chat left design mode from the Design button, ⇧⌘L or `/design off` | none |
 | `design_mode_declined` | Not now on Aiden's "Open design mode?" card. A card that times out or stops with the reply is not counted. | none |
 | `design_comments_sent` | A desktop message carried design-canvas comments for Aiden | `count_bucket`: how many comments. Their notes, pages, files and elements stay on your device. |
+| `design_md_linted` | Design mode checked an app's DESIGN.md (once per change in a run) | `errors_bucket`, `warnings_bucket`: how many errors and warnings. The file, its tokens and its findings stay on your device. |
+| `design_md_drafted` | Aiden drafted an app's DESIGN.md and it was written in the same turn | `source`: app (from the app's own styles). The file and its contents stay on your device. |
 | `browser_element_grabbed` | A person grabbed an element from the embedded workspace browser into the chat composer | `kind`: `react` or `dom`; `source`: `toolbar` or `shortcut`. The URL, component name, source path, HTML and screenshot stay on your device. |
 | `browser_grab_sent` | A desktop message carried grabbed browser elements for Aiden | `count_bucket`: how many elements; `with_screenshot`: whether a cropped thumbnail accompanied them. Element metadata and images stay on your device. |
 | `goal_started` | A keep-going goal was set in a chat | `source`: `slash`, `menu`, `proposal`, `phone` or `until`. The objective stays on your device. |

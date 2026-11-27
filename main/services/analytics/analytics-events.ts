@@ -86,6 +86,8 @@ export const ANALYTICS_EVENTS = {
   design_mode_exited: {},
   design_mode_declined: {},
   design_comments_sent: { count_bucket: enumProp(...COUNT_BUCKETS) },
+  design_md_linted: { errors_bucket: enumProp(...COUNT_BUCKETS), warnings_bucket: enumProp(...COUNT_BUCKETS) },
+  design_md_drafted: { source: enumProp("app") },
   browser_element_grabbed: {
     kind: enumProp("react", "dom"),
     source: enumProp("toolbar", "shortcut"),
