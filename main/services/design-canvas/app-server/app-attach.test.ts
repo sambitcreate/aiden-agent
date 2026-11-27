@@ -100,6 +100,8 @@ interface World {
   cwdTimeout?: boolean;
   /** The environment reads (`ps -E` and plain `ps`) time out. */
   envFails?: boolean;
+  /** Pids that exec in place between `ps -E` and the plain `ps`, so the two reads show different commands. */
+  execMidRead?: number[];
   holderFails?: boolean;
   owned?: number[];
   shells?: number[];
@@ -150,7 +152,8 @@ function world(spec: World) {
           if (!entry) return [];
           const env = entry.env ?? ["PATH=/usr/bin", "HOME=/Users/me"];
           const shown = args.includes("-E") && env !== "unreadable" ? ` ${env.join(" ")}` : "";
-          return [`${pid} /usr/local/bin/${entry.name ?? "node"} --port 1${shown}`];
+          const command = !args.includes("-E") && spec.execMidRead?.includes(pid) ? "/usr/local/bin/node -e settled" : `/usr/local/bin/${entry.name ?? "node"} --port 1`;
+          return [`${pid} ${command}${shown}`];
         });
         return { ok: true, stdout: lines.join("\n"), stderr: "", exitCode: lines.length ? 0 : 1 };
       }
@@ -595,6 +598,30 @@ test("recheckAttached reports a failed look, which the watch counts toward its s
   }
   assert.ok(failed(await recheckAttached(recheckInput, attachedWorld({}, [], { cwdTimeout: true }).deps)), "darwin: folder read timed out");
   assert.ok(failed(await recheckAttached(recheckInput, attachedWorld({}, [], { envFails: true }).deps)), "darwin: environment read timed out");
+});
+
+test("recheckAttached reports a failed look, not a verdict, when a subtree process execs between macOS's two environment reads", async () => {
+  // The two reads disagree about what it runs, so neither says what its environment is now. The next tick's
+  // look, after the exec, decides: here the exec'd holder runs outside its app root.
+  const torn = await recheckAttached(recheckInput, attachedWorld({}, [], { execMidRead: [10] }).deps);
+  assert.ok(!torn.ok && "reason" in torn, `the holder exec'd mid-read: ${JSON.stringify(torn)}`);
+  const child = { pid: 11, ppid: 10, cwd: `${WORKSPACE}/apps/web` };
+  const tornChild = await recheckAttached({ ...recheckInput, subtree: [10, 11] }, attachedWorld({}, [child], { execMidRead: [11] }).deps);
+  assert.ok(!tornChild.ok && "reason" in tornChild, `a child exec'd mid-read: ${JSON.stringify(tornChild)}`);
+  assert.deepEqual(await recheckAttached(recheckInput, attachedWorld({ cwd: "/Users/me/outside" }).deps), { ok: false, problem: "attach-not-in-app" }, "the next tick");
+  // A marker read in the same look still refuses at once.
+  const marked = { pid: 11, ppid: 10, cwd: "/", env: MARKED };
+  assert.deepEqual(
+    await recheckAttached({ ...recheckInput, subtree: [10, 11] }, attachedWorld({}, [marked], { execMidRead: [10] }).deps),
+    { ok: false, problem: "attach-not-in-app" },
+  );
+});
+
+test("the attach check and the scan still refuse a server whose holder execs between macOS's two environment reads", async () => {
+  const check = await checkAttach({ workspacePath: WORKSPACE, appRoot: "apps/web", port: 5173 }, attachedWorld({}, [], { execMidRead: [10] }).deps);
+  assert.equal(check.ok, false, "an environment that wasn't read can't vouch for the holder");
+  const scan = await scanRunningServers({ workspacePath: WORKSPACE, roots: ["apps/web"], busyRoots: new Set() }, attachedWorld({}, [], { execMidRead: [10] }).deps);
+  assert.ok(scan.ok && !scan.servers.some((row) => row.port === 5173), "nor is it listed");
 });
 
 test("recheckAttached costs one folder read for the holder and one environment read for the subtree, with no ps of the whole table", async () => {
