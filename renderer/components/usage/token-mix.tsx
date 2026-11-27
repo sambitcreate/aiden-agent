@@ -1,14 +1,8 @@
 import { EmptyState, Text } from "../ui";
-import { buildTokenMix } from "../../lib/usage-profile-data";
+import { buildTokenMix, compactNumber } from "../../lib/usage-profile-data";
 import type { UsageTokenBreakdown } from "../../lib/types";
 
 const MIX_COLORS = ["bg-accent", "bg-accent/70", "bg-accent/45", "bg-accent/25"] as const;
-
-function compactNumber(value: number): string {
-  return Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(
-    value,
-  );
-}
 
 export function TokenMix({ tokens }: { tokens: UsageTokenBreakdown }) {
   const items = buildTokenMix(tokens);

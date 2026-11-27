@@ -9,6 +9,7 @@ import {
   Text,
 } from "../ui";
 import {
+  compactNumber,
   formatTrackedUsd,
   rankUsageModels,
   usageModelScore,
@@ -16,12 +17,6 @@ import {
 } from "../../lib/usage-profile-data";
 import type { Provider, UsageModelSummary } from "../../lib/types";
 import { ProviderIcon } from "../provider-icon";
-
-function compactNumber(value: number): string {
-  return Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(
-    value,
-  );
-}
 
 function modelScoreLabel(model: UsageModelSummary, metric: UsageScoreMetric): string {
   if (metric === "requests") return `${model.requests.toLocaleString()} requests`;
