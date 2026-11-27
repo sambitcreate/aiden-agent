@@ -1,10 +1,7 @@
 import * as React from "react";
 import { ArrowDownToLine, Square } from "lucide-react";
 import { cn } from "../lib/ui-utils";
-import {
-  subagentDetailGrowthAction,
-  subagentDetailIsAwayFromLatest,
-} from "../lib/subagent-panel-state";
+import { useSubagentScrollFollow } from "../lib/use-subagent-scroll-follow";
 import { SUBAGENT_HELPER_TONE_DOT, subagentHelperTone } from "../lib/subagent-helper-chat-state";
 import { subagentModelLine, useSubagentModelCatalog } from "../lib/subagent-model-name";
 import { subagentRoleLabel, type SubagentRunPresentation } from "../lib/subagent-view-state";
@@ -113,10 +110,6 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     headingRef,
   ) {
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
-    const userNavigatedRef = React.useRef(false);
-    const followGrowthRef = React.useRef(false);
-    const previousRunRef = React.useRef<{ runId: string; revision: number } | null>(null);
-    const [awayFromLatest, setAwayFromLatest] = React.useState(false);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
     const modelLine = subagentModelLine(run, useSubagentModelCatalog());
@@ -142,76 +135,21 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
         // instance must not create a second, selection-scoped error source.
       }
     };
-    const updateScrollPosition = React.useCallback(() => {
-      const element = scrollRef.current;
-      if (!element) return;
-      const away = subagentDetailIsAwayFromLatest(
-        element.scrollHeight,
-        element.clientHeight,
-        element.scrollTop,
-      );
-      if (!away && userNavigatedRef.current) {
-        userNavigatedRef.current = false;
-        followGrowthRef.current = true;
-      }
-      setAwayFromLatest(userNavigatedRef.current && away);
-    }, []);
-
-    React.useLayoutEffect(() => {
-      const element = scrollRef.current;
-      if (!element || typeof window === "undefined") return;
-      const next = { runId: run.runId, revision: run.revision };
-      const action = subagentDetailGrowthAction(
-        previousRunRef.current,
-        next,
-        userNavigatedRef.current,
-      );
-      previousRunRef.current = next;
-      if (action === "reset") {
-        userNavigatedRef.current = false;
-        followGrowthRef.current = false;
-        element.scrollTop = 0;
-        setAwayFromLatest(false);
-      } else if (action === "follow") {
-        followGrowthRef.current = true;
-        element.scrollTop = element.scrollHeight;
-        setAwayFromLatest(false);
-      } else {
-        updateScrollPosition();
-      }
-      const frame = window.requestAnimationFrame(updateScrollPosition);
-      return () => window.cancelAnimationFrame(frame);
-    }, [run.revision, run.runId, updateScrollPosition]);
-
-    React.useEffect(() => {
-      const element = scrollRef.current;
-      if (!element || typeof ResizeObserver === "undefined") return;
-      const observer = new ResizeObserver(() => {
-        if (followGrowthRef.current && !userNavigatedRef.current) {
-          element.scrollTop = element.scrollHeight;
-          setAwayFromLatest(false);
-          return;
-        }
-        updateScrollPosition();
-      });
-      observer.observe(element);
-      if (element.firstElementChild) observer.observe(element.firstElementChild);
-      return () => observer.disconnect();
-    }, [updateScrollPosition]);
+    const {
+      awayFromLatest,
+      updateScrollPosition,
+      markUserNavigation,
+      jumpToLatest: jumpScrollToLatest,
+    } = useSubagentScrollFollow({
+      scrollRef,
+      runId: run.runId,
+      revision: run.revision,
+      onReset: "top",
+    });
 
     const jumpToLatest = () => {
-      const element = scrollRef.current;
-      if (!element) return;
       const reduceMotion = document.documentElement.dataset.reduceMotion === "true";
-      element.scrollTo({ top: element.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
-      userNavigatedRef.current = false;
-      followGrowthRef.current = true;
-      setAwayFromLatest(false);
-    };
-
-    const markUserNavigation = () => {
-      userNavigatedRef.current = true;
-      followGrowthRef.current = false;
+      jumpScrollToLatest(reduceMotion ? "auto" : "smooth");
     };
 
     const staleActive = presentation?.state === "stale_active";
