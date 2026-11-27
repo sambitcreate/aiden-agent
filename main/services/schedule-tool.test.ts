@@ -1799,3 +1799,25 @@ test("a watch Aiden proposes can't point at this computer or a private network, 
   await tool.execute("create-public", { ...base, trigger: watch("https://status.example.com/api") });
   assert.deepEqual(fake.tasks[0]?.trigger, { ...watch("https://status.example.com/api"), agentProposed: true });
 });
+
+test("scheduled-task tool parameter schemas stay byte-identical across edit, attended, and standard variants", () => {
+  const fake = fakeDependencies();
+  const edit = createAssistantEditAutomationTool(ASSISTANT_MODEL_SELECTION, fake.dependencies);
+  const attended = createScheduleTaskTool(ATTENDED_ACCESS, fake.dependencies);
+  const standard = createScheduleTaskTool({ kind: "standard" }, fake.dependencies);
+  const digest = (schema: unknown) =>
+    createHash("sha256").update(JSON.stringify(schema)).digest("hex");
+
+  assert.equal(
+    digest(edit.parameters),
+    "af0a3c615d97f7cc76cc371bc86a29cf982deebfe557670c5387b1f02811b47e",
+  );
+  assert.equal(
+    digest(attended.parameters),
+    "b2649c682d50aae45da50b14f4db4c78c49116f0b35274db7242c30c9f57e12b",
+  );
+  assert.equal(
+    digest(standard.parameters),
+    "72293fff43895b32596f2cdacb4f0fdc1ca2df6624ec40ec3b7ac01ca273ddbb",
+  );
+});
