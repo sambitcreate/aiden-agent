@@ -3,9 +3,10 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DESIGN_CANVAS_LIMITS, emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
+import { appRouteKey, DESIGN_CANVAS_LIMITS, emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
 import {
   createDesignPageScanner,
+  createWrittenRouteTurn,
   DESIGN_WIDTH_HINT_BYTES,
   EARLIER_PAGES_LIMIT,
   inferDesignWidth,
@@ -15,7 +16,9 @@ import {
   pagesWrittenInChat,
   placeWrittenPageFrames,
   placeWrittenPagesOnCanvas,
+  writtenAppRoute,
   writtenPagePath,
+  writtenRouteData,
 } from "./written-pages.js";
 import type { DesignViewState } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import type { DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
@@ -1040,4 +1043,199 @@ test("a turn's write while design mode's entry runs waits for it, lands on the c
   assert.equal(doc.frames.find((frame) => frame.id === "frame-visual")?.pageId, "page-chat-2");
   assert.deepEqual(focused.map(({ chatId, pageId }) => [chatId, pageId]), [["chat-2", "page-chat-2"]]);
   assert.equal(typeof focused[0]?.focusId, "number");
+});
+
+// ── 3b (S83): route files Aiden writes land as live app frames ──
+
+const nextApp = (appRoot = ".", framework: "next" | "vite" = "next") => ({ appRoot, framework, frameworkLabel: framework });
+const routeData = (candidates: ReturnType<typeof nextApp>[], params: Record<string, Record<string, string[]>> = {}) =>
+  writtenRouteData(
+    { apps: [], candidates },
+    { version: 1, apps: Object.entries(params).map(([root, values]) => ({ root, params: values })) },
+  );
+const appFramesOf = (doc: DesignCanvas) =>
+  doc.frames.filter((frame) => frame.kind === "app").map((frame) => ({ appRoot: frame.appRoot, route: frame.route, pageId: frame.pageId }));
+
+/** A turn of route writes, one placement call each, as llm-client runs them; returns each call's `added`. */
+async function writeRoutes(
+  canvases: ReturnType<typeof canvasesAt>,
+  workspaceRoot: string,
+  files: string[],
+  options: { data?: ReturnType<typeof routeData>; chatId?: string; newId?: () => string; loads?: { count: number } } = {},
+) {
+  const turn = createWrittenRouteTurn({
+    load: async () => {
+      if (options.loads) options.loads.count += 1;
+      return options.data ?? routeData([nextApp()]);
+    },
+  });
+  const added: number[][] = [];
+  const newId = options.newId ?? ids();
+  for (const file of files) {
+    const route = await turn.routeFor(file);
+    if (!route || turn.room() === 0) continue;
+    const placed = await placeWrittenPagesOnCanvas({
+      ...canvases.via(options.chatId ?? "chat-1"),
+      workspaceRoot,
+      paths: [],
+      routes: [route],
+      broadcast: () => undefined,
+      newId,
+    });
+    turn.placed(placed.added.length);
+    added.push(placed.added);
+  }
+  return added;
+}
+
+test("3b: a written Next route file lands once as a live frame on the turn's page", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  assert.deepEqual(await writeRoutes(canvases, workspaceRoot, ["app/pricing/page.tsx"]), [[1280]]);
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(appFramesOf(doc), [{ appRoot: ".", route: "/pricing", pageId: "page-1" }]);
+  const frame = doc.frames.find((entry) => entry.kind === "app")!;
+  assert.deepEqual([frame.viewport, frame.scale, frame.createdBy], [{ width: 1280, height: 800 }, 0.5, "aiden"]);
+
+  assert.deepEqual(await writeRoutes(canvases, workspaceRoot, ["app/pricing/page.tsx", "app/pricing/page.tsx"]), [[], []], "an edit, now or next turn, adds nothing");
+  assert.equal(appFramesOf(await canvases.workspaceStore.get("ws-1")).length, 1);
+});
+
+test("3b: a frame the person placed for the route counts, and non-route files place nothing", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [{ id: "mine", kind: "app", title: "/pricing", appRoot: ".", route: "/pricing", viewport: { width: 390, height: 844 }, scale: 0.5, x: 0, y: 0, w: 195, h: 458, pageId: "page-1", createdBy: "person" }],
+  }));
+  assert.deepEqual(await writeRoutes(canvases, workspaceRoot, ["app/pricing/page.tsx", "app/pricing/PriceCard.tsx", "app/layout.tsx"]), [[]]);
+  assert.deepEqual(appFramesOf(await canvases.workspaceStore.get("ws-1")).map((frame) => frame.route), ["/pricing"]);
+});
+
+test("3b: a dynamic route lands only with canvas.json's first value for it", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  assert.deepEqual(await writeRoutes(canvases, workspaceRoot, ["app/blog/[slug]/page.tsx"]), []);
+  const data = routeData([nextApp()], { ".": { "/blog/[slug]": ["hello-world", "second"] } });
+  assert.deepEqual(await writeRoutes(canvases, workspaceRoot, ["app/blog/[slug]/page.tsx"], { data }), [[1280]]);
+  assert.deepEqual(appFramesOf(await canvases.workspaceStore.get("ws-1")).map((frame) => frame.route), ["/blog/hello-world"]);
+});
+
+test("3b: a route the person took off the canvas isn't put back", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await writeRoutes(canvases, workspaceRoot, ["app/pricing/page.tsx"]);
+  const placed = await canvases.workspaceStore.get("ws-1");
+  await canvases.workspaceStore.save("ws-1", { ...placed, frames: [] }, placed.revision);
+  assert.deepEqual((await canvases.workspaceStore.get("ws-1")).removedAppRoutes, [appRouteKey(".", "/pricing")]);
+  assert.deepEqual(await writeRoutes(canvases, workspaceRoot, ["app/pricing/page.tsx"]), [[]]);
+  assert.deepEqual(appFramesOf(await canvases.workspaceStore.get("ws-1")), []);
+});
+
+test("3b: chat A's route lands on A's page while chat B looks at its own", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "p2", name: "B" }] }));
+  await canvases.views.report("chat-2", "ws-1", onPage("p2"), 0);
+  await canvases.views.report("chat-1", "ws-1", onPage("page-1"), 0);
+  await writeRoutes(canvases, workspaceRoot, ["app/about/page.tsx"], { chatId: "chat-1" });
+  assert.deepEqual(appFramesOf(await canvases.workspaceStore.get("ws-1")).map((frame) => frame.pageId), ["page-1"]);
+});
+
+test("3b: a turn writing a design/ page and a route file places both kinds", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html"]);
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1"),
+    workspaceRoot,
+    paths: ["design/home.html"],
+    routes: [{ appRoot: ".", route: "/" }],
+    broadcast: () => undefined,
+    newId: ids(),
+  });
+  assert.equal(placed.frameIds.length, 2);
+  assert.deepEqual(placed.added, [1280], "only the app frame is reported");
+  const kinds = (await canvases.workspaceStore.get("ws-1")).frames.map((frame) => frame.kind).sort();
+  assert.deepEqual(kinds, ["app", "file"]);
+});
+
+test("3b: a route file belongs to the deepest app root holding it; no root or no convention is nothing", async () => {
+  const data = routeData([nextApp("."), nextApp("apps/web"), nextApp("apps/site", "vite")]);
+  assert.deepEqual(writtenAppRoute("apps/web/app/pricing/page.tsx", data), { appRoot: "apps/web", route: "/pricing" });
+  assert.deepEqual(writtenAppRoute("app/page.tsx", data), { appRoot: ".", route: "/" });
+  assert.equal(writtenAppRoute("apps/site/src/pages/about.tsx", data), null, "a Vite app has no route convention");
+  const rootless = routeData([nextApp("apps/web")]);
+  assert.equal(writtenAppRoute("docs/app/page.tsx", rootless), null, "a file under no root");
+  assert.equal(writtenAppRoute("design/home.html", routeData([nextApp()])), null);
+});
+
+test("3b: a turn reads the app snapshot and canvas.json once, however many writes race", async () => {
+  const loads = { count: 0 };
+  const turn = createWrittenRouteTurn({
+    load: async () => {
+      loads.count += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return routeData([nextApp()]);
+    },
+  });
+  const routes = await Promise.all(["app/a/page.tsx", "app/b/page.tsx", "app/c/page.tsx"].map((file) => turn.routeFor(file)));
+  assert.deepEqual(routes.map((route) => route?.route), ["/a", "/b", "/c"]);
+  assert.equal(loads.count, 1);
+  assert.equal(await turn.routeFor("design/home.html"), null);
+  assert.equal(loads.count, 1);
+});
+
+test("3b: a turn places at most 12 route frames", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  const files = Array.from({ length: 13 }, (_, index) => `app/p${index}/page.tsx`);
+  const added = await writeRoutes(canvases, workspaceRoot, files);
+  assert.equal(added.flat().length, EARLIER_PAGES_LIMIT);
+  assert.equal(appFramesOf(await canvases.workspaceStore.get("ws-1")).length, 12);
+  assert.ok(!appFramesOf(await canvases.workspaceStore.get("ws-1")).some((frame) => frame.route === "/p12"), "the 13th places nothing");
+});
+
+test("3b: a route placement refused or taken back reports nothing", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  const refused = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1"),
+    workspaceRoot,
+    paths: [],
+    routes: [{ appRoot: ".", route: "/" }],
+    shouldSave: () => false,
+    broadcast: () => undefined,
+    newId: ids(),
+  });
+  assert.deepEqual(refused.added, []);
+
+  let designMode = true;
+  let calls = 0;
+  const { store } = canvases;
+  const retracted = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1"),
+    workspaceRoot,
+    paths: [],
+    routes: [{ appRoot: ".", route: "/" }],
+    store: {
+      get: (id, options) => store.get(id, options),
+      workspaceIdOf: (id) => store.workspaceIdOf(id),
+      update: async (id, mutate, options) => {
+        calls += 1;
+        const saved = await store.update(id, mutate, options);
+        if (calls === 1) designMode = false;
+        return saved;
+      },
+    },
+    shouldSave: () => designMode,
+    broadcast: () => undefined,
+    newId: ids(),
+  });
+  assert.deepEqual(retracted.added, []);
+  assert.deepEqual(appFramesOf(await canvases.workspaceStore.get("ws-1")), [], "the app frame is taken back off like a page");
+});
+
+test("3b: route files join a chat's written timeline only when asked", () => {
+  const step = (toolName: string, relativePath: string) => ({
+    kind: "tool",
+    toolName,
+    status: "completed",
+    producedFile: { relativePath, operation: toolName === "write_file" ? "written" : "edited", bytes: 1 },
+  });
+  const messages = [{ timeline: { steps: [step("write_file", "app/pricing/page.tsx"), step("write_file", "design/home.html"), step("edit_file", "app/pricing/page.tsx")] } }];
+  assert.deepEqual(pagesWrittenInChat(messages), ["design/home.html"], "flag off: today's list");
+  const isRouteFile = (file: string) => writtenAppRoute(file, routeData([nextApp()])) !== null;
+  assert.deepEqual(pagesWrittenInChat(messages, { isRouteFile }), ["design/home.html", "app/pricing/page.tsx"]);
 });

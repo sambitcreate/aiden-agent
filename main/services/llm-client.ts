@@ -617,7 +617,15 @@ import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { CANVAS_STATUS_SECTION, canvasPromptLine, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
 import { placeArtifactsOnCanvas, placeImagesOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
-import { createDesignPageScanner, placeWrittenPagesOnCanvas, writtenPagePath } from "./design-canvas/written-pages.js";
+import {
+  createDesignPageScanner,
+  createWrittenRouteTurn,
+  placeWrittenPagesOnCanvas,
+  writtenFilePath,
+  writtenPagePath,
+  writtenRouteData,
+} from "./design-canvas/written-pages.js";
+import { readCanvasConfig } from "./design-canvas/canvas-config.js";
 import { inspectDesignFrame } from "./design-canvas/frame-render.js";
 import { inspectDesignPage } from "./design-canvas/inspect.js";
 import {
@@ -3236,6 +3244,11 @@ async function prepareGeneration(
    * mid-reply works too. Writes are placed one after another.
    */
   let placeWrittenPage: ((relativePath: string) => void) | undefined;
+  /**
+   * 3b (S83), live app frames on: a written file that is one of the workspace's
+   * app routes lands as an `app` frame, at most 12 a turn. Never inspected.
+   */
+  let placeWrittenRoute: ((relativePath: string) => void) | undefined;
   /** Inspects each page `placeWrittenPage` placed; its reports join the next request (see `withDesignInspectNote`). */
   let writtenPageInspector: WrittenPageInspector | undefined;
   /** Puts the design/ pages a terminal command made or changed on the canvas, as `placeWrittenPage` does for file tools. */
@@ -3308,6 +3321,52 @@ async function prepareGeneration(
         logger.warn("pi", "Could not put a written page on the design canvas.", error);
       });
     };
+    if (designLive && workspace) {
+      const routeWorkspaceId = workspace.id;
+      // One snapshot and one canvas.json read per turn, shared by every write; never a walk.
+      const routeTurn = createWrittenRouteTurn({
+        load: async () => {
+          const [snapshot, config] = await Promise.all([
+            designAppServers.snapshot(routeWorkspaceId).catch(() => null),
+            readCanvasConfig(pageRoot).catch(() => null),
+          ]);
+          return writtenRouteData(snapshot, config);
+        },
+      });
+      placeWrittenRoute = (relativePath) => {
+        pagesPlaced = pagesPlaced
+          .then(async () => {
+            const route = await routeTurn.routeFor(relativePath);
+            if (!route) return;
+            recentWrittenPages.note(params.chatId, relativePath);
+            if (routeTurn.room() === 0 || !(await canSaveWrittenPage())) return;
+            const placed = await placeWrittenPagesOnCanvas({
+              chatId: params.chatId,
+              workspaceRoot: pageRoot,
+              paths: [],
+              routes: [route],
+              shouldSave: canSaveWrittenPage,
+              store: designCanvasStore,
+              pages: designPages,
+              broadcast: announceCanvasChange,
+              newId: randomUUID,
+              pendingEntry: designPendingEntry,
+              isLive: designLiveChats,
+            });
+            routeTurn.placed(placed.added.length);
+            if (placed.frameIds.length > 0 && placed.pageId) {
+              focusDesignCanvas({ pageId: placed.pageId, frameIds: placed.frameIds });
+            }
+            // S88, call site 2: each app frame kept.
+            for (const width of placed.added) {
+              reportAnalyticsEvent("design_app_frame_added", { source: "aiden", device_bucket: deviceBucket(width) });
+            }
+          })
+          .catch((error) => {
+            logger.warn("pi", "Could not put a written route on the design canvas.", error);
+          });
+      };
+    }
     // A design turn notes design/ before its first command; a turn that
     // enters design mode later notes it when its next command starts.
     let pageScanner = canvasStatusOffered ? createDesignPageScanner(pageRoot) : undefined;
@@ -3428,6 +3487,7 @@ async function prepareGeneration(
     displayedHtmlArtifacts,
     placeCanvasArtifacts,
     placeWrittenPage,
+    placeWrittenRoute,
     commandPages,
     enteredCanvasTools,
     // On a /visualize turn and in design mode the visual tools are declared
@@ -3847,6 +3907,7 @@ export const llmClient = {
       displayedHtmlArtifacts,
       placeCanvasArtifacts,
       placeWrittenPage,
+      placeWrittenRoute,
       commandPages,
       enteredCanvasTools,
       preloadedOnDemandTools,
@@ -6358,6 +6419,10 @@ export const llmClient = {
             if (placeWrittenPage && !denied && !event.isError) {
               const page = writtenPagePath(event.toolName, event.result?.details);
               if (page) placeWrittenPage(page);
+              else {
+                const file = placeWrittenRoute ? writtenFilePath(event.toolName, event.result?.details) : undefined;
+                if (file) placeWrittenRoute?.(file);
+              }
             }
             // A command, even a failed one, may have written or copied pages into design/.
             if (!denied && DESIGN_PAGE_COMMAND_TOOLS.has(event.toolName)) commandPages?.finished();
@@ -6840,6 +6905,10 @@ export const llmClient = {
                 if (placeWrittenPage) {
                   const page = writtenPagePath(toolName, { producedFile });
                   if (page) placeWrittenPage(page);
+                  else {
+                    const file = placeWrittenRoute ? writtenFilePath(toolName, { producedFile }) : undefined;
+                    if (file) placeWrittenRoute?.(file);
+                  }
                 }
               },
             }),
