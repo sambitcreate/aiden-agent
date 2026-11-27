@@ -1,6 +1,6 @@
 // Production wiring for the design canvas IPC; the handlers live in
 // design-canvas.ts and are tested there.
-import { BrowserWindow, dialog, ipcMain } from "../platform.js";
+import { BrowserWindow, dialog, ipcMain, shell } from "../platform.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { chatStore } from "../services/chat-store.js";
 import { configStore } from "../services/config-store.js";
@@ -27,7 +27,7 @@ import { installedAppNetwork } from "../services/design-canvas/app-frames/app-ne
 import { renderAppFrame } from "../services/design-canvas/app-frames/app-export.js";
 import { reportAnalyticsEvent } from "../services/analytics/analytics-report.js";
 import { deviceBucket } from "../../renderer/shared/design-canvas/app-devices.js";
-import { registerDesignCanvasHandlers } from "./design-canvas.js";
+import { DESIGN_PAGE_FILE_CHANNEL, registerDesignCanvasHandlers } from "./design-canvas.js";
 import { createDesignModeCardEnter, registerDesignAppHandlers } from "./design-app.js";
 
 /** Windows whose reload, crash or destruction already unmounts every canvas view. */
@@ -78,9 +78,24 @@ export function registerDesignCanvasIpc(): void {
       // Download draws the running app on the default session, as an export window (D18).
       renderApp: (request) => renderAppFrame(request, () => installedAppNetwork()?.registry ?? null),
       apps: designAppServers,
-      // 3b (S88, call site 4): the person's Add ▸ Page from app…; 3c (S93, call site 5): their Add view at width.
+      // 3b (S88, call site 4): the person's Add ▸ Page from app…; 3c (S93, S95, call sites 5 and 6): their Add view
+      // at width and Duplicate page as variant, each after the store commit.
       onAppFrameAdded: (viewportWidth) =>
         reportAnalyticsEvent("design_app_frame_added", { source: "person", device_bucket: deviceBucket(viewportWidth) }),
+      // 3c (S96): Move page file to Trash, and the ledger's undo of a copy. Electron has no restore from the Trash.
+      trash: (absolute) => shell.trashItem(absolute),
+      broadcastPageFile: (outcome) => {
+        try {
+          ipcMain.broadcast(DESIGN_PAGE_FILE_CHANNEL, outcome);
+        } catch {
+          // A lost notice never changes what was done.
+        }
+      },
+    },
+    // 3c (S99): the page-file actions need the workspace's folder and a permission that lets them write.
+    workspaceAccess: async (chat) => {
+      const workspace = await configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId));
+      return workspace?.folderPath ? { root: workspace.folderPath, permission: workspace.permission } : null;
     },
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     store: designCanvasStore,

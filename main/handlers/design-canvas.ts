@@ -13,6 +13,7 @@ import {
   isAppRouteKey,
   isDesignRelativePath,
   type DesignCanvas,
+  type DesignFrame,
   type DesignPaper,
   type DesignPrintMode,
 } from "../../renderer/shared/design-canvas/schema.js";
@@ -72,7 +73,35 @@ import { placeAppVariant, variantRootOf } from "../../renderer/shared/design-can
 import { isConcreteRoute, type AppRouteList } from "../../renderer/shared/design-canvas/app-routes.js";
 import type { DesignAppRoutesResult } from "../services/design-canvas/app-server/app-server-main.js";
 import type { AppFrameRegistry } from "../services/design-canvas/app-frames/app-frame-registry.js";
-import type { ChatMeta } from "../services/types.js";
+import type { ChatMeta, WorkspacePermission } from "../services/types.js";
+import { realpath, rmdir } from "node:fs/promises";
+import { commentsWithoutFrames } from "../../renderer/shared/design-canvas/comments.js";
+import { syncConnectors } from "../../renderer/shared/design-canvas/connectors.js";
+import {
+  ownerOf,
+  pagePath,
+  relativeImportsMoved,
+  rewriteTanstackLiteral,
+  specialFilesLost,
+  tanstackRouteId,
+  variantBase,
+  variantPathCandidates,
+  workspaceRelPath,
+  type AppPageRefusal,
+  type OwnerFile,
+} from "../services/design-canvas/app-server/app-page-files-core.js";
+import {
+  confinedTarget,
+  readRegularFileBytes,
+  routeFiles,
+  writeConfinedFile,
+  type PageFileFs,
+  type RouteFileWalk,
+} from "../services/design-canvas/app-server/app-page-files.js";
+import { routeFromFile } from "../services/design-canvas/app-server/app-routes-core.js";
+import { routeFs } from "../services/design-canvas/app-server/app-routes.js";
+import { PageFileLedger, pageDigest, type PageFileOutcome } from "../services/design-canvas/app-page-ledger.js";
+import type { FrameworkId } from "../../renderer/shared/design-app.js";
 
 export { DESIGN_CANVAS_UPDATED_CHANNEL, type DesignCanvasUpdated };
 
@@ -109,6 +138,20 @@ export type DesignCanvasPlaceAppRouteResult =
 export type DesignCanvasAddAppViewResult =
   | { placed: string; pageId: string }
   | { error: "unavailable" | "not-found" | "locked" | "full" | "bad-size" };
+
+/** `designCanvas:appPageVariant` reply (3c, S95). `kept` says a copy written before the canvas refused stays on disk, because it changed. */
+export type DesignCanvasAppPageVariantResult =
+  | { placed: string; pageId: string; route: string; file: string }
+  | { error: "unavailable" | "not-found" | "locked" | "full" | "io" | AppPageRefusal; kept?: string };
+
+/** `designCanvas:appPageTrash` reply (3c, S96). `restore: "failed"` means the file is in the Trash though the canvas kept its frames. */
+export type DesignCanvasAppPageTrashResult =
+  | { trashed: string; route: string; removed: string[]; revision: number }
+  | { error: "unavailable" | "not-found" | "locked" | "io" | AppPageRefusal; restore?: "failed" };
+
+/** 3c (S97): the ledger's outcomes, broadcast to every window; each shows only its own chat's. */
+export const DESIGN_PAGE_FILE_CHANNEL = "designCanvas:pageFile";
+export type { PageFileOutcome };
 
 /** `designCanvas:grant` reply: an `aiden-design://<grant>/` host, or no access. */
 export type DesignCanvasGrantResult = { grant: string } | { error: "unavailable" };
@@ -389,7 +432,18 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     };
     /** 3b (S88, call site 4): each app frame the person's Add placed. */
     onAppFrameAdded?(viewportWidth: number): void;
+    /** 3c (S96): moves a file to the Trash. Left out, Duplicate page as variant and Move page file to Trash are unavailable. */
+    trash?(absolute: string): Promise<void>;
+    /** 3c (S97): sends a page-file outcome on `designCanvas:pageFile`. */
+    broadcastPageFile?(outcome: PageFileOutcome): void;
   };
+  /**
+   * 3c (S99): the chat's workspace folder and its permission, for the page-file
+   * actions. Left out, they are unavailable.
+   */
+  workspaceAccess?(chat: DesignCanvasChat): Promise<{ root: string; permission: WorkspacePermission | "read-only" } | null>;
+  /** 3c: parts of the page-file writes a test replaces (a case-insensitive volume). */
+  pageFs?: Partial<PageFileFs>;
 }): void {
   if (!deps.enabled()) return;
 
@@ -416,6 +470,60 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (!attended(chat)) throw new Error(UNAVAILABLE);
     return chat;
   };
+
+  // ── 3c (S95–S97, S99): the person's page-file actions ──
+
+  /** A workspace permission that lets the person's actions write files. */
+  const writable = (permission: WorkspacePermission | "read-only"): boolean => permission !== "none" && permission !== "read-only";
+
+  /**
+   * The chat's workspace folder as its real path, when it may still be written:
+   * `read-only` for a permission that can't, null when there's no folder.
+   */
+  const writableWorkspace = async (chat: DesignCanvasChat): Promise<{ real: string } | "read-only" | null> => {
+    const access = await deps.workspaceAccess?.(chat);
+    if (!access) return null;
+    if (!writable(access.permission)) return "read-only";
+    try {
+      return { real: await realpath(access.root) };
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * The ledger, when this build can trash files. Its gate is the person's own:
+   * an attended chat in design mode, in the same workspace, whose folder is
+   * still that real path and still writable.
+   */
+  const pageTrash = deps.appFrames?.trash;
+  const pageLedger = pageTrash
+    ? new PageFileLedger({
+        lock: (absolute, task) => withFileLock(absolute, task),
+        canAct: async (chatId, workspaceId, workspaceRoot) => {
+          if (!deps.appFrames?.enabled()) return false;
+          const chat = await deps.getChat(chatId);
+          if (!canFrame(chat) || designCanvasWorkspaceOf(chat) !== workspaceId) return false;
+          const folder = await writableWorkspace(chat);
+          return typeof folder === "object" && folder !== null && folder.real === workspaceRoot;
+        },
+        target: (workspaceRoot, file) => confinedTarget(workspaceRoot, file, { create: false, ...(deps.pageFs ? { fs: deps.pageFs } : {}) }),
+        read: (absolute) => readRegularFileBytes(absolute, DESIGN_SOURCE_MAX_BYTES),
+        trash: (absolute) => pageTrash(absolute),
+        write: (workspaceRoot, file, bytes, mode, create) =>
+          writeConfinedFile(workspaceRoot, file, bytes, mode, { create, ...(deps.pageFs ? { fs: deps.pageFs } : {}) }),
+        removeEmptyFolder: async (dir) => {
+          await (deps.pageFs?.rmdir ?? rmdir)(dir);
+        },
+        notify: (outcome) => {
+          try {
+            deps.appFrames?.broadcastPageFile?.(outcome);
+          } catch {
+            // A lost notice never changes what was done.
+          }
+        },
+      })
+    : undefined;
 
   deps.handle("designCanvas:get", async (_event, chatId) => {
     const chat = await requireChat(chatId);
@@ -483,7 +591,13 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (expected !== workspaceId) {
       return { ok: false, reason: "moved", workspaceId } satisfies DesignCanvasSaveResult;
     }
-    const { result } = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone, undoneRoutes, workspaceId });
+    const { result } = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, {
+      undone,
+      undoneRoutes,
+      workspaceId,
+      // 3c (S97): the page-file ledger reads each committed save on its own queue; the reply never waits for it.
+      ...(pageLedger ? { onCommitted: (committed: DesignCanvas) => void pageLedger.reconcile(workspaceId, chat.id, committed, undoneRoutes) } : {}),
+    });
     if (result.ok) deps.broadcast({ workspaceId, chatId: chat.id, revision: result.revision });
     return result;
   });
@@ -892,6 +1006,322 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       // Reporting never changes the placement.
     }
     return result;
+  });
+
+  /** A request naming one frame, or null. */
+  const frameIdOf = (request: unknown): string | null => {
+    if (typeof request !== "object" || request === null || Array.isArray(request)) return null;
+    const { frameId } = request as { frameId?: unknown };
+    return typeof frameId === "string" && frameId.length > 0 && frameId.length <= 128 ? frameId : null;
+  };
+
+  /**
+   * What a page-file action needs before it touches anything: the chat, its
+   * workspace's real path, the app frame, its app's framework, the owner walk
+   * and the page's one owning file. Every S95 refusal that applies to both
+   * actions is answered here.
+   */
+  const pageFileContext = async (
+    chatId: unknown,
+    request: unknown,
+  ): Promise<
+    | {
+        chat: DesignCanvasChat;
+        workspaceId: string;
+        live: NonNullable<typeof deps.appFrames>;
+        trash: (absolute: string) => Promise<void>;
+        real: string;
+        doc: DesignCanvas;
+        frame: DesignFrame;
+        appRoot: string;
+        page: { path: string; query: string };
+        framework: FrameworkId | undefined;
+        walk: RouteFileWalk;
+        owner: OwnerFile;
+      }
+    | { error: "unavailable" | "not-found" | AppPageRefusal }
+  > => {
+    const asked = await liveChat(chatId);
+    if (!asked || !asked.live.trash || !pageLedger) return { error: "unavailable" };
+    const frameId = frameIdOf(request);
+    if (!frameId) return { error: "not-found" };
+    const { chat, workspaceId, live } = asked;
+    const folder = await writableWorkspace(chat);
+    if (folder === null) return { error: "unavailable" };
+    if (folder === "read-only") return { error: "read-only" };
+    const { doc } = await deps.store.get(chat.id, { workspaceId });
+    const frame = doc.frames.find((entry) => entry.id === frameId);
+    if (!frame || frame.kind !== "app" || frame.route === undefined) return { error: "not-found" };
+    const appRoot = frame.appRoot ?? ".";
+    const snapshot = await live.apps.snapshot(workspaceId);
+    if (snapshot.target === "unavailable") return { error: "unavailable" };
+    const framework = [...snapshot.candidates, ...snapshot.apps].find((app) => app.appRoot === appRoot)?.framework;
+    const walk = await routeFiles(routeFs(), folder.real, appRoot, framework);
+    if (!(await stillFraming(chat.id, workspaceId))) return { error: "unavailable" };
+    if (!walk) return { error: "no-file" };
+    if (walk.configRouter) return { error: "config-router" };
+    if (walk.truncated) return { error: "truncated" };
+    const page = pagePath(frame.route);
+    const owned = ownerOf(page.path, walk);
+    if ("refused" in owned) return { error: owned.refused };
+    return { chat, workspaceId, live, trash: asked.live.trash, real: folder.real, doc, frame, appRoot, page, framework, walk, owner: owned.owner };
+  };
+
+  /** The owner's bytes through a confined, no-follow read. */
+  const ownerBytes = async (real: string, file: string): Promise<{ bytes: Buffer; mode: number; absolute: string } | { error: AppPageRefusal | "io" }> => {
+    const target = await confinedTarget(real, file, { create: false, ...(deps.pageFs ? { fs: deps.pageFs } : {}) });
+    if (!target.ok) return { error: target.reason === "io" ? "io" : "not-regular" };
+    const read = await readRegularFileBytes(target.absolute, DESIGN_SOURCE_MAX_BYTES);
+    if (!read.ok) return { error: read.reason === "missing" ? "no-file" : read.reason };
+    return { bytes: read.bytes, mode: read.mode, absolute: target.absolute };
+  };
+
+  const placeVariantRefusal = (error: "locked" | "locked-group" | "page-full" | "canvas-full"): "locked" | "full" =>
+    error === "locked" || error === "locked-group" ? "locked" : "full";
+
+  deps.handle("designCanvas:appPageVariant", async (event, chatId, request): Promise<DesignCanvasAppPageVariantResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    const context = await pageFileContext(chatId, request);
+    if ("error" in context) return { error: context.error };
+    const { chat, workspaceId, live, real, doc, frame, appRoot, page, walk, owner } = context;
+    const newId = deps.newId ?? randomUUID;
+    const viewport = frame.viewport ?? APP_DEFAULT_VIEWPORT;
+    const scale = frame.scale ?? APP_DEFAULT_SCALE;
+    const variantInput = (route: string, n: number) => ({
+      id: newId(),
+      groupId: newId(),
+      title: route.slice(0, DESIGN_CANVAS_LIMITS.titleChars),
+      route,
+      viewport,
+      scale,
+      label: `v${n}`,
+      createdBy: "person" as const,
+    });
+    // The canvas is checked before the disk: a locked or full canvas writes nothing.
+    const dry = placeAppVariant(doc, variantRootOf(doc, frame), { ...variantInput(frame.route ?? "/", 2), id: "dry-run", groupId: "dry-run-group" });
+    if ("error" in dry) return { error: placeVariantRefusal(dry.error) };
+
+    const source = workspaceRelPath(appRoot, owner.appRelPath);
+    const read = await ownerBytes(real, source);
+    if ("error" in read) return { error: read.error };
+    const tanstack = owner.convention === "tanstack";
+    const kind = owner.appRelPath.endsWith(".astro") ? "astro" : "ts";
+    const text = read.bytes.toString("utf8");
+    const siblings = await walk.siblings(owner.appRelPath);
+    const base = variantBase(page.path);
+
+    let written: { n: number; route: string; file: string; absolute: string; bytes: Buffer; createdFolder?: string } | undefined;
+    for (let n = 2; n <= 9 && !written; n += 1) {
+      const wanted = `${base}-v${n}`;
+      if (walk.files.has(wanted) || walk.layouts.has(wanted)) continue;
+      const candidate = variantPathCandidates(owner, n).find((entry) => routeFromFile(owner.convention, entry.appRelPath) === wanted);
+      if (!candidate) return { error: "no-file" };
+      if (specialFilesLost(owner, candidate, siblings)) return { error: "special-files" };
+      if (relativeImportsMoved(text, path.posix.dirname(owner.appRelPath), path.posix.dirname(candidate.appRelPath), kind)) return { error: "relative-imports" };
+      let bytes = read.bytes;
+      if (tanstack) {
+        const from = tanstackRouteId(owner.appRelPath);
+        const to = tanstackRouteId(candidate.appRelPath);
+        if (from === null || to === null) return { error: "route-literal" };
+        const rewritten = rewriteTanstackLiteral(read.bytes, from, to);
+        if ("refused" in rewritten) return { error: "route-literal" };
+        bytes = rewritten.bytes;
+      }
+      if (!(await stillFraming(chat.id, workspaceId))) return { error: "unavailable" };
+      const file = workspaceRelPath(appRoot, candidate.appRelPath);
+      const absolute = path.resolve(real, file);
+      const result = await withFileLock(absolute, () =>
+        writeConfinedFile(real, file, bytes, read.mode, { create: candidate.newFolder !== undefined, ...(deps.pageFs ? { fs: deps.pageFs } : {}) }),
+      );
+      if (!result.ok) {
+        // Taken on disk (a case-insensitive clash, or a concurrent copy): the next number.
+        if (result.reason === "exists") continue;
+        return { error: result.reason === "io" ? "io" : "not-regular" };
+      }
+      written = { n, route: `${wanted}${page.query}`, file, absolute, bytes, ...(result.createdFolder ? { createdFolder: result.createdFolder } : {}) };
+    }
+    if (!written) return { error: "too-many" };
+    const copy = written;
+
+    let outcome: DesignCanvasAppPageVariantResult = { error: "io" };
+    let saved: DesignCanvas | undefined;
+    try {
+      const update = await deps.store.update(
+        chat.id,
+        (latest) => {
+          const current = latest.frames.find((entry) => entry.id === frame.id);
+          if (!current || current.kind !== "app") {
+            outcome = { error: "not-found" };
+            throw UNCHANGED;
+          }
+          const placed = placeAppVariant(latest, variantRootOf(latest, current), variantInput(copy.route, copy.n));
+          if ("error" in placed) {
+            outcome = { error: placeVariantRefusal(placed.error) };
+            throw UNCHANGED;
+          }
+          outcome = { placed: placed.frameId, pageId: current.pageId, route: copy.route, file: copy.file };
+          return placed.doc;
+        },
+        {
+          workspaceId,
+          beforeWrite: async () => {
+            if (!(await stillFraming(chat.id, workspaceId))) {
+              outcome = { error: "unavailable" };
+              throw UNCHANGED;
+            }
+          },
+        },
+      );
+      saved = update.doc;
+    } catch (error) {
+      if (error !== UNCHANGED) outcome = { error: "io" };
+    }
+    const result = outcome as DesignCanvasAppPageVariantResult;
+    if (!saved || !("placed" in result)) {
+      // Rolled back: the copy goes to the Trash only while it is exactly what was written.
+      const refusal = "error" in result ? result.error : "io";
+      const kept = await withFileLock(copy.absolute, async () => {
+        const now = await readRegularFileBytes(copy.absolute, DESIGN_SOURCE_MAX_BYTES);
+        if (!now.ok) return now.reason !== "missing";
+        if (pageDigest(now.bytes) !== pageDigest(copy.bytes)) return true;
+        try {
+          await context.trash(copy.absolute);
+        } catch {
+          return true;
+        }
+        if (copy.createdFolder) await (deps.pageFs?.rmdir ?? rmdir)(copy.createdFolder).catch(() => undefined);
+        return false;
+      });
+      return kept ? { error: refusal, kept: copy.file } : { error: refusal };
+    }
+    deps.broadcast({ workspaceId, chatId: chat.id, revision: saved.revision, step: `app-page-variant:${saved.revision}` });
+    pageLedger!.record({
+      kind: "copy",
+      chatId: chat.id,
+      workspaceId,
+      workspaceRoot: real,
+      appRoot,
+      route: copy.route,
+      file: copy.file,
+      bytes: copy.bytes,
+      mode: read.mode,
+      digest: pageDigest(copy.bytes),
+      frameId: result.placed,
+      state: "present",
+      ...(copy.createdFolder ? { newFolder: true as const } : {}),
+    });
+    if (await stillFraming(chat.id, workspaceId)) {
+      const pages = designTurnPages({ views: deps.views, chatId: chat.id, message: { selection: [], pageId: result.pageId } });
+      const focusId = await pages.show(workspaceId, result.pageId, () => stillFraming(chat.id, workspaceId));
+      if (focusId !== undefined && (await stillFraming(chat.id, workspaceId))) {
+        deps.sendFocus?.(event, { chatId: chat.id, pageId: result.pageId, frameIds: [result.placed], focusId, own: true });
+      }
+    }
+    try {
+      live.onAppFrameAdded?.(viewport.width);
+    } catch {
+      // Reporting never changes the placement.
+    }
+    return result;
+  });
+
+  deps.handle("designCanvas:appPageTrash", async (_event, chatId, request): Promise<DesignCanvasAppPageTrashResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    const context = await pageFileContext(chatId, request);
+    if ("error" in context) return { error: context.error };
+    const { chat, workspaceId, real, frame, appRoot, page, owner, trash } = context;
+    const file = workspaceRelPath(appRoot, owner.appRelPath);
+    // Fail fast on what the lock would refuse anyway; nothing is kept from this read.
+    const first = await ownerBytes(real, file);
+    if ("error" in first) return { error: first.error };
+    const absolute = path.resolve(real, file);
+    const ofPage = (entry: DesignFrame) => entry.kind === "app" && (entry.appRoot ?? ".") === appRoot && entry.route !== undefined && pagePath(entry.route).path === page.path;
+
+    let outcome: DesignCanvasAppPageTrashResult = { error: "io" };
+    let removed: string[] = [];
+    let taken: { bytes: Buffer; mode: number } | undefined;
+    let saved: DesignCanvas | undefined;
+    try {
+      const update = await deps.store.update(
+        chat.id,
+        (latest) => {
+          const frames = latest.frames.filter(ofPage);
+          if (frames.length === 0) {
+            outcome = { error: "not-found" };
+            throw UNCHANGED;
+          }
+          if (frames.some((entry) => entry.locked)) {
+            outcome = { error: "locked" };
+            throw UNCHANGED;
+          }
+          removed = frames.map((entry) => entry.id);
+          const gone = new Set(removed);
+          return syncConnectors({
+            ...latest,
+            frames: latest.frames.filter((entry) => !gone.has(entry.id)),
+            comments: commentsWithoutFrames(latest.comments, gone),
+          });
+        },
+        {
+          workspaceId,
+          byPerson: true,
+          // The file goes only once the canvas is ready to write, under the file's lock, with every gate checked again.
+          beforeWrite: () =>
+            withFileLock(absolute, async () => {
+              if (!(await stillFraming(chat.id, workspaceId))) {
+                outcome = { error: "unavailable" };
+                throw UNCHANGED;
+              }
+              const folder = await writableWorkspace(chat);
+              if (folder === "read-only" || folder === null || folder.real !== real) {
+                outcome = { error: folder === "read-only" ? "read-only" : "unavailable" };
+                throw UNCHANGED;
+              }
+              const now = await ownerBytes(real, file);
+              if ("error" in now) {
+                outcome = { error: now.error };
+                throw UNCHANGED;
+              }
+              try {
+                await trash(now.absolute);
+              } catch {
+                outcome = { error: "io" };
+                throw UNCHANGED;
+              }
+              taken = { bytes: now.bytes, mode: now.mode };
+            }),
+        },
+      );
+      saved = update.doc;
+    } catch (error) {
+      if (error !== UNCHANGED) outcome = { error: "io" };
+    }
+    if (!saved) {
+      const kept = taken;
+      if (!kept) return outcome;
+      // The file went but the canvas didn't change: it is written back where it was.
+      const back = await withFileLock(absolute, () =>
+        writeConfinedFile(real, file, kept.bytes, kept.mode, { create: false, ...(deps.pageFs ? { fs: deps.pageFs } : {}) }),
+      );
+      return back.ok ? { error: "io" } : { error: "io", restore: "failed" };
+    }
+    const bytes = taken!;
+    deps.broadcast({ workspaceId, chatId: chat.id, revision: saved.revision, step: `app-page-trash:${saved.revision}` });
+    pageLedger!.record({
+      kind: "trash",
+      chatId: chat.id,
+      workspaceId,
+      workspaceRoot: real,
+      appRoot,
+      route: frame.route ?? "/",
+      file,
+      bytes: bytes.bytes,
+      mode: bytes.mode,
+      digest: pageDigest(bytes.bytes),
+      frameIds: removed,
+      state: "trashed",
+    });
+    return { trashed: file, route: frame.route ?? "/", removed, revision: saved.revision };
   });
 
   deps.handle("designCanvas:designSystem", async (_event, request): Promise<DesignCanvasDesignSystemResult> => {

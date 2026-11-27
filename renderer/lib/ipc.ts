@@ -379,6 +379,27 @@ import {
 import type { DesignChatView } from "../shared/design-canvas/view";
 import type { AppRouteList } from "../shared/design-canvas/app-routes";
 import type { AppDevice } from "../shared/design-canvas/app-devices";
+
+/** 3c (S95): why a page can't be copied or trashed (main's `AppPageRefusal`). */
+export type DesignAppPageRefusal =
+  | "config-router"
+  | "dynamic"
+  | "layout"
+  | "no-file"
+  | "several-files"
+  | "special-files"
+  | "relative-imports"
+  | "route-literal"
+  | "too-many"
+  | "too-large"
+  | "not-regular"
+  | "truncated"
+  | "read-only";
+
+/** 3c (S97): a page-file ledger outcome (main's `PageFileOutcome`). */
+export type DesignPageFileOutcome =
+  | { chatId: string; file: string; done: "trash" | "restore" }
+  | { chatId: string; file: string; failed: "trash" | "restore"; reason: "changed" | "exists" | "io" };
 import { invoke, onNotification } from "./ipc-bridge";
 import {
   APPROVAL_RULE_CHANNELS,
@@ -2908,6 +2929,28 @@ export const designCanvasApi = {
    */
   onDesignCanvasUpdated: (handler: (update: DesignCanvasUpdate) => void) =>
     onNotification<DesignCanvasUpdate>("designCanvas:updated", handler),
+  /**
+   * 3c (S95): the person's Duplicate page as variant: copies the page's one
+   * route file as name-vN and places it beside its set. `kept` names a copy
+   * that stayed on disk though the canvas refused, because it changed.
+   */
+  duplicateDesignAppPage: (chatId: string, request: { frameId: string }) =>
+    invoke<
+      | { placed: string; pageId: string; route: string; file: string }
+      | { error: "unavailable" | "not-found" | "locked" | "full" | "io" | DesignAppPageRefusal; kept?: string }
+    >("designCanvas:appPageVariant", chatId, request),
+  /**
+   * 3c (S96): Move page file to Trash: the page's one route file goes to the
+   * Trash and every frame of its route leaves the canvas, as one undo step.
+   */
+  trashDesignAppPage: (chatId: string, request: { frameId: string }) =>
+    invoke<
+      | { trashed: string; route: string; removed: string[]; revision: number }
+      | { error: "unavailable" | "not-found" | "locked" | "io" | DesignAppPageRefusal; restore?: "failed" }
+    >("designCanvas:appPageTrash", chatId, request),
+  /** 3c (S97): what the page-file ledger did after an undo or redo, for every chat; show only your own. */
+  onDesignPageFile: (handler: (outcome: DesignPageFileOutcome) => void) =>
+    onNotification<DesignPageFileOutcome>("designCanvas:pageFile", handler),
   /** The chat's `aiden-design://<grant>/` host for framing its workspace files. */
   getDesignCanvasGrant: (chatId: string) =>
     invoke<{ grant: string } | { error: "unavailable" }>("designCanvas:grant", chatId),

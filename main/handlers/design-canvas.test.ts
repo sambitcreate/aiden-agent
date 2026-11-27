@@ -69,6 +69,8 @@ async function fixture(
     designMd?: Parameters<typeof registerDesignCanvasHandlers>[0]["designMd"];
     senderWindowShown?: Parameters<typeof registerDesignCanvasHandlers>[0]["senderWindowShown"];
     appFrames?: Parameters<typeof registerDesignCanvasHandlers>[0]["appFrames"];
+    workspaceAccess?: Parameters<typeof registerDesignCanvasHandlers>[0]["workspaceAccess"];
+    pageFs?: Parameters<typeof registerDesignCanvasHandlers>[0]["pageFs"];
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
@@ -164,6 +166,8 @@ async function fixture(
     },
     ...(options.designMd ? { designMd: options.designMd } : {}),
     ...(options.appFrames ? { appFrames: options.appFrames } : {}),
+    ...(options.workspaceAccess ? { workspaceAccess: options.workspaceAccess } : {}),
+    ...(options.pageFs ? { pageFs: options.pageFs } : {}),
   });
   const invokeFrom = async (event: unknown, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -1960,4 +1964,375 @@ test("3c: a chat that leaves design mode while the view is placed writes nothing
   const doc = (await store.get("chat-1", { workspaceId: "workspace-1" })).doc;
   assert.deepEqual(appFramesIn(doc).map((frame) => frame.id), ["app-1"]);
   assert.deepEqual([broadcasts.length, reported.length], [0, 0]);
+});
+
+// ── 3c (S95–S97, S99): Duplicate page as variant and Move page file to Trash ──
+
+const PLAIN_PAGE = "export default function Pricing() {\n  return <h1>Pricing</h1>;\n}\n";
+
+async function pageWorkspace(t: TestContext, files: Record<string, string | Buffer>): Promise<string> {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-page-actions-")));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (const [relative, text] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+    await fs.writeFile(path.join(root, relative), text);
+  }
+  return root;
+}
+
+async function exists(file: string): Promise<boolean> {
+  return fs.lstat(file).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** Waits for the ledger, which acts after the save's reply. */
+async function eventually(check: () => Promise<boolean>, what: string): Promise<void> {
+  for (let tries = 0; tries < 200; tries += 1) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`never happened: ${what}`);
+}
+
+async function pageFixture(
+  t: TestContext,
+  options: {
+    files: Record<string, string | Buffer>;
+    framework?: DesignAppsSnapshot["candidates"][number]["framework"] | null;
+    appRoot?: string;
+    live?: boolean;
+    trash?: boolean;
+    chats?: Record<string, DesignCanvasChat>;
+    pageFs?: Parameters<typeof registerDesignCanvasHandlers>[0]["pageFs"];
+  },
+) {
+  const workspace = await pageWorkspace(t, options.files);
+  const appRoot = options.appRoot ?? ".";
+  const trashDir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-page-trash-"));
+  t.after(() => fs.rm(trashDir, { recursive: true, force: true }));
+  const trashed: string[] = [];
+  const reported: number[] = [];
+  const outcomes: unknown[] = [];
+  const access: { permission: "full" | "ask" | "none" | "read-only" } = { permission: "full" };
+  const framework = options.framework === null ? undefined : (options.framework ?? "tanstack-router");
+  const result = await fixture(t, {
+    ...(options.chats ? { chats: options.chats } : {}),
+    roots: { "workspace-1": workspace },
+    workspaceAccess: async () => ({ root: workspace, permission: access.permission }),
+    ...(options.pageFs ? { pageFs: options.pageFs } : {}),
+    appFrames: {
+      enabled: () => options.live ?? true,
+      registry: () => null,
+      apps: {
+        snapshot: async (workspaceId) => ({
+          workspaceId,
+          target: "single",
+          apps: [],
+          candidates: [{ appRoot, ...(framework ? { framework } : {}), frameworkLabel: "TanStack Router" }],
+          chosen: [],
+        }),
+        appForOrigin: () => undefined,
+      },
+      onAppFrameAdded: (width) => reported.push(width),
+      ...(options.trash === false
+        ? {}
+        : {
+            trash: async (absolute: string) => {
+              trashed.push(absolute);
+              await fs.rename(absolute, path.join(trashDir, `${trashed.length}-${path.basename(absolute)}`));
+            },
+          }),
+      broadcastPageFile: (outcome) => outcomes.push(outcome),
+    },
+  });
+  return { ...result, workspace, trashed, reported, outcomes, access };
+}
+
+const pageApp = (overrides: Partial<DesignFrame> = {}): DesignFrame => seededApp({ x: 0, y: 0, ...overrides });
+
+/** A page fs that records every write and folder it would make, and writes nothing. */
+function refusingFs() {
+  const touched: string[] = [];
+  return {
+    touched,
+    pageFs: {
+      writeFile: async (file: string) => {
+        touched.push(`write ${file}`);
+      },
+      mkdir: async (dir: string) => {
+        touched.push(`mkdir ${dir}`);
+      },
+    },
+  };
+}
+
+test("3c: appPageVariant copies the route file and places it as a variant, as an undoable step", async (t) => {
+  const { invoke, store, workspace, broadcasts, focusSent, reported } = await pageFixture(t, {
+    files: { "src/routes/__root.tsx": "", "src/routes/pricing.tsx": PLAIN_PAGE },
+  });
+  await fs.chmod(path.join(workspace, "src/routes/pricing.tsx"), 0o600);
+  await seedFrames(store, pageApp());
+  const answer = (await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" })) as { placed: string; route: string; file: string; pageId: string };
+  assert.deepEqual([answer.route, answer.file, answer.pageId], ["/pricing-v2", "src/routes/pricing-v2.tsx", "page-1"]);
+  const copy = path.join(workspace, "src/routes/pricing-v2.tsx");
+  assert.equal(await fs.readFile(copy, "utf8"), PLAIN_PAGE, "the same bytes: a plain default export has no literal");
+  assert.equal((await fs.stat(copy)).mode & 0o777, 0o600, "and the same mode");
+  const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const variant = doc.frames.find((frame) => frame.id === answer.placed)!;
+  assert.deepEqual([variant.route, variant.label, variant.variantOf, variant.createdBy], ["/pricing-v2", "v2", "app-1", "person"]);
+  assert.equal(broadcasts[broadcasts.length - 1]?.step, `app-page-variant:${doc.revision}`);
+  assert.equal((focusSent[focusSent.length - 1]?.request as { own?: boolean }).own, true);
+  assert.deepEqual(reported, [1280]);
+
+  // A second copy of the variant is -v3, of the same root.
+  const again = (await invoke("designCanvas:appPageVariant", "chat-1", { frameId: answer.placed })) as { route: string };
+  assert.equal(again.route, "/pricing-v3");
+});
+
+test("3c: appPageVariant rewrites a TanStack createFileRoute literal and nothing else", async (t) => {
+  const source = [
+    "import { createFileRoute, Link } from '@tanstack/react-router'",
+    "",
+    "export const Route = createFileRoute('/pricing')({",
+    "  component: Pricing,",
+    "})",
+    "",
+    "function Pricing() {",
+    '  return <Link to="/pricing">Pricing</Link>',
+    "}",
+    "",
+  ].join("\n");
+  const { invoke, store, workspace } = await pageFixture(t, { files: { "src/routes/pricing.tsx": source } });
+  await seedFrames(store, pageApp());
+  assert.equal(((await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" })) as { route: string }).route, "/pricing-v2");
+  assert.equal(await fs.readFile(path.join(workspace, "src/routes/pricing-v2.tsx"), "utf8"), source.replace("createFileRoute('/pricing')", "createFileRoute('/pricing-v2')"));
+});
+
+test("3c: appPageVariant on /pricing?plan=pro places /pricing-v2?plan=pro", async (t) => {
+  const { invoke, store } = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE } });
+  await seedFrames(store, pageApp({ route: "/pricing?plan=pro" }));
+  assert.equal(((await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" })) as { route: string }).route, "/pricing-v2?plan=pro");
+});
+
+test("3c: appPageVariant skips a taken slot on EEXIST", async (t) => {
+  // A case-insensitive volume: Pricing-v2.tsx is there, so pricing-v2.tsx can't be made.
+  const { invoke, store, workspace } = await pageFixture(t, {
+    files: { "src/routes/pricing.tsx": PLAIN_PAGE },
+    pageFs: {
+      writeFile: async (file, bytes, mode) => {
+        if (path.basename(file) === "pricing-v2.tsx") throw Object.assign(new Error("exists"), { code: "EEXIST" });
+        await fs.writeFile(file, bytes, { flag: "wx", mode });
+      },
+    },
+  });
+  await seedFrames(store, pageApp());
+  const answer = (await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" })) as { route: string; file: string };
+  assert.deepEqual([answer.route, answer.file], ["/pricing-v3", "src/routes/pricing-v3.tsx"]);
+  assert.ok(await exists(path.join(workspace, "src/routes/pricing-v3.tsx")));
+});
+
+test("3c: a monorepo app copies, trashes and restores under its app root", async (t) => {
+  const { invoke, store, workspace, trashed } = await pageFixture(t, {
+    appRoot: "apps/web",
+    files: { "apps/web/src/routes/pricing.tsx": PLAIN_PAGE, "apps/web/src/routes/about.tsx": "export default () => null;\n" },
+  });
+  await seedFrames(store, pageApp({ appRoot: "apps/web" }), pageApp({ id: "about", appRoot: "apps/web", route: "/about", title: "/about", x: 2000 }));
+  const copied = (await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" })) as { file: string };
+  assert.equal(copied.file, "apps/web/src/routes/pricing-v2.tsx");
+  assert.ok(await exists(path.join(workspace, "apps/web/src/routes/pricing-v2.tsx")));
+
+  const before = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const gone = (await invoke("designCanvas:appPageTrash", "chat-1", { frameId: "about" })) as { trashed: string; revision: number };
+  assert.equal(gone.trashed, "apps/web/src/routes/about.tsx");
+  assert.deepEqual(trashed, [path.join(workspace, "apps/web/src/routes/about.tsx")]);
+  // The person's undo brings the frame back, and the ledger the file.
+  await invoke("designCanvas:save", "chat-1", before, gone.revision);
+  await eventually(() => exists(path.join(workspace, "apps/web/src/routes/about.tsx")), "the about page restored");
+  assert.equal(await exists(path.join(workspace, "src")), false, "nothing under the workspace's own src/");
+});
+
+test("3c: a locked or full canvas refuses before any file is written", async (t) => {
+  const spy = refusingFs();
+  const { invoke, store } = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE }, pageFs: spy.pageFs });
+  await seedFrames(store, pageApp({ locked: true }));
+  assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "locked" });
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      pageApp(),
+      ...Array.from({ length: DESIGN_CANVAS_LIMITS.framesPerPage - 1 }, (_, index) => ({
+        id: `f${index}`, kind: "note" as const, title: "n", text: "n", x: index * 10, y: 3000, w: 10, h: 10, pageId: "page-1", createdBy: "person" as const,
+      })),
+    ],
+  }));
+  assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "full" });
+  assert.deepEqual(spy.touched, []);
+});
+
+test("3c: a lock that appears after the write rolls the unchanged copy back, and its new folder, and answers locked", async (t) => {
+  let workspaceStore: DesignCanvasStore | undefined;
+  const { invoke, store, workspace, trashed, workspaceStore: ws } = await pageFixture(t, {
+    files: { "src/routes/pricing/route.tsx": PLAIN_PAGE },
+    pageFs: {
+      writeFile: async (file, bytes, mode) => {
+        await fs.writeFile(file, bytes, { flag: "wx", mode });
+        // The person locks the frame while the copy lands.
+        await workspaceStore!.update("workspace-1", (doc) => ({ ...doc, frames: doc.frames.map((frame) => (frame.id === "app-1" ? { ...frame, locked: true } : frame)) }));
+      },
+    },
+  });
+  workspaceStore = ws;
+  await seedFrames(store, pageApp());
+  assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "locked" });
+  assert.deepEqual(trashed, [path.join(workspace, "src/routes/pricing-v2/route.tsx")]);
+  assert.equal(await exists(path.join(workspace, "src/routes/pricing-v2")), false, "the folder it made is gone");
+});
+
+test("3c: a copy edited before the rollback is kept, and the reply says so", async (t) => {
+  let workspaceStore: DesignCanvasStore | undefined;
+  const { invoke, store, workspace, trashed, workspaceStore: ws } = await pageFixture(t, {
+    files: { "src/routes/pricing.tsx": PLAIN_PAGE },
+    pageFs: {
+      writeFile: async (file, bytes, mode) => {
+        await fs.writeFile(file, bytes, { flag: "wx", mode });
+        await fs.appendFile(file, "// edited\n");
+        await workspaceStore!.update("workspace-1", (doc) => ({ ...doc, frames: doc.frames.map((frame) => (frame.id === "app-1" ? { ...frame, locked: true } : frame)) }));
+      },
+    },
+  });
+  workspaceStore = ws;
+  await seedFrames(store, pageApp());
+  assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "locked", kept: "src/routes/pricing-v2.tsx" });
+  assert.deepEqual(trashed, []);
+  assert.ok(await exists(path.join(workspace, "src/routes/pricing-v2.tsx")));
+});
+
+test("3c: appPageVariant refuses and writes nothing", async (t) => {
+  const big = Buffer.alloc(512 * 1024 + 1, 0x20);
+  const cases: Array<{ name: string; files: Record<string, string | Buffer>; frame?: Partial<DesignFrame>; framework?: null; permission?: "none" | "read-only"; want: string }> = [
+    { name: "dynamic", files: { "src/routes/blog.$slug.tsx": PLAIN_PAGE }, frame: { route: "/blog/hello" }, want: "dynamic" },
+    { name: "layout", files: { "src/routes/blog.tsx": PLAIN_PAGE, "src/routes/blog.$slug.tsx": PLAIN_PAGE }, frame: { route: "/blog" }, want: "layout" },
+    { name: "relative-imports", files: { "src/routes/pricing/route.tsx": 'import Card from "./card";\nexport default Card;\n', "src/routes/pricing/-card.tsx": "" }, want: "relative-imports" },
+    { name: "route-literal", files: { "src/routes/pricing.tsx": "export const Route = createFileRoute('/elsewhere')({})\n" }, want: "route-literal" },
+    { name: "too-large", files: { "src/routes/pricing.tsx": big }, want: "too-large" },
+    { name: "read-only", files: { "src/routes/pricing.tsx": PLAIN_PAGE }, permission: "none", want: "read-only" },
+    { name: "config-router", files: { "src/routes/pricing.tsx": PLAIN_PAGE }, framework: null, want: "config-router" },
+    { name: "no-file", files: { "src/routes/about.tsx": PLAIN_PAGE }, want: "no-file" },
+    { name: "locked", files: { "src/routes/pricing.tsx": PLAIN_PAGE }, frame: { locked: true }, want: "locked" },
+  ];
+  for (const entry of cases) {
+    const spy = refusingFs();
+    const { invoke, store, access, reported } = await pageFixture(t, {
+      files: entry.files,
+      pageFs: spy.pageFs,
+      ...(entry.framework === null ? { framework: null } : {}),
+    });
+    if (entry.permission) access.permission = entry.permission;
+    await seedFrames(store, pageApp({ ...entry.frame, title: entry.frame?.route ?? "/pricing" }));
+    assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: entry.want }, entry.name);
+    assert.deepEqual(spy.touched, [], `${entry.name}: nothing written`);
+    assert.deepEqual(reported, [], entry.name);
+  }
+});
+
+test("3c: appPageTrash moves the single owning file to the Trash and removes its frames across the workspace", async (t) => {
+  const { invoke, store, workspace, trashed, broadcasts } = await pageFixture(t, {
+    files: { "src/routes/pricing.tsx": PLAIN_PAGE, "src/routes/about.tsx": PLAIN_PAGE },
+  });
+  await store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "page-2", name: "Two" }] }));
+  await seedFrames(store, pageApp(), pageApp({ id: "app-2", pageId: "page-2", route: "/pricing?plan=pro" }), pageApp({ id: "about", route: "/about", x: 3000 }));
+  const answer = (await invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" })) as { trashed: string; removed: string[]; revision: number; route: string };
+  assert.deepEqual([answer.trashed, answer.route, [...answer.removed].sort()], ["src/routes/pricing.tsx", "/pricing", ["app-1", "app-2"]]);
+  assert.deepEqual(trashed, [path.join(workspace, "src/routes/pricing.tsx")]);
+  const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  assert.equal(doc.revision, answer.revision);
+  assert.deepEqual(doc.frames.map((frame) => frame.id), ["about"]);
+  assert.deepEqual([...(doc.removedAppRoutes ?? [])].sort(), [appRouteKey(".", "/pricing"), appRouteKey(".", "/pricing?plan=pro")].sort());
+  assert.equal(broadcasts[broadcasts.length - 1]?.step, `app-page-trash:${answer.revision}`);
+});
+
+test("3c: appPageTrash refuses a locked frame on any page before trashing", async (t) => {
+  const { invoke, store, trashed } = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE } });
+  await store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "page-2", name: "Two" }] }));
+  await seedFrames(store, pageApp(), pageApp({ id: "app-2", pageId: "page-2", locked: true }));
+  assert.deepEqual(await invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" }), { error: "locked" });
+  assert.deepEqual(trashed, []);
+});
+
+test("3c: a failed canvas write after the Trash writes the file back", async (t) => {
+  const { invoke, store, workspace, trashed, workspaceStore } = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE } });
+  await seedFrames(store, pageApp());
+  const internals = workspaceStore as unknown as { write: (...args: unknown[]) => Promise<void> };
+  const write = internals.write.bind(workspaceStore);
+  internals.write = async () => {
+    throw new Error("disk full");
+  };
+  assert.deepEqual(await invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" }), { error: "io" });
+  internals.write = write;
+  assert.equal(trashed.length, 1);
+  assert.equal(await fs.readFile(path.join(workspace, "src/routes/pricing.tsx"), "utf8"), PLAIN_PAGE);
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames.map((frame) => frame.id), ["app-1"]);
+});
+
+test("3c: the Trash keeps the bytes it trashed, and re-checks the permission inside the lock", async (t) => {
+  const { invoke, store, workspace } = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE } });
+  await seedFrames(store, pageApp());
+  const before = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  // The file changes after the owner walk, before the canvas write.
+  const internals = store as unknown as { update: (...args: unknown[]) => Promise<unknown> };
+  const update = internals.update.bind(store);
+  internals.update = async (...args) => {
+    await fs.writeFile(path.join(workspace, "src/routes/pricing.tsx"), "export default () => 'changed';\n");
+    return update(...args);
+  };
+  const gone = (await invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" })) as { revision: number };
+  internals.update = update;
+  await invoke("designCanvas:save", "chat-1", before, gone.revision);
+  await eventually(() => exists(path.join(workspace, "src/routes/pricing.tsx")), "the page restored");
+  assert.equal(await fs.readFile(path.join(workspace, "src/routes/pricing.tsx"), "utf8"), "export default () => 'changed';\n");
+
+  const second = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE } });
+  await seedFrames(second.store, pageApp());
+  const secondStore = second.store as unknown as { update: (...args: unknown[]) => Promise<unknown> };
+  const original = secondStore.update.bind(second.store);
+  secondStore.update = async (...args) => {
+    second.access.permission = "none";
+    return original(...args);
+  };
+  assert.deepEqual(await second.invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" }), { error: "read-only" });
+  assert.deepEqual(second.trashed, []);
+  assert.ok(await exists(path.join(second.workspace, "src/routes/pricing.tsx")));
+});
+
+test("3c: an undo of the Trash restores the file after the save's reply; one after leaving design mode touches no file", async (t) => {
+  const { invoke, store, workspace, outcomes } = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE } });
+  await seedFrames(store, pageApp());
+  const before = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const gone = (await invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" })) as { revision: number };
+  const reply = (await invoke("designCanvas:save", "chat-1", before, gone.revision)) as { ok: boolean };
+  assert.equal(reply.ok, true);
+  await eventually(() => exists(path.join(workspace, "src/routes/pricing.tsx")), "the page restored");
+  assert.deepEqual(outcomes, [{ chatId: "chat-1", file: "src/routes/pricing.tsx", done: "restore" }]);
+
+  const chats: Record<string, DesignCanvasChat> = { "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true } };
+  const other = await pageFixture(t, { chats, files: { "src/routes/pricing.tsx": PLAIN_PAGE } });
+  await seedFrames(other.store, pageApp());
+  const kept = (await other.invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const trashedNow = (await other.invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" })) as { revision: number };
+  chats["chat-1"] = { id: "chat-1", workspaceId: "workspace-1" };
+  assert.equal(((await other.invoke("designCanvas:save", "chat-1", kept, trashedNow.revision)) as { ok: boolean }).ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await exists(path.join(other.workspace, "src/routes/pricing.tsx")), false);
+  assert.deepEqual(other.outcomes, []);
+});
+
+test("3c: with the live flag off or no Trash, both page-file actions answer unavailable", async (t) => {
+  for (const options of [{ live: false }, { trash: false }]) {
+    const { invoke, store } = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE }, ...options });
+    await seedFrames(store, pageApp());
+    assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "unavailable" });
+    assert.deepEqual(await invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" }), { error: "unavailable" });
+  }
 });
