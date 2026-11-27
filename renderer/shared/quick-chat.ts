@@ -16,10 +16,6 @@ export type QuickChatDefaultPersistence =
 
 export type QuickChatOpenSource = "hotkey" | "command";
 
-export interface QuickChatOpenedPayload {
-  source: QuickChatOpenSource;
-}
-
 export type QuickChatHandoffCompletePayload =
   | { kind: "draft" }
   | { kind: "chat"; chatId: string };

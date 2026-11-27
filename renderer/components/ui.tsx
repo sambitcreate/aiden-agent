@@ -511,11 +511,6 @@ export function useSplitViewCollapsedHeaderInset(): number | undefined {
   return React.useContext(SplitContext)?.collapsed === true ? collapsedHeaderInset(chrome) : undefined;
 }
 
-/** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
-export function useSplitViewCollapsed(): boolean {
-  return React.useContext(SplitContext)?.collapsed === true;
-}
-
 /**
  * The leading sidebar's collapsed state and a setter that persists like the
  * toggle does, for layouts that collapse it for room. Null outside a SplitView.
@@ -2139,10 +2134,6 @@ export const DropdownMenuRadioItem = React.forwardRef<
     </DropdownMenuPrimitive.RadioItem>
   );
 });
-
-export const CustomDropdownMenu = DropdownMenu;
-export const CustomDropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
-export const CustomDropdownMenuContent = DropdownMenuContent;
 
 export function Popover(props: React.ComponentProps<typeof PopoverPrimitive.Root>) {
   return <PopoverPrimitive.Root {...props} {...useRootLayer(props, "popover")} />;

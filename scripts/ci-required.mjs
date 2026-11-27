@@ -150,8 +150,6 @@ export function evaluateRequiredGate(needs, changes) {
   };
 }
 
-export const aggregateRequiredGate = evaluateRequiredGate;
-
 function outputLines(result) {
   const status = result.ok ? "success" : "failure";
   const summary = `CI required gate ${status} (${result.failures.length} failing checks; ${result.checkedCount} required jobs checked).`;

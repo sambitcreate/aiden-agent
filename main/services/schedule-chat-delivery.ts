@@ -360,5 +360,3 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
 
   return { deliverTaskRunToChat, recordInLandingChat, budget };
 }
-
-export type TaskRunChatDelivery = ReturnType<typeof createTaskRunChatDelivery>;

@@ -749,5 +749,3 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
 
 const DECLINED_BEFORE =
   "The person declined a routine like this recently. Don't suggest it again on your own; if they asked for it, propose it again with requested set to true.";
-
-export type BotRoutineProposalService = ReturnType<typeof createBotRoutineProposalService>;

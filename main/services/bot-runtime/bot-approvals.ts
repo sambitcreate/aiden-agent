@@ -7,7 +7,6 @@ import { ToolApprovalCoordinator, type ToolApprovalOutcome } from "../tool-appro
 import type { BotApprovalDecision, BotApprovalOwner, BotApprovalRequest, BotAllowListRelease } from "./bot-extension.js";
 
 export type BotApprovalDecisionSource = BotApprovalDecision["source"];
-export type BotApprovalRequestOutcome = BotApprovalDecision;
 export interface BotApprovalPrompt {
   owner?: BotApprovalOwner;
   decisionSource?: BotApprovalDecisionSource;

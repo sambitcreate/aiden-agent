@@ -141,11 +141,6 @@ export class AidenMcpToolRunner {
     this.tools = this.defineTools();
   }
 
-  /** The level of a tool, or undefined for a name Aiden does not offer. */
-  levelOf(name: string): AidenMcpToolLevel | undefined {
-    return this.tools.find((tool) => tool.name === name)?.level;
-  }
-
   /** The tools this app may call. A Read app is never shown a write tool. */
   list(app: AidenMcpApp): Tool[] {
     return this.tools

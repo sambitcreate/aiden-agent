@@ -30,7 +30,3 @@ export function createTelegramBotBindingAuthorityNarrower(
     },
   });
 }
-
-export type TelegramBotBindingAuthorityNarrower = ReturnType<
-  typeof createTelegramBotBindingAuthorityNarrower
->;

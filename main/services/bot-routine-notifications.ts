@@ -108,5 +108,3 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
     },
   };
 }
-
-export type BotNotificationFeed = ReturnType<typeof createBotNotificationFeed>;

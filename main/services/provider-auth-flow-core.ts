@@ -28,7 +28,6 @@ const SAFE_ERROR_NAMES = new Set([
 ]);
 
 export type ProviderAuthPromptType = AuthPrompt["type"];
-export type ProviderAuthEventType = AuthEvent["type"];
 
 export interface ProviderAuthSelectOptionDto {
   id: string;

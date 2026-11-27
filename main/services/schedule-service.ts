@@ -32,4 +32,3 @@ export function createScheduleService(
 }
 
 export const scheduleService = createScheduleService();
-export type ScheduleService = ReturnType<typeof createScheduleService>;

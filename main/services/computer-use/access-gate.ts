@@ -306,10 +306,6 @@ export function createComputerUseAccessGate(
   };
 }
 
-export type ComputerUseAccessGate = ReturnType<
-  typeof createComputerUseAccessGate
->;
-
 /**
  * In a chat with Computer Use access, run an input action without its own
  * card. approvalFor still binds the grant to the exact target and enforces the

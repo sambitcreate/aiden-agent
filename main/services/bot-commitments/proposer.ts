@@ -112,5 +112,3 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
     },
   };
 }
-
-export type BotCommitmentProposer = ReturnType<typeof createBotCommitmentProposer>;

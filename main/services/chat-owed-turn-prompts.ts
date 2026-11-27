@@ -205,8 +205,6 @@ export function createOwedTurnPrompts(deps: OwedTurnPromptsDeps) {
   };
 }
 
-export type OwedTurnPrompts = ReturnType<typeof createOwedTurnPrompts>;
-
 export interface PromptLifetimeDeps {
   now(): number;
   setTimer(callback: () => void, ms: number): unknown;

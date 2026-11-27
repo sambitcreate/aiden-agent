@@ -134,10 +134,6 @@ export class AcpConnection {
     });
   }
 
-  setHandlers(handlers: AcpClientHandlers): void {
-    this.handlers = handlers;
-  }
-
   initialize(signal?: AbortSignal): Promise<InitializeResponse> {
     return this.request(
       () =>

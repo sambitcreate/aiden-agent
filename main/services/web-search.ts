@@ -242,11 +242,6 @@ export class WebSearchService {
     });
   }
 
-  /** Compatibility alias for consumers that call the projection readiness. */
-  async readiness(): Promise<WebSearchAvailability> {
-    return this.availability();
-  }
-
   /** Build one generation-scoped tool, or omit it when Web Search is disabled. */
   async toolForGeneration(): Promise<AgentTool | undefined> {
     let prepared: PreparedGeneration;

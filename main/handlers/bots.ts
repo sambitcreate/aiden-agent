@@ -129,7 +129,7 @@ export function registerBotHandlers(): void {
   );
   const desktopAudienceId = BOT_DESKTOP_AUDIENCE_ID;
   registerBotAccessHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     service: botApplicationService,
     desktopAudienceId,
     documentOwner: (event) =>
@@ -170,7 +170,7 @@ export function registerBotHandlers(): void {
   });
   // Pause / Resume (plan §7): the pause is the Mac's, and survives a restart.
   registerBotPauseHandlers({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     runtime: botSessionRuntime,
     getBot: (botId) => botApplicationService.get(botId),
   });
@@ -231,7 +231,7 @@ export function registerBotHandlers(): void {
     ipcMain.broadcast("bots:changed", { botId });
   });
   const botLive = registerBotLiveHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     owner: (event) => {
       const owner = rendererDocumentOwner(event, () => new Error("Bot chats require the active application document."));
       return {
@@ -264,9 +264,9 @@ export function registerBotHandlers(): void {
   // A Bot message that arrives while its chat is in front of the person pings nothing.
   setBotChatInFrontProbe((botId) => botLive.shownInFront(botId));
   // Bot tool approvals: any desktop window may answer; the first answer wins.
-  registerBotApprovalDecisionHandler({ handle: (channel, handler) => handle(channel, handler), approvals: botApprovals });
+  registerBotApprovalDecisionHandler({ handle, approvals: botApprovals });
   registerBotAllowedHandlers({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     allowed: botAllowList,
     onChange: listener => botAllowList.onChange(listener),
     botExists: botExistsIn(botApplicationService),
@@ -274,13 +274,13 @@ export function registerBotHandlers(): void {
   });
   handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)).map(publicBotApprovalPrompt));
   // Bot quick-reply questions: any desktop window may answer; the first answer wins.
-  registerBotQuestionHandlers({ handle: (channel, handler) => handle(channel, handler), questions: botQuestions });
+  registerBotQuestionHandlers({ handle, questions: botQuestions });
   // Access decisions go through the host authorizer; no renderer grants access.
-  registerBotAccessRequestHandlers({ handle: (channel, handler) => handle(channel, handler), answer: answerBotAccessRequest });
-  registerBotPlanHandlers({ handle: (channel, handler) => handle(channel, handler), plans: botPlans });
+  registerBotAccessRequestHandlers({ handle, answer: answerBotAccessRequest });
+  registerBotPlanHandlers({ handle, plans: botPlans });
   // Bot hand-off cards: any desktop window may answer; the first answer wins. Open needs the app's own document.
   registerBotHandoffHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     handoffs: botHandoffs,
     open: async (botId, waitId, event) => {
       const owner = rendererDocumentOwner(event, () => new Error("Opening a hand-off requires the active application document."));
@@ -290,39 +290,39 @@ export function registerBotHandlers(): void {
   });
   // "Needs you" issues: the card's actions and the Bot's open list.
   registerBotIssueHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     issues: botIssues,
   });
   registerBotConnectorWatchHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     owner: (event) => rendererDocumentOwner(event, () => new Error("This watch request came from an inactive renderer.")),
     service: async () => (await import("../services/bot-routine-events/sources-main.js")).botConnectorWatches,
   });
   registerBotOpenWorkHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     owner: (event) => rendererDocumentOwner(event, () => new Error("This Open work request came from an inactive application document.")),
     service: async () => (await import("../services/bot-open-work/service-main.js")).botOpenWork,
   });
   registerBotPendingChangeCleanup<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     owner: (event) => rendererDocumentOwner(event, () => new Error("Saved changes belong to the active application document.")),
     initialize: () => botApplicationService.initialize(),
     storedIds: async () => (await import("../services/bot-store.js")).botStore.storedIds(),
     absentAuthorities: async (ids) => (await import("../services/bot-capability-services-main.js")).botCapabilityStore.absentBotAuthorities(ids),
   });
   registerBotRoutineModels<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     owner: (event) => rendererDocumentOwner(event, () => new Error("This model request came from an inactive application document.")),
     service: async () => ({ ...(await import("../services/bot-routine-models-main.js")).botRoutineModels, resumeStatus: async (botId: string) => (await botSessionRuntime()).executionResumeStatus(botId) }),
   });
   registerBotPeerHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     owner: (event) => rendererDocumentOwner(event, () => new Error("This Bot messaging request came from an inactive application document.")),
     service: async () => (await import("../services/bot-peers/service-main.js")).botPeers,
   });
   // Profile → When something happens: event routines and their links.
   registerBotEventRoutineHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     store: {
       list: async (botId) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.list(botId).then((rows) => rows.filter((row) => !row.connector)),
       create: async (botId, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.create(botId, input),
@@ -359,7 +359,7 @@ export function registerBotHandlers(): void {
   // Profile → What I've learned, and the chat's lesson cards and Undo lines.
   const learning = () => import("../services/bot-learning/learning-main.js");
   registerBotLearningHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     overview: async (botId) => (await learning()).botLearningOverview(botId),
     undo: async (botId, changeId) => (await learning()).undoBotLearning(botId, changeId),
     undoLesson: async (botId, lessonId) => {
@@ -372,7 +372,7 @@ export function registerBotHandlers(): void {
   });
   // Profile → Health: the newest check, and Check now.
   registerBotHealthHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     report: (botId) => botHealthReports.get(botId),
     check: async (botId) => (await import("../services/bot-health/health-main.js")).checkBotHealth(botId, "manual"),
   });
@@ -380,26 +380,26 @@ export function registerBotHandlers(): void {
   const botExists = botExistsIn(botApplicationService);
   // Profile → Memory: view, edit, delete and erase what the Bot remembers.
   registerBotMemoryHandlers({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     memory: botMemoryService,
     botExists,
   });
   // Profile → Rules: what the Bot must ask about or hand to the person.
   registerBotRuleHandlers({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     rules: botRules,
     botExists,
   });
   // Read-only Files: the Bot's own folder.
   registerBotFileHandlers({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     homePath: async (botId) => (await botApplicationService.resolveManagedWorkspace(botId)).homePath,
     list: listWorkspaceFiles,
     read: readWorkspaceFile,
   });
   // The Bot's own browser, watched and driven in its panel's Browser tab.
   registerBotBrowserHandlers({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     workspace: botBrowserWorkspace,
   });
   handle("bots:delete", async (_event, id: unknown) => {
@@ -416,7 +416,7 @@ export function registerBotHandlers(): void {
     return updated;
   });
   registerBotTelegramHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => handle(channel, handler),
+    handle,
     service: botApplicationService,
     telegram: {
       listProfiles: () => telegramService.listProfiles(),

@@ -340,5 +340,3 @@ export function createTaskLinkWebhook(deps: TaskLinkWebhookDependencies) {
     },
   };
 }
-
-export type TaskLinkWebhook = ReturnType<typeof createTaskLinkWebhook>;

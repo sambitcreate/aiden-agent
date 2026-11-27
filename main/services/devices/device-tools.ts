@@ -149,7 +149,6 @@ export function pngDimensions(png: Uint8Array): { width: number; height: number 
   return isPng ? { width: view.getUint32(16), height: view.getUint32(20) } : { width: 0, height: 0 };
 }
 
-/** Picks the explicit device, else a booted one, else the first listed. */
 /**
  * Picks the explicit device, else a booted one, else the first listed.
  * Without an id, a host with both platforms needs `platform`.

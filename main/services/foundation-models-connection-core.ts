@@ -406,9 +406,5 @@ export function createFoundationModelsConnection(deps: ConnectionDependencies) {
       }
       return title;
     },
-
-    clearStatus(): void {
-      cachedStatus = null;
-    },
   };
 }

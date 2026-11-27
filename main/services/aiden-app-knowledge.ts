@@ -83,4 +83,3 @@ export function aidenAppGuidance(tools?: ReadonlySet<string>): string {
   );
   return parts.join(" ");
 }
-export const AIDEN_APP_GUIDANCE = aidenAppGuidance();

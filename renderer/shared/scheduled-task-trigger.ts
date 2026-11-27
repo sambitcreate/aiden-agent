@@ -69,8 +69,6 @@ export const TASK_CONNECTOR_NEEDS_SOURCE = "Needs its source: open the task, cho
 
 export type ScheduledTaskTrigger = ScheduledTaskWatchTrigger | ScheduledTaskLinkTrigger | ScheduledTaskConnectorTrigger;
 
-export type ScheduledTaskTriggerKind = ScheduledTaskTrigger["kind"];
-
 /** Per-task limits for trigger runs, and the overall cap on trigger runs at once. */
 export const SCHEDULED_TASK_TRIGGER_LIMITS = {
   /** At most one run every 5 minutes per task. */

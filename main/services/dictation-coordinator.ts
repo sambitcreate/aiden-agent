@@ -451,11 +451,6 @@ export class DictationCoordinator {
     if (!this.pillReady) this.replayOnReady = { state: "error", operationId, message };
   }
 
-  /** Backward-compatible alias for press(). */
-  toggle(): Promise<void> {
-    return this.press();
-  }
-
   /** Hold-to-talk key-up, with a short grace so OS repeats do not cut capture. */
   release(expectedOperationId?: string | null): Promise<void> {
     const releasedAt = this.now();

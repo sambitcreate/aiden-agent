@@ -168,5 +168,3 @@ export function createTranscribeCppEngine(deps: TranscribeCppEngineDeps) {
     },
   };
 }
-
-export type TranscribeCppEngine = ReturnType<typeof createTranscribeCppEngine>;

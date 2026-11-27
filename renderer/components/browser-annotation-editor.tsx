@@ -98,7 +98,7 @@ export function BrowserAnnotationEditor({ snapshot, initial, pending, onCancel, 
       <Button size="small" variant="transparent" iconOnly aria-label="Cancel annotation" onClick={onCancel}><X /></Button>
     </div>
     <div className="browser-annotation-canvas">
-      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} aria-label="Browser page annotation canvas" role="img" style={{ aspectRatio: `${width} / ${height}`, cursor: mode === "element" ? "crosshair" : "crosshair" }} onPointerDown={(event) => {
+      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} aria-label="Browser page annotation canvas" role="img" style={{ aspectRatio: `${width} / ${height}`, cursor: "crosshair" }} onPointerDown={(event) => {
         if (event.button !== 0 || pending) return;
         event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
         const current = point(event); startRef.current = current;

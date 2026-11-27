@@ -294,8 +294,6 @@ export interface PiRuntimeSessionBinding {
    */
   beforeQueuedUser?: (message: AgentMessage, signal: AbortSignal) => Promise<string>;
   signal?: AbortSignal;
-  /** Foreground continue() does not emit its already-journaled user tail. */
-  journalUserMessages?: boolean;
   onJournalError?: (error: unknown) => void;
   /**
    * Section keys of system patches the host adds between model steps that
@@ -1909,11 +1907,6 @@ export class PiAgentRuntimeHarness {
 
   getContributionRevision(): number {
     return this.contributionRevision;
-  }
-
-  observeRuntime(observer: PiRuntimeEventObserver): () => void {
-    if (!this.runtimeEvents) throw new Error("Pi runtime canonical events are not configured.");
-    return this.runtimeEvents.observe(observer);
   }
 
   runtimeEventState(): PiRuntimeEventState | undefined {

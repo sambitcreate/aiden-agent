@@ -53,17 +53,12 @@ export type WebSearchCredentialKind =
   | "endpoint-and-api-key"
   | "api-key-and-zone";
 
-/** Short aliases retained for adapter/contract callers that use the plan's names. */
-export type CredentialKind = WebSearchCredentialKind;
-
 export type WebSearchCostClass =
   | "built-in-free"
   | "provider-free"
   | "quota"
   | "paid"
   | "self-hosted";
-
-export type CostClass = WebSearchCostClass;
 
 export type WebSearchCapability =
   | "search"
@@ -74,13 +69,6 @@ export type WebSearchCapability =
   | "self-hosted";
 
 export type WebSearchReleaseState = "shipped" | "experimental" | "blocked";
-
-/**
- * Main-owned adapter factories are intentionally represented as an opaque
- * type here.  The core registry never stores or exposes a callable factory;
- * the main-only registry can intersect this metadata with its adapter map.
- */
-export type MainOnlyAdapterFactory = (...args: never[]) => unknown;
 
 /** Immutable metadata shared by main and renderer code. */
 export interface WebSearchProviderDefinition {
@@ -1216,9 +1204,6 @@ export interface WebSearchFreshnessEvidence {
 export interface WebSearchMigrationInput extends WebSearchFreshnessEvidence {
   /** Direct legacy field accepted for convenient config-store migration. */
   exaEnabled?: unknown;
-  /** Legacy settings envelope, when the caller has not flattened it. */
-  legacySettings?: { exaEnabled?: unknown } | null;
-  legacy?: { exaEnabled?: unknown } | null;
   /** Already-migrated v2 document, accepted for idempotent startup migration. */
   settings?: unknown;
   webSearch?: unknown;
@@ -1269,9 +1254,7 @@ export function classifyWebSearchProfile(
 }
 
 function readLegacyExaEnabled(input: WebSearchMigrationInput): boolean | undefined {
-  const candidates = [input.exaEnabled, input.legacySettings?.exaEnabled, input.legacy?.exaEnabled];
-  const value = candidates.find((candidate) => candidate !== undefined);
-  return value === true || value === false ? value : undefined;
+  return input.exaEnabled === true || input.exaEnabled === false ? input.exaEnabled : undefined;
 }
 
 function legacyMigrationSettings(

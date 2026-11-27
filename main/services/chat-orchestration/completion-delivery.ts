@@ -79,10 +79,6 @@ export class ChildChatCompletions {
     this.quiet.delete(leadChatId);
   }
 
-  isQuiet(leadChatId: string): boolean {
-    return this.quiet.has(leadChatId);
-  }
-
   /**
    * At startup: endings recorded as owed whose notice never went out (Aiden
    * quit inside the 10-second group, before an idle lead woke, or a notice

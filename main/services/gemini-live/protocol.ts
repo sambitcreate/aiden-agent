@@ -685,11 +685,6 @@ export class GeminiLiveProtocol {
     );
   }
 
-  endAudio(): void {
-    this.requireOpenAndSeeded();
-    this.dispatch(() => this.wire!.sendRealtimeInput({ audioStreamEnd: true }));
-  }
-
   sendJpeg(frame: Uint8Array): "queued" | "replaced" | "sent" {
     this.requireOpenAndSeeded();
     if (!(frame instanceof Uint8Array) || !validJpeg(frame)) {

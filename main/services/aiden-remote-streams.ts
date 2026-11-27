@@ -1568,23 +1568,6 @@ export class AidenRemoteStreamService {
     return approval ? projectPhoneStreamApproval(approval, options) : null;
   }
 
-  approvalChatId(deviceId: string, approvalId: string): string {
-    this.prune();
-    const approval = this.approvals.get(approvalId);
-    if (
-      !approval ||
-      approval.deviceId !== deviceId ||
-      approval.expiresAt <= this.options.now()
-    ) {
-      throw new AidenRemoteServiceError(
-        "approval_expired",
-        "This approval is no longer available.",
-        409,
-      );
-    }
-    return approval.chatId;
-  }
-
   approvalRequiredCapability(
     deviceId: string,
     approvalId: string,

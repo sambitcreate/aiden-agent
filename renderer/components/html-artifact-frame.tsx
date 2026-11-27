@@ -638,22 +638,3 @@ function HtmlArtifactDraftFrameImpl({
 }
 
 export const HtmlArtifactDraftFrame = React.memo(HtmlArtifactDraftFrameImpl);
-
-function HtmlArtifactListImpl({
-  chatId,
-  artifacts,
-}: {
-  chatId: string;
-  artifacts: readonly ChatHtmlArtifactV1[];
-}) {
-  if (artifacts.length === 0) return null;
-  return (
-    <div className="flex min-w-0 flex-col gap-3">
-      {artifacts.map((artifact) => (
-        <HtmlArtifactFrame key={artifact.mediaId} chatId={chatId} artifact={artifact} />
-      ))}
-    </div>
-  );
-}
-
-export const HtmlArtifactList = React.memo(HtmlArtifactListImpl);

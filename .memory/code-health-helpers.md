@@ -23,5 +23,5 @@ Branch `refactor/code-health-helpers` (2026-10). Audit findings MAIN-39 (dead co
 - The remaining local `isRecord` copies outside web search.
 
 ## Dead code (MAIN-39)
-Removed unused exports with `npx knip` (not a dependency), checking imports, build scripts, IPC, preload, the CLI and `scripts/`. Kept on purpose: `parseAidenRemotePendingQuestionResponse` (protocol), `FORM_FILL_CONTEXT_BYTES`/`FORM_FILL_OPTION_BYTES` (Swift contract), `subagentBackgroundEnabled` (rollback flag), pi-vcc vendor, durable-jobs, and files owned by in-flight branches.
+Removed unused exports with `npx knip` (not a dependency), checking imports, build scripts, IPC, preload, the CLI and `scripts/`. Kept on purpose: `parseAidenRemotePendingQuestionResponse` (protocol), `subagentBackgroundEnabled` (rollback flag), pi-vcc vendor, durable-jobs, and files owned by in-flight branches. The unread `FORM_FILL_CONTEXT_BYTES`/`FORM_FILL_OPTION_BYTES` mirrors were later deleted in the 2026-11 dead-code sweep; the 224/96-byte bounds live only in `native/cua-s1-forms` `Encoding.swift`.
 Orphan tests: `background-subagent-coordinator-v2.test.ts` registered; `scripts/subagent-inference-worker-smoke.test.mjs` given the standalone `test:subagent-worker-smoke` script (needs a build and Electron).

@@ -895,7 +895,3 @@ export function createForegroundSubagentPersistenceV2(
     },
   };
 }
-
-export type ForegroundSubagentPersistenceV2 = ReturnType<
-  typeof createForegroundSubagentPersistenceV2
->;

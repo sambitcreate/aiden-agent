@@ -429,12 +429,6 @@ export function chatHeadEntry(head: ChatTurnState): { customType: string; data: 
   return { customType: CHAT_HEAD_STATE_ENTRY, data: { state: chatStateRecord(head) } };
 }
 
-/** Journal the state a new head was built from. */
-export async function recordChatHead(journal: Pick<PiSessionPort, "appendCustomEntry">, head: ChatTurnState): Promise<void> {
-  const entry = chatHeadEntry(head);
-  await journal.appendCustomEntry(entry.customType, entry.data);
-}
-
 /**
  * Where this turn journals its head entry. With a prompt, the entry goes in
  * the same append as the prompt and its update (`withPrompt`), so a retried

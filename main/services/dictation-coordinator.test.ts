@@ -46,8 +46,8 @@ function harness(overrides: Partial<DictationCoordinatorDeps> = {}) {
 test("a second toggle press during cold pill startup is latched as stop", async () => {
   const shown = deferred<boolean>();
   const subject = harness({ showPill: () => shown.promise });
-  const first = subject.coordinator.toggle();
-  const second = subject.coordinator.toggle();
+  const first = subject.coordinator.press();
+  const second = subject.coordinator.press();
   shown.resolve(true);
   await Promise.all([first, second]);
   assert.equal(subject.coordinator.currentStage, "starting");
@@ -63,7 +63,7 @@ test("a second toggle press during cold pill startup is latched as stop", async 
 
 test("duplicate pill ready messages start one recorder only", async () => {
   const subject = harness();
-  await subject.coordinator.toggle();
+  await subject.coordinator.press();
   await Promise.all([subject.coordinator.ready(), subject.coordinator.ready()]);
   assert.equal(subject.coordinator.currentStage, "recording");
   assert.deepEqual(
@@ -82,11 +82,11 @@ test("a new hotkey waits for transcript delivery before starting another recordi
     },
   });
   await subject.coordinator.ready();
-  await subject.coordinator.toggle();
-  await subject.coordinator.toggle();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
   const operationId = subject.coordinator.currentOperationId!;
   const result = subject.coordinator.result("first", operationId);
-  const next = subject.coordinator.toggle();
+  const next = subject.coordinator.press();
   await pasteStarted.promise;
   assert.equal(subject.coordinator.currentStage, "delivering");
   delivered.resolve("pasted");
@@ -101,10 +101,10 @@ test("a new hotkey waits for transcript delivery before starting another recordi
 test("a hotkey cancels a stuck transcription and ignores its late result", async () => {
   const subject = harness();
   await subject.coordinator.ready();
-  await subject.coordinator.toggle();
-  await subject.coordinator.toggle();
+  await subject.coordinator.press();
+  await subject.coordinator.press();
   const operationId = subject.coordinator.currentOperationId!;
-  await subject.coordinator.toggle();
+  await subject.coordinator.press();
   await subject.coordinator.result("late transcript", operationId);
   assert.deepEqual(
     subject.events.map((event) => event.state),
@@ -908,8 +908,8 @@ test("a dictation that reached the text field counts once by its engine, and a d
     const voice = { kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true } as const;
     const subject = harness({ resolveVoice: async () => ({ ok: true, voice }) });
     await subject.coordinator.ready();
-    await subject.coordinator.toggle();
-    await subject.coordinator.toggle();
+    await subject.coordinator.press();
+    await subject.coordinator.press();
     await subject.coordinator.result(text, subject.coordinator.currentOperationId!);
   };
   await dictate("   ");

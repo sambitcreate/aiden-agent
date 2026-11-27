@@ -23,13 +23,6 @@ import { subagentPanelOwnerKey } from "../lib/subagent-panel-state";
 import { mergeSubagentTranscript } from "../shared/subagent-transcript";
 import { useNow } from "../lib/use-now";
 
-/** Whether this chat's helper chat fills the main pane right now. */
-export function useExpandedSubagentHelperChat(chatId: string | null | undefined): boolean {
-  return useSubagentHelperChatSelector((state) =>
-    Boolean(chatId && state.chatId === chatId && state.expandedRunId),
-  );
-}
-
 function insideOpenLayer(target: EventTarget | null): boolean {
   return (
     target instanceof Element && target.closest('[role="menu"], [role="dialog"], [role="listbox"]') !== null

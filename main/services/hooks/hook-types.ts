@@ -89,8 +89,6 @@ export interface HookMatcherGroup {
   hooks: HookCommandHandler[];
 }
 
-export type HooksConfig = Partial<Record<HookEvent, HookMatcherGroup[]>>;
-
 /** One hook after parsing: a single handler with its event, matcher and scope. */
 export interface HookDefinition {
   /** Stable id: `${scopeKey}:${event}:${index}` style, stable across reloads of the same file. */

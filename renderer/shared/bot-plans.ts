@@ -8,13 +8,6 @@ export const BOT_PLAN_ENDED_SHOWN_MS = 1_800_000;
 export const BOT_PLAN_LIMITS = { titleChars: 80, whyChars: 300, steps: 10, stepChars: 200, covers: 8,
   actionChars: 60, toolsPerItem: 5, defaultMax: 10, maxCeiling: 25 } as const;
 
-export type BotPlanCoverInput =
-  | { connector: string; action: string; tools: string[]; max?: number }
-  | { site: string; action: "browse"; max?: number }
-  | { files: string; action: "read" | "write" }
-  | { shell: "bot_home" }
-  | { rule: string; max?: number };
-
 export type BotPlanItem =
   | { id: string; kind: "connector"; app: string; action: string; tools: { modelName: string; serverId: string; remoteName: string; title: string }[]; max: number }
   | { id: string; kind: "site"; host: string; max: number }

@@ -1043,7 +1043,6 @@ export function FloatingChatApp() {
   return (
     <div
       className="flex h-screen w-screen flex-col items-center justify-end bg-transparent px-14 pt-10 pb-[68px]"
-      data-testid="quick-chat-stage-modal"
     >
       <div
         className="qc-modal-card flex h-full w-full flex-col overflow-hidden rounded-sheet bg-background shadow-dialog"
@@ -1062,7 +1061,6 @@ export function FloatingChatApp() {
               aria-label="Hide Quick Chat"
               title="Hide (Esc)"
               onClick={() => void quickChatApi.hide().catch(() => undefined)}
-              data-testid="quick-chat-close-btn"
             >
               <X className="size-4" />
             </Button>
@@ -1105,7 +1103,6 @@ export function FloatingChatApp() {
                     align="center"
                     sideOffset={8}
                     className="w-60"
-                    data-testid="quick-chat-status-menu"
                   >
                     <div className="px-2.5 py-1.5">
                       <Text variant="small-strong" className="block truncate">
@@ -1177,7 +1174,6 @@ export function FloatingChatApp() {
               aria-label="New quick chat"
               title="New quick chat"
               onClick={() => void handleNewChat()}
-              data-testid="quick-chat-new-btn"
             >
               <SquarePen className="size-3.5" />
             </Button>

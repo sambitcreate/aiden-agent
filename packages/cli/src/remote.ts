@@ -28,7 +28,7 @@ import type { createDaemonChats } from "./daemon-chats.ts";
 import type { createCliScheduler } from "./schedules.ts";
 import { createCliSpeech } from "./speech.ts";
 import { createCliRemoteChats } from "./remote-chats.ts";
-import { tailscaleSetupMessage, withTailscaleSetupMessage } from "./tailscale-setup-message.ts";
+import { withTailscaleSetupMessage } from "./tailscale-setup-message.ts";
 import { revokeAidenRemoteRuntimeDevice } from "../../../main/services/aiden-remote-revocation.js";
 import { revokeBotNoticeAudience, type BotNoticeRevokePolicy } from "../../../main/services/bot-capability-store-core.js";
 import { AidenRemoteScheduleService } from "../../../main/services/aiden-remote-schedules.js";
@@ -106,8 +106,6 @@ export function bonjourPublisher(retryMs = BONJOUR_RETRY_MS, platform: NodeJS.Pl
     },
   };
 }
-
-export { tailscaleSetupMessage };
 
 type TailscaleTransportService = Pick<AidenRemoteService, "status" | "setConnectionMode" | "connectTailscale">;
 type TailscalePairingService = TailscaleTransportService & Pick<AidenRemoteService, "beginPairing">;

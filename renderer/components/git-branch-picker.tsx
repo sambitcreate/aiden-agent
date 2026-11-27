@@ -13,9 +13,9 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CustomDropdownMenu,
-  CustomDropdownMenuContent,
-  CustomDropdownMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
   Input,
   CommandSeparator,
   Text,
@@ -289,7 +289,7 @@ export function GitBranchPicker({
   const creatingLabel = createMode === "worktree" ? "Creating workspace…" : "Creating branch…";
 
   return (
-    <CustomDropdownMenu
+    <DropdownMenu
       open={open}
       onOpenChange={(nextOpen) => {
         if (disabled && nextOpen) return;
@@ -297,7 +297,7 @@ export function GitBranchPicker({
         if (!nextOpen && !busy) reset();
       }}
     >
-      <CustomDropdownMenuTrigger asChild>
+      <DropdownMenuTrigger asChild>
         {triggerVariant === "overview" ? (
           <button
             ref={triggerRef}
@@ -355,9 +355,9 @@ export function GitBranchPicker({
             ) : null}
           </Button>
         )}
-      </CustomDropdownMenuTrigger>
+      </DropdownMenuTrigger>
 
-      <CustomDropdownMenuContent
+      <DropdownMenuContent
         align="start"
         className={cn("p-0", draft ? "w-80" : "w-72")}
         onCloseAutoFocus={(event) => {
@@ -585,7 +585,7 @@ export function GitBranchPicker({
             </CommandList>
           </Command>
         )}
-      </CustomDropdownMenuContent>
-    </CustomDropdownMenu>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

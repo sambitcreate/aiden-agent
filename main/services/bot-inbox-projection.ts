@@ -565,7 +565,3 @@ export function createBotInboxProjectionService(
     },
   };
 }
-
-export type BotInboxProjectionService = ReturnType<
-  typeof createBotInboxProjectionService
->;

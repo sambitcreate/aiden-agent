@@ -12,11 +12,6 @@ import {
 } from "../../../renderer/shared/approval-mode.js";
 import type { AppSettings, Workspace } from "../types.js";
 
-export interface RunApproval {
-  mode: ApprovalMode;
-  macGrants: ReadonlySet<MacGrantClass>;
-}
-
 /**
  * The legacy access for the parts of a run that predate modes (tool lists,
  * ACP agents' native modes, subagent run grants, the system prompt). Full

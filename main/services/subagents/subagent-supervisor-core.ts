@@ -258,14 +258,6 @@ export class SubagentTranscriptRecordings {
   }
 }
 
-/** Wrap a child runner so each child's conversation is recorded and settled. */
-export function recordSubagentTranscripts(
-  runChild: (input: RunSubagentChildInput) => Promise<SubagentTaskResult>,
-  transcripts: SubagentTranscriptFactory | undefined,
-): (input: RunSubagentChildInput) => Promise<SubagentTaskResult> {
-  return transcripts ? new SubagentTranscriptRecordings(transcripts).wrap(runChild) : runChild;
-}
-
 export interface SubagentSupervisorInput {
   compactionEngine?: CompactionEngine;
   compactionModelOverrides?: CompactionModelOverrides;

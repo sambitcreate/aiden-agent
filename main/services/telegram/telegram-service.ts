@@ -92,7 +92,6 @@ import {
   type TelegramBotRoutineDelivery,
 } from "./bot-reply-outbox.js";
 import { isAcpHarnessProvider, unattendedFallbackProviderId } from "../../../renderer/shared/acp-harness.js";
-export const TELEGRAM_PROVIDER_ID = "telegram";
 
 let profileSettingsMutation = Promise.resolve();
 

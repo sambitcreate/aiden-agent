@@ -566,7 +566,6 @@ export function FloatingComposer({
               if (voice.recording) voice.stop();
               else void voice.start();
             }}
-            data-testid="quick-chat-mic-btn"
           >
             {voice.transcribing ? (
               <Loader2 className="size-3.5 animate-spin" />

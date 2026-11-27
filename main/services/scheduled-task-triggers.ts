@@ -412,5 +412,3 @@ export function createScheduledTaskTriggers(deps: ScheduledTaskTriggersDependenc
     },
   };
 }
-
-export type ScheduledTaskTriggers = ReturnType<typeof createScheduledTaskTriggers>;

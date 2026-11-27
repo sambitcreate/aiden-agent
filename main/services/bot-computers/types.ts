@@ -7,7 +7,6 @@
 
 import type { CuaDriverHostFactory } from "../computer-use/controller.js";
 import type {
-  BotComputerSetupState,
   BotComputersSettings,
   BotComputersStatus,
   BotComputerStatus,
@@ -205,5 +204,3 @@ export class BotComputerError extends Error {
     this.name = "BotComputerError";
   }
 }
-
-export type BotComputerSetupKind = BotComputerSetupState["kind"];

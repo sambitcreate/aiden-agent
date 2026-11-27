@@ -32,8 +32,6 @@ export const TELEGRAM_COMMANDS = [
   { command: "help", description: "Show Telegram agent help" },
 ] as const satisfies readonly TelegramBotCommand[];
 
-export type TelegramControlCommand = (typeof TELEGRAM_COMMANDS)[number]["command"];
-
 export interface TelegramModelChoice {
   providerId: string;
   providerLabel: string;

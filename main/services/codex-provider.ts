@@ -694,10 +694,6 @@ export class CodexProviderService {
     return model;
   }
 
-  async getAvailableModels(): Promise<readonly Model<Api>[]> {
-    return this.models.getAvailable(OPENAI_CODEX_PROVIDER_ID);
-  }
-
   /**
    * Main-owned dispatch lease for a killable provider worker. Credentials are
    * refreshed and re-read behind the same generation barrier as streamSimple;

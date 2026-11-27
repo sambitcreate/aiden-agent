@@ -164,5 +164,3 @@ export function createBotLifecycleJournal(options: FileBotLifecycleJournalOption
     now: options.now,
   });
 }
-
-export type BotLifecycleJournal = ReturnType<typeof createBotLifecycleJournal>;

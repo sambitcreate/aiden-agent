@@ -442,6 +442,3 @@ export function createEventWatches<R extends EventRoutine>(dependencies: EventWa
     resume(): void { disposed = false; },
   };
 }
-
-export type EventWatches<R extends EventRoutine> = ReturnType<typeof createEventWatches<R>>;
-export type BotWatches = EventWatches<BotEventRoutine>;

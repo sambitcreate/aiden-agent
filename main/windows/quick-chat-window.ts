@@ -52,10 +52,6 @@ export function revokeQuickChatConversation(chatId: string): void {
   authorizedQuickChatIds.delete(chatId);
 }
 
-export function isQuickChatAuthorizedConversation(chatId: string): boolean {
-  return authorizedQuickChatIds.has(chatId);
-}
-
 export function assertQuickChatConversationAccess(
   event: IpcMainInvokeEvent,
   chatId: string,
