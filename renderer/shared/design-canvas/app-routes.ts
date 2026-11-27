@@ -73,9 +73,16 @@ export function isRoutePattern(value: string): boolean {
   return isAppRoute(`/${probe.join("/")}`);
 }
 
-/** A route an app frame can show: a valid app route with no unfilled bracket. */
+/**
+ * A route an app frame can show: a valid app route with no unfilled bracket,
+ * and no `.`, `..` or empty segment in its path (the browser would resolve
+ * those to another route's URL). A trailing `/` is the page's own.
+ */
 export function isConcreteRoute(value: string): boolean {
-  return isAppRoute(value) && !value.includes("[") && !value.includes("]");
+  if (!isAppRoute(value) || value.includes("[") || value.includes("]")) return false;
+  const query = value.search(/[?#]/u);
+  const segments = (query < 0 ? value : value.slice(0, query)).slice(1).split("/");
+  return segments.every((segment, index) => (segment === "" ? index === segments.length - 1 : segment !== "." && segment !== ".."));
 }
 
 /** The parameters of a pattern, in order; `[]` for a concrete route or a non-pattern. */

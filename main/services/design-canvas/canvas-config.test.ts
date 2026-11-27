@@ -385,6 +385,11 @@ test("3b: the spec's routes and params example parses to those fields", () => {
   );
 });
 
+test("3b: routes with dot segments are dropped, so two entries can't name one URL", () => {
+  const text = JSON.stringify({ apps: [{ root: "web", routes: ["/a/../b", "/..", "/.", "/b"] }] });
+  assert.deepEqual(parseCanvasConfig(text)!.apps[0].routes, ["/b"]);
+});
+
 test("3b: bad routes and params are dropped silently and the rest of the app is kept", () => {
   const routes = ["/", "https://x", "//x", "/a/[b", ...Array.from({ length: 200 }, (_, index) => `/r${index}`)];
   const text = JSON.stringify({

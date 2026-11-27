@@ -12,6 +12,12 @@ test("a pattern is a route only once every bracket is filled", () => {
   assert.equal(isConcreteRoute("//x"), false);
 });
 
+test("a concrete route has no dot or empty segments, which would name another page's URL", () => {
+  for (const route of ["/a/../b", "/..", "/.", "/a/./b", "/a//b", "/../?x=1"]) assert.equal(isConcreteRoute(route), false, route);
+  // A trailing slash, and dots inside a segment or after `?`, are a page's own.
+  for (const route of ["/pricing/", "/v1.2/notes", "/files?path=../x", "/a?b=//c"]) assert.equal(isConcreteRoute(route), true, route);
+});
+
 test("pattern shapes: whole-segment brackets only, rooted, no empty segments", () => {
   assert.equal(isRoutePattern("/"), true);
   assert.equal(isRoutePattern("/blog/[slug]"), true);
