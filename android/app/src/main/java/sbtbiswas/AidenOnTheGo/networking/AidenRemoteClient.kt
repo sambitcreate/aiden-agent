@@ -588,19 +588,6 @@ class AidenRemoteClient(
         }
     }
 
-    suspend fun updateDeviceIdentity(name: String) {
-        val resp = executeRequest<DeviceIdentityResponse>(
-            "/device/identity",
-            method = "PATCH",
-            bodyJson = json.encodeToString(DeviceIdentityRequest(name = name))
-        ) { bytes ->
-            json.decodeFromString(String(bytes, Charsets.UTF_8))
-        }
-        if (resp.name != name) {
-            throw AidenRemoteClientException.InvalidResponse()
-        }
-    }
-
     // --- Workspaces ---
     suspend fun workspaces(): List<AidenWorkspace> = executeRequest("/workspaces") { bytes ->
         val resp = json.decodeFromString<WorkspaceListResponse>(String(bytes, Charsets.UTF_8))
@@ -2715,20 +2702,6 @@ class AidenRemoteClient(
         AidenWorkspaceEnvironmentValidation.validated(doc, fileId)
     }
 
-    suspend fun writeBotConversationFile(
-        chatId: String,
-        fileId: String,
-        content: String,
-        expectedVersion: String
-    ): AidenWorkspaceFileDocument = executeRequest(
-        "/bot-conversations/$chatId/files/$fileId",
-        method = "PUT",
-        bodyJson = json.encodeToString(AidenWorkspaceFileWriteRequest(content, expectedVersion))
-    ) { bytes ->
-        val doc = json.decodeFromString<AidenWorkspaceFileDocument>(String(bytes, Charsets.UTF_8))
-        AidenWorkspaceEnvironmentValidation.validated(doc, fileId)
-    }
-
     suspend fun putBotAvatar(
         botId: String,
         revision: String,
@@ -2836,32 +2809,6 @@ class AidenRemoteClient(
         decodeScheduledTask(bytes)
     }
 
-    suspend fun createScheduledTask(
-        mutation: AidenScheduledTaskMutation,
-        idempotencyKey: UUID = UUID.randomUUID()
-    ): AidenScheduledTask = executeRequest(
-        "/scheduled-tasks",
-        method = "POST",
-        bodyJson = json.encodeToString(mutation),
-        idempotencyKey = idempotencyKey,
-        acceptedStatus = setOf(201)
-    ) { bytes ->
-        decodeScheduledTask(bytes)
-    }
-
-    suspend fun updateScheduledTask(
-        id: String,
-        revision: String,
-        mutation: AidenScheduledTaskMutation
-    ): AidenScheduledTask = executeRequest(
-        "/scheduled-tasks/$id",
-        method = "PATCH",
-        ifMatchRevision = revision,
-        bodyJson = json.encodeToString(mutation)
-    ) { bytes ->
-        decodeScheduledTask(bytes)
-    }
-
     suspend fun removeScheduledTask(id: String, revision: String) =
         executeRequest<Unit>(
             "/scheduled-tasks/$id",
@@ -2931,44 +2878,6 @@ class AidenRemoteClient(
         }
     }
 
-    suspend fun previewSchedule(cron: String, timezone: String, count: Int = 3): List<Instant> = executeRequest(
-        "/scheduled-tasks/preview",
-        method = "POST",
-        bodyJson = json.encodeToString(ScheduledPreviewRequest(cron, timezone, count.coerceIn(1, 20)))
-    ) { bytes ->
-        val resp = json.decodeFromString<AidenScheduledPreview>(String(bytes, Charsets.UTF_8))
-        resp.dates
-    }
-
-    suspend fun scheduledScripts(workspaceId: String? = null): List<AidenScheduledScript> {
-        val query = if (workspaceId != null) "?workspaceId=$workspaceId" else ""
-        return executeRequest("/scheduled-tasks/scripts$query") { bytes ->
-            val resp = json.decodeFromString<ScheduledScriptListResponse>(String(bytes, Charsets.UTF_8))
-            resp.scripts
-        }
-    }
-
-    suspend fun scheduledMcpServers(): List<AidenScheduledMcpServer> = executeRequest("/scheduled-tasks/mcp-servers") { bytes ->
-        val resp = json.decodeFromString<ScheduledMcpServerListResponse>(String(bytes, Charsets.UTF_8))
-        resp.servers
-    }
-
-    suspend fun scheduledSettings(): AidenScheduledSettings = executeRequest("/scheduled-tasks/settings") { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
-
-    suspend fun updateScheduledSettings(
-        revision: String,
-        mutation: AidenScheduledSettingsMutation
-    ): AidenScheduledSettings = executeRequest(
-        "/scheduled-tasks/settings",
-        method = "PATCH",
-        ifMatchRevision = revision,
-        bodyJson = json.encodeToString(mutation)
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
-
     suspend fun readAloudStatus(chatId: String? = null): AidenReadAloudStatus = executeRequest(
         if (chatId == null) "/read-aloud" else "/chats/$chatId/read-aloud"
     ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
@@ -3003,11 +2912,6 @@ class AidenRemoteClient(
 
     suspend fun cancelSpeechModelDownload(modelId: String): AidenSpeechStatus = executeRequest(
         "/speech/models/$modelId/download",
-        method = "DELETE"
-    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
-
-    suspend fun deleteSpeechModel(modelId: String): AidenSpeechStatus = executeRequest(
-        "/speech/models/$modelId",
         method = "DELETE"
     ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
 
@@ -3086,8 +2990,6 @@ class AidenRemoteClient(
         AidenWorkspaceEnvironmentValidation.validated(doc, fileId)
     }
 
-    suspend fun readFile(workspaceId: String, fileId: String): AidenWorkspaceFileDocument = workspaceFile(workspaceId, fileId)
-
     suspend fun writeWorkspaceFile(
         workspaceId: String,
         fileId: String,
@@ -3102,9 +3004,6 @@ class AidenRemoteClient(
         val doc = json.decodeFromString<AidenWorkspaceFileDocument>(String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validatedSave(doc, displayPath)
     }
-
-    suspend fun writeFile(workspaceId: String, fileId: String, displayPath: String, content: String, expectedVersion: String): AidenWorkspaceFileDocument =
-        writeWorkspaceFile(workspaceId, fileId, displayPath, content, expectedVersion)
 
     suspend fun gitReview(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/review"
@@ -3232,15 +3131,6 @@ class AidenRemoteClient(
         "/workspaces/$workspaceId/git/compare",
         method = "POST",
         bodyJson = json.encodeToString(AidenGitCompareRequest(baseRef = baseRef))
-    ) { bytes ->
-        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
-        AidenWorkspaceEnvironmentValidation.validated(result)
-    }
-
-    suspend fun gitComparisonDiff(workspaceId: String, comparisonId: String, fileId: String): AidenGitResult = executeRequest(
-        "/workspaces/$workspaceId/git/comparison-diff",
-        method = "POST",
-        bodyJson = json.encodeToString(AidenGitComparisonDiffRequest(comparisonId = comparisonId, fileId = fileId))
     ) { bytes ->
         val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
