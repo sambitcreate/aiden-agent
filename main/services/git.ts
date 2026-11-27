@@ -7486,14 +7486,13 @@ export class GitService {
     }
   }
 
-  async finalizeManagedWorktreeDeletion(
+  private assertJournalMatchesRemoval(
+    removal: ReturnType<GitService["managedWorktreeRemovalPaths"]>,
+    journal: GitWorktreeRemovalJournal,
     worktreePath: string,
     worktreeGitDir: string,
     ownershipToken: string,
-  ): Promise<void> {
-    const removal = this.managedWorktreeRemovalPaths(worktreePath, worktreeGitDir, ownershipToken);
-    const journal = await this.readWorktreeRemovalJournal(removal.journal);
-    if (!journal) return;
+  ): void {
     if (
       journal.checkoutPath !== worktreePath ||
       journal.checkoutAuthorization !== removal.checkoutAuthorization ||
@@ -7508,6 +7507,17 @@ export class GitService {
         "The managed worktree deletion journal does not match this workspace.",
       );
     }
+  }
+
+  async finalizeManagedWorktreeDeletion(
+    worktreePath: string,
+    worktreeGitDir: string,
+    ownershipToken: string,
+  ): Promise<void> {
+    const removal = this.managedWorktreeRemovalPaths(worktreePath, worktreeGitDir, ownershipToken);
+    const journal = await this.readWorktreeRemovalJournal(removal.journal);
+    if (!journal) return;
+    this.assertJournalMatchesRemoval(removal, journal, worktreePath, worktreeGitDir, ownershipToken);
     if (journal.phase !== "filesystem_complete") {
       throw new GitServiceError(
         "command_failed",
@@ -7639,20 +7649,7 @@ export class GitService {
     const removal = this.managedWorktreeRemovalPaths(worktreePath, worktreeGitDir, ownershipToken);
     const journal = await this.readWorktreeRemovalJournal(removal.journal);
     if (!journal) return false;
-    if (
-      journal.checkoutPath !== worktreePath ||
-      journal.checkoutAuthorization !== removal.checkoutAuthorization ||
-      journal.checkoutQuarantine !== removal.checkout ||
-      journal.gitDir !== worktreeGitDir ||
-      journal.gitDirAuthorization !== removal.gitDirAuthorization ||
-      journal.gitDirQuarantine !== removal.gitDir ||
-      journal.ownershipToken !== ownershipToken
-    ) {
-      throw new GitServiceError(
-        "command_failed",
-        "The managed worktree deletion journal does not match this workspace.",
-      );
-    }
+    this.assertJournalMatchesRemoval(removal, journal, worktreePath, worktreeGitDir, ownershipToken);
     return true;
   }
 
