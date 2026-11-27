@@ -18,6 +18,7 @@ import {
   toast,
 } from "../ui";
 import { InfoHint } from "../ui-info-hint";
+import { SettingsPageHeading } from "./settings-page";
 import { LIST_SEARCH_THRESHOLD, ListSearchField } from "../list-search-field";
 import { FolderGit2, Plus, Trash2 } from "lucide-react";
 import { skillsApi, settingsApi } from "../../lib/ipc";
@@ -108,25 +109,21 @@ export function SkillsSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="settings-page-heading flex items-start justify-between gap-4">
-        <div className="min-w-0 flex-1">
-          <Text as="h1" variant="heading1">
-            Skills
-          </Text>
-          <Text variant="small" color="secondary" className="mt-0.5 block">
-            Reusable instruction sets the assistant can invoke as tools when a task matches.
-          </Text>
-        </div>
-        <Button
-          className="shrink-0"
-          variant="filled"
-          size="small"
-          onClick={() => setEditing(newSkill())}
-        >
-          <Plus className="size-4" />
-          New skill
-        </Button>
-      </div>
+      <SettingsPageHeading
+        title="Skills"
+        description="Reusable instruction sets the assistant can invoke as tools when a task matches."
+        actions={
+          <Button
+            className="shrink-0"
+            variant="filled"
+            size="small"
+            onClick={() => setEditing(newSkill())}
+          >
+            <Plus className="size-4" />
+            New skill
+          </Button>
+        }
+      />
 
       <FieldSet>
         <Field

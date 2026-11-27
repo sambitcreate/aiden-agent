@@ -6,6 +6,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Window } from "happy-dom";
 import { McpSettings } from "./mcp-settings";
+import { ProvidersSettings } from "./providers-settings";
+import { SkillsSettings } from "./skills-settings";
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -19,7 +21,7 @@ test("Live device pickers keep chevrons on one line and truncate long device nam
 test("every settings destination uses the shared page and grouped row system", () => {
   const view = read("../../main/settings-view.tsx");
   assert.match(view, /<SettingsPage[\s\S]*<ActiveSection \/>[\s\S]*<\/SettingsPage>/u);
-  for (const page of ["appearance", "providers", "skills", "shortcut", "web-search"]) {
+  for (const page of ["appearance", "shortcut", "web-search"]) {
     assert.match(read(`./${page}-settings.tsx`), /settings-page-heading/u);
   }
   assert.match(
@@ -63,13 +65,22 @@ test("Memory uses an SD-card silhouette and settings/onboarding use no brain ico
   }
 });
 
-test("Connectors settings render their title inside the shared settings page heading", () => {
-  const markup = renderToStaticMarkup(
-    createElement(QueryClientProvider, { client: new QueryClient() }, createElement(McpSettings)),
-  );
-  const { document } = new Window();
-  document.body.innerHTML = markup;
-  const headings = [...document.querySelectorAll("h1")];
-  assert.deepEqual(headings.map((heading) => heading.textContent), ["Connectors"]);
-  assert.ok(headings[0]!.closest(".settings-page-heading"), "the page title sits in the shared heading");
+test("Connectors, Providers, and Skills settings render their title inside the shared settings page heading", () => {
+  for (const [Component, expectedTitle] of [
+    [McpSettings, "Connectors"],
+    [ProvidersSettings, "Providers"],
+    [SkillsSettings, "Skills"],
+  ] as const) {
+    const markup = renderToStaticMarkup(
+      createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Component)),
+    );
+    const { document } = new Window();
+    document.body.innerHTML = markup;
+    const headings = [...document.querySelectorAll("h1")];
+    assert.deepEqual(headings.map((heading) => heading.textContent), [expectedTitle]);
+    assert.ok(
+      headings[0]!.closest(".settings-page-heading"),
+      `${expectedTitle} page title sits in the shared heading`,
+    );
+  }
 });

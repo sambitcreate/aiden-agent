@@ -29,6 +29,7 @@ import {
   toast,
 } from "../ui";
 import { InfoHint } from "../ui-info-hint";
+import { SettingsPageHeading } from "./settings-page";
 import { MoreHorizontal, Plus, Search, Trash2 } from "lucide-react";
 import { mcpApi } from "../../lib/ipc";
 import { errorMessage } from "../../lib/ipc-error";
@@ -338,38 +339,36 @@ export function McpSettings() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="settings-page-heading flex items-start justify-between gap-4">
-        <div className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5">
-            <Text as="h1" variant="heading1">Connectors</Text>
-            <InfoHint topic="connectors">
-              <p>Enabled connectors give the assistant their tools. Tool inputs are sent to that service.</p>
-              <p>Folder access in a workspace is a separate permission.</p>
-            </InfoHint>
-          </span>
-          <Text variant="small" color="secondary" className="mt-0.5 block">
-            Connect apps and tool servers the assistant can use.
-          </Text>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button variant="filled" size="small" onClick={() => setEditing(newServer())}>
-            <Plus className="size-4" />
-            Add custom connector
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="transparent" size="small" iconOnly aria-label="More connector actions">
-                <MoreHorizontal className="size-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem disabled={resetting} onSelect={() => void resetConnections()}>
-                {resetting ? "Resetting…" : "Reset connections"}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
+      <SettingsPageHeading
+        title="Connectors"
+        description="Connect apps and tool servers the assistant can use."
+        hint={
+          <InfoHint topic="connectors">
+            <p>Enabled connectors give the assistant their tools. Tool inputs are sent to that service.</p>
+            <p>Folder access in a workspace is a separate permission.</p>
+          </InfoHint>
+        }
+        actions={
+          <div className="flex shrink-0 items-center gap-1">
+            <Button variant="filled" size="small" onClick={() => setEditing(newServer())}>
+              <Plus className="size-4" />
+              Add custom connector
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="transparent" size="small" iconOnly aria-label="More connector actions">
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem disabled={resetting} onSelect={() => void resetConnections()}>
+                  {resetting ? "Resetting…" : "Reset connections"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        }
+      />
 
       {loadErrors.map(({ label, query }) => (
         <Callout key={label} color="red" role="alert" className="flex-row items-center justify-between gap-3">

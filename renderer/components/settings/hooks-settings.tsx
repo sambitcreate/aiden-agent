@@ -30,6 +30,7 @@ import { hooksApi } from "../../lib/ipc";
 import { errorMessage } from "../../lib/ipc-error";
 import { BotPageSkeleton } from "../../main/bots/bot-page-shell";
 import { HookScriptCoverage } from "../hook-script-coverage";
+import { SettingsPageHeading } from "./settings-page";
 import { cn } from "../../lib/ui-utils";
 import {
   groupHooksByScope,
@@ -1067,20 +1068,18 @@ export interface HooksSettingsViewProps {
 /** The page's one heading, with Add hook trailing it as on Connectors and Providers. */
 function HooksHeading({ canAdd, onAdd }: { canAdd: boolean; onAdd: () => void }) {
   return (
-    <header className="settings-page-heading flex items-start justify-between gap-4">
-      <div className="min-w-0 flex-1">
-        <Text as="h1" variant="heading1">
-          Hooks
-        </Text>
-        <Text as="p" variant="small" color="secondary" className="mt-0.5 block">
-          Run your own shell commands at points in a chat, such as before a tool runs. Each one runs only after you approve it.
-        </Text>
-      </div>
-      <Button variant="filled" size="small" className="shrink-0" disabled={!canAdd} onClick={onAdd}>
-        <Plus className="size-4" aria-hidden="true" />
-        Add hook
-      </Button>
-    </header>
+    <SettingsPageHeading
+      as="header"
+      title="Hooks"
+      description="Run your own shell commands at points in a chat, such as before a tool runs. Each one runs only after you approve it."
+      descriptionAs="p"
+      actions={
+        <Button variant="filled" size="small" className="shrink-0" disabled={!canAdd} onClick={onAdd}>
+          <Plus className="size-4" aria-hidden="true" />
+          Add hook
+        </Button>
+      }
+    />
   );
 }
 
