@@ -1,18 +1,20 @@
 // Route discovery's disk walk (design mode v2 Phase 3b, S78). The app root is
 // confined to the workspace before any read: every segment of it is `lstat`ed
-// and must be a real folder, never a link. Inside, no link is ever followed —
-// not a folder, not a file, not the two parsed files, which `readBounded`
-// opens with O_NOFOLLOW, and each folder is read only while it is still a real
-// folder at its own real path (`readRealDir`). The walk is breadth-first and capped (depth, entries,
+// and must be a real folder, never a link. Inside, no link is ever followed,
+// and every read is confined (`confinedRead`): the two parsed files are read
+// through one no-follow handle whose inode must be the one at the file's own
+// real path afterwards; folders are listed the same way on Linux
+// (`/proc/self/fd`). The one residual is a folder listing on macOS; see
+// `confinedRead`. The walk is breadth-first and capped (depth, entries,
 // routes); the rules live in `app-routes-core.ts`. Nothing here runs code.
 
 import type { Dirent, Stats } from "node:fs";
-import { lstat, readdir, realpath } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { lstat, open, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { FrameworkId } from "../../../../renderer/shared/design-app.js";
 import { isAppRoot } from "../../../../renderer/shared/design-canvas/app-frame.js";
 import { isPathInside } from "../../../shared/path-containment.js";
-import { readBounded } from "./app-detect.js";
 import {
   conventionsFor,
   parseReactRouterConfig,
@@ -23,18 +25,69 @@ import {
   type RouteConvention,
 } from "./app-routes-core.js";
 
+/** What one open handle read, with that handle's device and inode. */
+export type HandleRead<T> = { value: T; dev: number; ino: number };
+
 export type RouteFs = {
+  /** A folder listed by path: used where no handle listing exists (macOS), and by tests. */
   readdir(dir: string): Promise<Dirent[]>;
   lstat(target: string): Promise<Stats>;
   realpath(target: string): Promise<string>;
-  readBounded(file: string, cap: number): Promise<string | null>;
+  /** A file's text, at most `cap` bytes, read through one O_NOFOLLOW handle. */
+  readFile(file: string, cap: number): Promise<HandleRead<string> | null>;
+  /** A folder listed through one O_NOFOLLOW handle; present only where the platform can (Linux). */
+  listOpened?(dir: string): Promise<HandleRead<Dirent[]> | null>;
 };
+
+/** A regular file's text through one no-follow handle, with the handle's identity; null when it is a link, not a file or over `cap`. */
+export async function readRouteFile(file: string, cap: number): Promise<HandleRead<string> | null> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+    const info = await handle.stat();
+    if (!info.isFile()) return null;
+    const buffer = Buffer.alloc(cap + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length > cap) return null;
+    return { value: buffer.subarray(0, length).toString("utf8"), dev: info.dev, ino: info.ino };
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Linux: a folder listed through one no-follow handle. `/proc/self/fd/N`
+ * names the open folder itself, so the entries are that inode's whatever the
+ * path names meanwhile.
+ */
+export async function listOpenedDir(dir: string): Promise<HandleRead<Dirent[]> | null> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(dir, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+    const info = await handle.stat();
+    if (!info.isDirectory()) return null;
+    const entries = await readdir(`/proc/self/fd/${handle.fd}`, { withFileTypes: true });
+    return { value: entries, dev: info.dev, ino: info.ino };
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
 
 const DEFAULT_FS: RouteFs = {
   readdir: (dir) => readdir(dir, { withFileTypes: true }),
   lstat: (target) => lstat(target),
   realpath: (target) => realpath(target),
-  readBounded: (file, cap) => readBounded(file, cap),
+  readFile: (file, cap) => readRouteFile(file, cap),
+  ...(process.platform === "linux" ? { listOpened: listOpenedDir } : {}),
 };
 
 const CONVENTION_FOLDERS: Record<RouteConvention, readonly string[]> = {
@@ -89,29 +142,52 @@ async function conventionFolder(fs: RouteFs, root: string, relative: string): Pr
 }
 
 /**
- * A folder's entries, only while it is the real folder it was when queued or
- * checked. Node can't list a folder through a no-follow handle, so the read is
- * fenced instead: right before it, an `lstat` must show a folder, not a link;
- * right after it, a second `lstat` must show the same folder (device and
- * inode) and its real path must be the path itself, so no link sits anywhere
- * above it under `root`. A folder swapped for a link at any point is skipped.
+ * `read`'s value, only while `target` is a real folder or file, no link, at
+ * its own real path, and the inode it read is the one there afterwards:
+ *
+ * - before the read, an `lstat` must show the kind wanted, not a link;
+ * - after it, a second `lstat` must show the same device and inode, which
+ *   must also be the read's own (a handle's `fstat`), and `realpath` must give
+ *   the path back unchanged, so no component above it is a link.
+ *
+ * A read through a handle is bound to the inode it opened, so a path swapped
+ * for a link and put back around the read (renamed aside, linked out, renamed
+ * back) is caught: the handle's inode isn't the one at the real path. This
+ * holds for the two parsed files everywhere and for folder listings on Linux.
+ *
+ * The residual: Node can't list a folder through a handle on macOS (no
+ * `fdopendir`/`openat`; `/dev/fd/N` refuses a folder), so there the listing
+ * is by path and takes its identity from the `lstat` before it. A process
+ * that renames a folder aside, links it out and renames it back within one
+ * `readdir` would get the outside folder's names listed. Names only: each
+ * becomes a route string shown as text; no outside file is read, nothing is
+ * written or run, and the app frame still loads the dev server's own URL.
  */
-async function readRealDir(fs: RouteFs, dir: string): Promise<Dirent[] | null> {
-  return inRealDir(fs, dir, () => fs.readdir(dir));
-}
-
-/** `read`'s answer, only while `dir` stayed the same real folder at its own real path around it; null otherwise. */
-async function inRealDir<T>(fs: RouteFs, dir: string, read: () => Promise<T>): Promise<T | null> {
+async function confinedRead<T>(
+  fs: RouteFs,
+  target: string,
+  kind: "dir" | "file",
+  read: (before: Stats) => Promise<HandleRead<T> | null>,
+): Promise<T | null> {
+  const isKind = (info: Stats) => (kind === "dir" ? info.isDirectory() : info.isFile()) && !info.isSymbolicLink();
   try {
-    const before = await fs.lstat(dir);
-    if (!before.isDirectory() || before.isSymbolicLink()) return null;
-    const value = await read();
-    const after = await fs.lstat(dir);
-    if (!after.isDirectory() || after.isSymbolicLink() || after.dev !== before.dev || after.ino !== before.ino) return null;
-    return (await fs.realpath(dir)) === dir ? value : null;
+    const before = await fs.lstat(target);
+    if (!isKind(before)) return null;
+    const result = await read(before);
+    if (!result) return null;
+    const after = await fs.lstat(target);
+    if (!isKind(after) || after.dev !== before.dev || after.ino !== before.ino) return null;
+    if (result.dev !== after.dev || result.ino !== after.ino) return null;
+    return (await fs.realpath(target)) === target ? result.value : null;
   } catch {
     return null;
   }
+}
+
+async function readRealDir(fs: RouteFs, dir: string): Promise<Dirent[] | null> {
+  return confinedRead(fs, dir, "dir", async (before) =>
+    fs.listOpened ? fs.listOpened(dir) : { value: await fs.readdir(dir), dev: before.dev, ino: before.ino },
+  );
 }
 
 type Budget = { entries: number; truncated: boolean };
@@ -169,8 +245,8 @@ async function readParsedFile(fs: RouteFs, root: string, relative: string): Prom
   const file = path.join(folder, path.posix.basename(relative));
   const kind = await kindOf(fs, file);
   if (kind === "missing") return "missing";
-  // O_NOFOLLOW guards the file; the fence guards the folders above it.
-  const text = await inRealDir(fs, folder, () => fs.readBounded(file, ROUTE_LIMITS.fileBytes));
+  // Read through one handle, which must be the file at its own real path afterwards.
+  const text = await confinedRead(fs, file, "file", () => fs.readFile(file, ROUTE_LIMITS.fileBytes));
   return text ?? "refused";
 }
 
@@ -192,6 +268,8 @@ export async function discoverRoutes(
   const conventions = conventionsFor(framework);
   if (conventions.length === 0) return null;
   const fs: RouteFs = { ...DEFAULT_FS, ...options.fs };
+  // A caller's own path listing (a test's spy) is the one used.
+  if (options.fs?.readdir && !options.fs.listOpened) delete fs.listOpened;
   const root = await confinedRoot(fs, workspaceRoot, appRoot);
   if (!root) return null;
   const budget: Budget = { entries: 0, truncated: false };

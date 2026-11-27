@@ -2,12 +2,11 @@
 // convention reads, strict no-follow confinement to the app root, and the caps.
 
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { discoverRoutes, routeForWrittenFile, type RouteFs } from "./app-routes.js";
-import { readBounded } from "./app-detect.js";
+import { discoverRoutes, listOpenedDir, readRouteFile, routeForWrittenFile, type RouteFs } from "./app-routes.js";
 import { readdir } from "node:fs/promises";
 
 async function workspace(t: TestContext, files: Record<string, string>): Promise<string> {
@@ -30,9 +29,9 @@ function spy(): { fs: Partial<RouteFs>; paths: string[] } {
         paths.push(dir);
         return readdir(dir, { withFileTypes: true });
       },
-      readBounded: async (file, cap) => {
+      readFile: async (file, cap) => {
         paths.push(file);
-        return readBounded(file, cap);
+        return readRouteFile(file, cap);
       },
     },
   };
@@ -205,15 +204,71 @@ test("confinement: a folder swapped for a link after it was checked or queued is
   const tanstack = await workspace(t, { "src/routeTree.gen.ts": "export interface FileRoutesByFullPath {\n  '/': typeof X\n}\n", "src/routes/index.tsx": "" });
   const src = path.join(tanstack, "src");
   const duringRead: Partial<RouteFs> = {
-    readBounded: async (file, cap) => {
+    readFile: async (file, cap) => {
       await rm(src, { recursive: true, force: true });
       await symlink(elsewhere, src);
-      return readBounded(file, cap);
+      return readRouteFile(file, cap);
     },
   };
   const read = await discoverRoutes(tanstack, ".", "tanstack-router", { fs: duringRead });
   assert.equal(read?.patterns.includes("/from-outside"), false);
 });
+
+test("confinement: a parsed file's folder linked out only while the file is read, then put back, gives none of the outside text", async (t) => {
+  const tree = "export interface FileRoutesByFullPath {\n  '/from-outside': typeof X\n}\n";
+  const elsewhere = await workspace(t, { "routeTree.gen.ts": tree });
+  const app = await workspace(t, { "src/routeTree.gen.ts": "export interface FileRoutesByFullPath {\n  '/': typeof X\n}\n", "src/routes/index.tsx": "" });
+  const src = path.join(app, "src");
+  const aside = path.join(app, "src-aside");
+  let swaps = 0;
+  const restoredAfterRead: Partial<RouteFs> = {
+    readFile: async (file, cap) => {
+      // Renamed aside, linked out for the read alone, then put back: the same inode returns.
+      await rename(src, aside);
+      await symlink(elsewhere, src);
+      try {
+        return await readRouteFile(file, cap);
+      } finally {
+        await rm(src);
+        await rename(aside, src);
+        swaps += 1;
+      }
+    },
+  };
+  const read = await discoverRoutes(app, ".", "tanstack-router", { fs: restoredAfterRead });
+  assert.equal(swaps, 1);
+  assert.equal(read?.patterns.includes("/from-outside"), false);
+});
+
+test(
+  "confinement (Linux): a folder whose parent is linked out only while it is listed, then put back, lists none of the outside names",
+  { skip: process.platform !== "linux" && "folders are listed through a handle on Linux only (see confinedRead)" },
+  async (t) => {
+    const outside = await workspace(t, { "blog/admin/page.tsx": "" });
+    const app = await workspace(t, { "app/page.tsx": "", "app/blog/page.tsx": "" });
+    const blog = path.join(app, "app/blog");
+    const parent = path.join(app, "app");
+    const aside = path.join(app, "app-aside");
+    let swaps = 0;
+    const restoredAfterList: Partial<RouteFs> = {
+      listOpened: async (dir) => {
+        if (dir !== blog) return listOpenedDir(dir);
+        await rename(parent, aside);
+        await symlink(outside, parent);
+        try {
+          return await listOpenedDir(dir);
+        } finally {
+          await rm(parent);
+          await rename(aside, parent);
+          swaps += 1;
+        }
+      },
+    };
+    const found = await discoverRoutes(app, ".", "next", { fs: restoredAfterList });
+    assert.equal(swaps, 1);
+    assert.equal(found?.patterns.includes("/blog/admin"), false);
+  },
+);
 
 test("a directory link loop is skipped and the walk ends", async (t) => {
   const root = await workspace(t, { "src/routes/index.tsx": "", "src/routes/a/b.tsx": "" });
