@@ -11,6 +11,7 @@ import { installMainWindowNavigation, type NavigationContents } from "./main-win
 
 const ORIGIN = "http://127.0.0.1:5173";
 const TOKEN = "abcdefghijklmnop";
+const ERR_BLOCKED_BY_CSP = -30;
 
 type FakeFrame = { frameTreeNodeId: number; parent: FakeFrame | null; url: string; origin: string; name: string };
 
@@ -33,6 +34,11 @@ class FakeContents extends EventEmitter {
     this.emit("will-frame-navigate", { url, isMainFrame: false, frame, initiator, preventDefault: () => (prevented = true) });
     return prevented;
   }
+  /** Emits did-fail-provisional-load the way Electron does, naming the frame by process and routing id. */
+  failLoad(frame: FakeFrame | null, url: string, errorCode = ERR_BLOCKED_BY_CSP, isMainFrame = false): void {
+    const ids = frame ? [7, frame.frameTreeNodeId + 1000] : [7, 9999];
+    this.emit("did-fail-provisional-load", {}, errorCode, "ERR_BLOCKED_BY_CSP", url, isMainFrame, ...ids);
+  }
   redirect(frame: FakeFrame | null, url: string, isMainFrame = false): boolean {
     let prevented = false;
     this.emit("will-redirect", { url, isMainFrame, frame, preventDefault: () => (prevented = true) }, url);
@@ -53,7 +59,9 @@ function setup(options: { designLive: boolean; rendererOrigin?: string; withRegi
   const events: DesignAppFrameEvent[] = [];
   registry.onEvent((event) => events.push(event));
   const opened: string[] = [];
+  const frames = new Map<number, FakeFrame>();
   const dispose = installMainWindowNavigation(contents as unknown as NavigationContents, {
+    frameFromId: (processId, routingId) => (processId === 7 ? (frames.get(routingId - 1000) ?? null) : null),
     openExternal: (url) => opened.push(url),
     warn: () => {},
     designLive: options.designLive,
@@ -67,6 +75,7 @@ function setup(options: { designLive: boolean; rendererOrigin?: string; withRegi
     assert.equal(contents.frameNavigate(frame, `${ORIGIN}/pricing`), false, "admitted");
     frame.url = `${ORIGIN}/pricing`;
     frame.origin = ORIGIN;
+    frames.set(id, frame);
     return frame;
   };
   return { contents, registry, events, opened, dispose, placeAndAdmit, rebind: (next: unknown) => (bound = next) };
@@ -158,6 +167,45 @@ test("flag on: mailto:, vscode: and slack: from an app frame are refused and nev
   for (const url of ["mailto:x", "vscode://x", "slack://x"]) assert.equal(s.contents.frameNavigate(app, url, app), true, url);
   assert.deepEqual(s.opened, []);
   assert.equal(s.events.some((e) => e.kind === "navigation-refused"), false);
+});
+
+test("flag on: an app frame's CSP-blocked way out is refused like a redirect, counted, and the frame is put back (S1, D1)", () => {
+  const s = setup({ designLive: true });
+  const app = s.placeAndAdmit();
+  // The main window's frame-src refuses these before will-frame-navigate or will-redirect runs.
+  s.contents.failLoad(app, "https://example.com/");
+  s.contents.failLoad(app, "mailto:x@example.com");
+  assert.deepEqual(s.opened, [], "nothing opens by itself");
+  assert.deepEqual(
+    s.events.filter((e) => e.kind === "navigation-refused").map((e) => e.kind === "navigation-refused" && e.url),
+    ["https://example.com/"],
+    "Open in browser is offered for the web target only",
+  );
+  const blocked = s.events.filter((e) => e.kind === "blocked").slice(-1)[0];
+  assert.equal(blocked?.kind === "blocked" && blocked.count, 2);
+  assert.deepEqual(blocked?.kind === "blocked" && blocked.hosts, ["example.com", "mailto"]);
+  assert.deepEqual(
+    s.events.filter((e) => e.kind === "navigation-restore"),
+    [
+      { kind: "navigation-restore", frameId: "f10", mountToken: TOKEN },
+      { kind: "navigation-restore", frameId: "f10", mountToken: TOKEN },
+    ],
+  );
+});
+
+test("flag on: other load failures, other frames and the flag off leave a failed load alone", () => {
+  const s = setup({ designLive: true });
+  const app = s.placeAndAdmit();
+  s.contents.failLoad(app, "https://example.com/", -3);
+  s.contents.failLoad(s.contents.child(30, `${ORIGIN}/`), "https://example.com/");
+  s.contents.failLoad(null, "https://example.com/");
+  s.contents.failLoad(s.contents.mainFrame, "https://example.com/", ERR_BLOCKED_BY_CSP, true);
+  assert.deepEqual(s.events, [], "an aborted load, an unplaced frame, an unknown frame and the main frame get nothing");
+
+  const off = setup({ designLive: false });
+  off.contents.failLoad(off.contents.child(10, `${ORIGIN}/`), "https://example.com/");
+  assert.deepEqual(off.events, []);
+  assert.deepEqual(off.opened, []);
 });
 
 test("flag on: a placed frame is admitted only on its expected origin and initiator (G7, G8, G15)", () => {

@@ -133,6 +133,7 @@ test("the allow list turns every powerful feature off", () => {
     "identity-credentials-get",
     "direct-sockets",
     "autoplay",
+    "focus-without-user-activation",
   ]) {
     assert.equal(entries.get(feature), "'none'", feature);
   }
@@ -162,6 +163,8 @@ test("parseDesignAppFrameEvent keeps only well-formed events from main", () => {
     ...key,
     url: "https://example.com/",
   });
+  assert.deepEqual(parseDesignAppFrameEvent({ kind: "navigation-restore", ...key, url: "ignored" }), { kind: "navigation-restore", ...key });
+  assert.equal(parseDesignAppFrameEvent({ kind: "navigation-restore", frameId: "frame-1", mountToken: "short" }), null);
   assert.equal(parseDesignAppFrameEvent({ kind: "navigation-refused", ...key, url: "x".repeat(2049) }), null);
   assert.deepEqual(parseDesignAppFrameEvent({ kind: "dialog-suppressed", ...key, dialog: "alert" }), { kind: "dialog-suppressed", ...key, dialog: "alert" });
   assert.equal(parseDesignAppFrameEvent({ kind: "dialog-suppressed", ...key, dialog: "open" }), null);

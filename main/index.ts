@@ -151,6 +151,7 @@ import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.j
 import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
 import { createImagesEnabled, designLiveEnabled, designModeEnabled, studioAssetsEnabled, studioCapabilities } from "./services/studio/feature-flags.js";
+import { applyDesignLiveSwitches } from "./services/design-canvas/app-frames/app-frame-switches.js";
 import {
   closeGuardDiscardPrompt,
   closeGuardSavingPrompt,
@@ -275,6 +276,10 @@ if (process.platform === "linux") {
 // Being process-wide, it also turns off DNS prefetch and preconnect hints for
 // sites in the in-app browser, an accepted small cost in page-load speed.
 app.commandLine.appendSwitch("blink-settings", "dnsPrefetchingEnabled=false");
+
+// With live app frames on, a page's own focus() can't take the keys from Aiden
+// until the person clicks into it (S75, K1; the iframes' policy asks for this).
+applyDesignLiveSwitches(app.commandLine, designLiveEnabled());
 
 registerCustomSchemes({ studioAssets: studioAssetsEnabled(), designMode: designModeEnabled() });
 
@@ -1986,6 +1991,7 @@ async function createMainWindow(
     registry: () => appFrameRegistry,
     rendererOrigin: rendererOrigin(),
     ownPorts: () => appFrameOwnPorts(),
+    frameFromId: (processId, routingId) => webFrameMain.fromId(processId, routingId) ?? null,
   });
   // With live apps on, admitted app frames get the canvas bridge (D12).
   installAppBridge(createdWindow.webContents, {

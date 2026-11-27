@@ -260,10 +260,13 @@ export class AppFrameRegistry {
     }, BLOCKED_COALESCE_MS);
   }
 
-  /** Sends an event for a registered frame (navigation-refused, dialog-suppressed). */
+  /** Sends an event for a registered frame (navigation-refused, navigation-restore, dialog-suppressed). */
   emitFor(
     frameTreeNodeId: number,
-    event: { kind: "navigation-refused"; url: string } | { kind: "dialog-suppressed"; dialog: Extract<DesignAppFrameEvent, { kind: "dialog-suppressed" }>["dialog"] },
+    event:
+      | { kind: "navigation-refused"; url: string }
+      | { kind: "navigation-restore" }
+      | { kind: "dialog-suppressed"; dialog: Extract<DesignAppFrameEvent, { kind: "dialog-suppressed" }>["dialog"] },
   ): void {
     const info = this.frameInfo(frameTreeNodeId);
     if (!info) return;

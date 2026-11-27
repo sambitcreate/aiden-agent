@@ -12,7 +12,7 @@
 
 import type { AppFrameRegistry } from "../services/design-canvas/app-frames/app-frame-registry.js";
 import { appFrameRef, mainFrameIdOf, type FrameLike } from "../services/design-canvas/app-frames/app-frame-ref.js";
-import { decideFrameNavigation, decideRedirect, type GuardContext } from "../services/design-canvas/app-frames/app-frame-guard.js";
+import { decideBlockedLoad, decideFrameNavigation, decideRedirect, type GuardContext } from "../services/design-canvas/app-frames/app-frame-guard.js";
 import { createDesignFrameNavigationGuard } from "../services/design-canvas/frame-navigation.js";
 
 type Listener = (...args: never[]) => void;
@@ -34,6 +34,8 @@ export type MainWindowNavigationDeps = {
   registry(): AppFrameRegistry | null;
   rendererOrigin: string;
   ownPorts(): ReadonlySet<number>;
+  /** The frame a load event names by process and routing id (`webFrameMain.fromId`), or null. */
+  frameFromId?(processId: number, routingId: number): FrameLike | null;
 };
 
 type WillFrameNavigateEvent = {
@@ -120,6 +122,37 @@ export function installMainWindowNavigation(contents: NavigationContents, deps: 
       }
     }
   };
+
+  // S1, D1: the window's frame-src refuses an app frame's way out before the
+  // handlers above see it, and Chromium shows its blocked page in the frame.
+  // Answer it as the guard would have, and have the renderer put the frame back.
+  on("did-fail-provisional-load", ((
+    _event: unknown,
+    errorCode: number,
+    _description: string,
+    validatedUrl: string,
+    isMainFrame: boolean,
+    processId: number,
+    routingId: number,
+  ) => {
+    if (!deps.designLive || isMainFrame || !deps.frameFromId) return;
+    const context = guardContext();
+    let found: FrameLike | null = null;
+    try {
+      found = deps.frameFromId(processId, routingId);
+    } catch {
+      found = null;
+    }
+    const frame = found ? appFrameRef(found, mainFrameIdOf(contents)) : null;
+    const verdict = decideBlockedLoad({ url: validatedUrl, errorCode, isMainFrame, frame }, context);
+    if (!verdict || !frame) return;
+    report(context, frame, verdict);
+    try {
+      context.registry?.emitFor(frame.frameTreeNodeId, { kind: "navigation-restore" });
+    } catch {
+      // A destroyed frame has nothing to put back.
+    }
+  }) as Listener);
 
   // A design canvas frame runs a workspace page's own scripts; it must never leave its
   // aiden-design: host for the web or a blank page that keeps the frame's window.

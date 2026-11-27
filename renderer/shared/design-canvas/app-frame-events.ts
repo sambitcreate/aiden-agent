@@ -19,6 +19,8 @@ const MAX_COUNT = 1_000_000_000;
 export type DesignAppFrameEvent =
   | { kind: "blocked"; frameId: string; mountToken: string; count: number; hosts: string[] }
   | { kind: "navigation-refused"; frameId: string; mountToken: string; url: string }
+  /** The frame landed on Chromium's blocked page (the window's frame-src refused its way out): put it back. */
+  | { kind: "navigation-restore"; frameId: string; mountToken: string }
   | { kind: "dialog-suppressed"; frameId: string; mountToken: string; dialog: AppFrameDialogKind };
 
 export type DesignAppFrameMountError = "live-off" | "app-not-running" | "too-many-frames" | "unavailable";
@@ -55,6 +57,8 @@ export function parseDesignAppFrameEvent(value: unknown): DesignAppFrameEvent | 
       if (typeof url !== "string" || url.length === 0 || url.length > URL_CHARS) return null;
       return { kind: "navigation-refused", ...key, url };
     }
+    case "navigation-restore":
+      return { kind: "navigation-restore", ...key };
     case "dialog-suppressed": {
       const { dialog } = value;
       if (typeof dialog !== "string" || !(APP_FRAME_DIALOG_KINDS as readonly string[]).includes(dialog)) return null;

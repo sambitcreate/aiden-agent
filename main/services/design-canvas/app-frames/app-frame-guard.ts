@@ -165,3 +165,28 @@ export function decideRedirect(
     refusedUrl: isApp && isWeb(parsed) ? redirect.url : undefined,
   };
 }
+
+/** Chromium's net error for a load the page's (here, the main window's) CSP refused. */
+export const ERR_BLOCKED_BY_CSP = -30;
+
+export type BlockedLoadVerdict = { blocked: string; refusedUrl?: string };
+
+/**
+ * A subframe load that failed (S1, D1). The main window's `frame-src` refuses
+ * an app frame's way out (a redirect to the web, `mailto:`) before
+ * `will-frame-navigate` or `will-redirect` runs, and Chromium puts the frame on
+ * its blocked page. For an admitted app frame this is answered as the guard
+ * would have: counted, offered in the browser when it is a web address, and
+ * the frame put back. Anything else is left alone (null).
+ */
+export function decideBlockedLoad(
+  load: { url: string; errorCode: number; isMainFrame: boolean; frame: NamedFrameRef | null },
+  context: GuardContext,
+): BlockedLoadVerdict | null {
+  if (load.isMainFrame || load.errorCode !== ERR_BLOCKED_BY_CSP || !context.designLive || !context.registry || !load.frame) return null;
+  const id = safe(() => load.frame!.frameTreeNodeId, null as number | null);
+  if (id === null || !context.registry.isAppFrame(id)) return null;
+  const parsed = parse(load.url);
+  if (appTargetAllowed(parsed, context.ownPorts)) return null;
+  return { blocked: hostOrScheme(parsed), ...(isWeb(parsed) ? { refusedUrl: load.url } : {}) };
+}
