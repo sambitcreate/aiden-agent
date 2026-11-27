@@ -4317,26 +4317,23 @@ export class GitService {
       } catch {
         trackingRecorded = false;
       }
+      const addWarning = (message: string) => {
+        warning = warning ? `${warning} ${message}` : message;
+      };
       if (!trackingRecorded) {
-        warning = [
-          warning,
+        addWarning(
           remoteStillMatches
             ? "The push completed, but Aiden could not safely update its local tracking ref."
             : "The push completed, but the remote configuration changed before Aiden could update its local tracking ref.",
-        ]
-          .filter(Boolean)
-          .join(" ");
+        );
       }
 
       let upstreamSet = capability.upstream === `${input.remote}/${input.destinationBranch}`;
       if (input.setUpstream && !upstreamSet) {
         if (signal?.aborted) {
-          warning = [
-            warning,
+          addWarning(
             "The push completed, but the cancelled request did not change the local upstream setting.",
-          ]
-            .filter(Boolean)
-            .join(" ");
+          );
         } else {
           const [headAfter, symbolicAfter] = await Promise.all([
             this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], {
@@ -4347,19 +4344,13 @@ export class GitService {
             }),
           ]);
           if (signal?.aborted) {
-            warning = [
-              warning,
+            addWarning(
               "The push completed, but the cancelled request did not change the local upstream setting.",
-            ]
-              .filter(Boolean)
-              .join(" ");
+            );
           } else if (!remoteStillMatches) {
-            warning = [
-              warning,
+            addWarning(
               "The push completed, but the remote configuration changed before Aiden could remember its upstream.",
-            ]
-              .filter(Boolean)
-              .join(" ");
+            );
           } else if (
             headAfter.exitCode === 0 &&
             headAfter.stdout.trim() === input.expectedHead &&
@@ -4367,14 +4358,11 @@ export class GitService {
             symbolicAfter.stdout.trim() === `refs/heads/${input.expectedBranch}`
           ) {
             if (!trackingRecorded) {
-              warning = [
-                warning,
+              addWarning(
                 signal?.aborted
                   ? "The push completed, but the cancelled request did not change the local upstream setting."
                   : "The push completed, but Aiden could not safely update its local tracking ref or upstream setting.",
-              ]
-                .filter(Boolean)
-                .join(" ");
+              );
             } else {
               try {
                 await this.run(
@@ -4390,33 +4378,24 @@ export class GitService {
                 upstreamSet = true;
               } catch (error) {
                 if (signal?.aborted) {
-                  warning = [
-                    warning,
+                  addWarning(
                     "The push completed, but the cancelled request did not change the local upstream setting.",
-                  ]
-                    .filter(Boolean)
-                    .join(" ");
+                  );
                 } else {
                   const detail =
                     error instanceof Error
                       ? error.message
                       : "Git could not set the upstream branch.";
-                  warning = [
-                    warning,
+                  addWarning(
                     `The push completed, but Aiden could not remember its upstream: ${detail}`,
-                  ]
-                    .filter(Boolean)
-                    .join(" ");
+                  );
                 }
               }
             }
           } else {
-            warning = [
-              warning,
+            addWarning(
               "The push completed, but the local branch moved before Aiden could remember its upstream.",
-            ]
-              .filter(Boolean)
-              .join(" ");
+            );
           }
         }
       }
