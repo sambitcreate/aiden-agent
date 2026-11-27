@@ -370,5 +370,3 @@ export function createFirstMessageWorktreeCoordinator(dependencies: FirstMessage
 
   return { ensure, record };
 }
-
-export type FirstMessageWorktreeCoordinator = ReturnType<typeof createFirstMessageWorktreeCoordinator>;

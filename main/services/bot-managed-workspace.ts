@@ -694,5 +694,3 @@ export function createBotManagedWorkspaceService(options: FileBotManagedWorkspac
     mintWorkspaceId: options.mintWorkspaceId ?? randomUUID,
   });
 }
-
-export type BotManagedWorkspaceService = ReturnType<typeof createBotManagedWorkspaceService>;

@@ -4,7 +4,6 @@ import {
   parseSubagentRunSnapshot,
   parseSubagentRunSnapshotV2,
   type SubagentRunSnapshot,
-  type SubagentRunSnapshotV1,
   type SubagentRunSnapshotV2,
 } from "../../../renderer/shared/subagent-runs.js";
 import type { SubagentRunStore } from "./subagent-run-store-core.js";
@@ -264,9 +263,3 @@ export function createSubagentRunStoreDispatcher(
     },
   };
 }
-
-export type SubagentRunStoreDispatcher = ReturnType<typeof createSubagentRunStoreDispatcher>;
-
-export type SubagentRunStoreDispatcherSnapshot =
-  | SubagentRunSnapshotV1
-  | SubagentRunSnapshotV2;

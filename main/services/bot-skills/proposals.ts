@@ -218,5 +218,3 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
   };
   return service;
 }
-
-export type BotSkillProposalService = ReturnType<typeof createBotSkillProposalService>;

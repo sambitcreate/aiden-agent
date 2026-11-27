@@ -48,7 +48,5 @@ export function createBotOwnWrites(
   };
 }
 
-export type BotOwnWrites = ReturnType<typeof createBotOwnWrites>;
-
 /** Process-wide journal: the Bot tool sources write it, the folder watch reads it. */
 export const botOwnWrites = createBotOwnWrites();

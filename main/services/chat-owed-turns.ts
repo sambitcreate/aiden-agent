@@ -201,7 +201,3 @@ export function createChatOwedTurns<Context, Origin extends string>(
     },
   };
 }
-
-export type ChatOwedTurns<Context, Origin extends string> = ReturnType<
-  typeof createChatOwedTurns<Context, Origin>
->;

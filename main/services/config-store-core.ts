@@ -317,8 +317,6 @@ function hasProviderCache(
   return entry?.models !== undefined || entry?.modelMetadata !== undefined;
 }
 
-export type ConfigStore = ReturnType<typeof createConfigStore>;
-
 /** Parsed compaction preferences; invalid stored overrides read as absent, as in `getSettings`. */
 export type CompactionSettingsSnapshot = Readonly<{
   compactionEngine: CompactionEngine;
