@@ -16,20 +16,12 @@ import {
 } from "./provider-key-policy.js";
 import { secrets } from "./secrets.js";
 import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
+import { createSerialQueue } from "../shared/serial-queue.js";
 import type { StoredProvider } from "./types.js";
 
 const JOURNAL_KEY = "__aiden_internal_provider_credential_rotation_v1__";
 
-let rotationTail: Promise<void> = Promise.resolve();
-
-function serialized<R>(operation: () => Promise<R>): Promise<R> {
-  const result = rotationTail.then(operation, operation);
-  rotationTail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
+const rotationQueue = createSerialQueue();
 
 async function reconcilePendingProviderCredentialRotationNow(
   bindLegacy = true,
@@ -80,7 +72,7 @@ async function reconcilePendingProviderCredentialRotationNow(
 }
 
 export function reconcilePendingProviderCredentialRotation(): Promise<void> {
-  return serialized(reconcilePendingProviderCredentialRotationNow);
+  return rotationQueue.run(reconcilePendingProviderCredentialRotationNow);
 }
 
 export function saveProviderWithCredentialRotation(
@@ -90,7 +82,7 @@ export function saveProviderWithCredentialRotation(
 ): Promise<StoredProvider> {
   let added = false;
   return mutatePortableConfigAndSync(() =>
-    serialized(async () => {
+    rotationQueue.run(async () => {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
       const previous = await configStore.getProvider(provider.id);
       added = !previous;
@@ -169,7 +161,7 @@ export function removeProviderWithCredentialCleanup(
   isCurrent: () => boolean = () => true,
 ): Promise<void> {
   return mutatePortableConfigAndSync(() =>
-    serialized(async () => {
+    rotationQueue.run(async () => {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
       if (!providerTransitionNeedsCredentialAccess(await configStore.getProvider(providerId), null)) {
         // As when saving, a keyless local provider must be removable on a Linux
@@ -217,7 +209,7 @@ export function reconcileExternalProviderCredentialChanges(
   previous: StoredProvider[],
   current: StoredProvider[],
 ): Promise<void> {
-  return serialized(async () => {
+  return rotationQueue.run(async () => {
     const previousById = new Map(previous.map((provider) => [provider.id, provider]));
     const currentById = new Map(current.map((provider) => [provider.id, provider]));
     const transitions = [...new Set([...previousById.keys(), ...currentById.keys()])]

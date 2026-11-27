@@ -26,6 +26,7 @@ import {
   isWebExtractKeyPoolId,
   type WebExtractKeyPoolId,
 } from "../../renderer/shared/web-search-key-pool.js";
+import { createSerialQueue } from "../shared/serial-queue.js";
 
 /** Stable namespace for Web Search credentials in the encrypted key store. */
 export const WEB_SEARCH_CREDENTIAL_PREFIX = "web-search:";
@@ -256,12 +257,7 @@ export function createWebSearchCredentialAccess(
   const now = options.now ?? Date.now;
   // Pool index writes are read-modify-write; serialize them per process so
   // two quick Settings actions cannot drop each other's change.
-  let poolTail: Promise<unknown> = Promise.resolve();
-  const serializedPool = <T>(operation: () => Promise<T>): Promise<T> => {
-    const result = poolTail.then(operation, operation);
-    poolTail = result.catch(() => undefined);
-    return result;
-  };
+  const poolQueue = createSerialQueue();
 
   const readPrimary = async (reference: WebSearchCredentialReference) => {
     const current = await secrets.getProviderKey(reference.secretId, reference.binding);
@@ -336,7 +332,7 @@ export function createWebSearchCredentialAccess(
     async read(reference) {
       if (!webSearchKeyPoolSupported(reference.providerId)) return readPrimary(reference);
       // A pool-capable provider's single-key view is its first existing key.
-      await poolTail;
+      await poolQueue.idle();
       const { keys } = await loadPool(reference);
       return keys[0]?.key ?? null;
     },
@@ -351,7 +347,7 @@ export function createWebSearchCredentialAccess(
         await secrets.setProviderKey(reference.secretId, normalized, reference.binding, isCurrent);
         return;
       }
-      await serializedPool(async () => {
+      await poolQueue.run(async () => {
         const { document } = await loadPool(reference);
         await secrets.setProviderKey(reference.secretId, normalized, reference.binding, isCurrent);
         if (document.entries.some((entry) => entry.id === WEB_SEARCH_KEY_POOL_PRIMARY_ENTRY_ID)) {
@@ -387,13 +383,13 @@ export function createWebSearchCredentialAccess(
         // credential cannot silently reappear through the compatibility path.
         if (reference.legacySecretId) await secrets.deleteKey(reference.legacySecretId, isCurrent);
       };
-      if (webSearchKeyPoolSupported(reference.providerId)) await serializedPool(removeAll);
+      if (webSearchKeyPoolSupported(reference.providerId)) await poolQueue.run(removeAll);
       else await removeAll();
     },
 
     async listPool(reference) {
       assertPool(reference);
-      await poolTail;
+      await poolQueue.idle();
       return (await loadPool(reference)).document;
     },
 
@@ -405,7 +401,7 @@ export function createWebSearchCredentialAccess(
           keys: key === null ? [] : [{ id: WEB_SEARCH_KEY_POOL_PRIMARY_ENTRY_ID, key }],
         };
       }
-      await poolTail;
+      await poolQueue.idle();
       const { document, keys } = await loadPool(reference);
       return { strategy: document.strategy, keys };
     },
@@ -413,7 +409,7 @@ export function createWebSearchCredentialAccess(
     async addPoolKey(reference, key, label, isCurrent = () => true) {
       assertPool(reference);
       const normalized = normalizeWebSearchCredential(key);
-      return serializedPool(async () => {
+      return poolQueue.run(async () => {
         const { document, keys } = await loadPool(reference);
         if (document.entries.length >= MAX_WEB_SEARCH_KEY_POOL_ENTRIES) {
           throw new Error(
@@ -458,7 +454,7 @@ export function createWebSearchCredentialAccess(
 
     async removePoolKey(reference, entryId, isCurrent = () => true) {
       assertPool(reference);
-      return serializedPool(async () => {
+      return poolQueue.run(async () => {
         const { document } = await loadPool(reference);
         if (
           !isWebSearchKeyPoolEntryId(entryId) ||
@@ -486,7 +482,7 @@ export function createWebSearchCredentialAccess(
 
     async reorderPool(reference, orderedIds, isCurrent = () => true) {
       assertPool(reference);
-      return serializedPool(async () => {
+      return poolQueue.run(async () => {
         const { document } = await loadPool(reference);
         const next: WebSearchKeyPoolDocument = {
           ...document,
@@ -502,7 +498,7 @@ export function createWebSearchCredentialAccess(
       if (!isWebSearchKeyPoolStrategy(strategy)) {
         throw new Error("Unknown Web Search key rotation strategy.");
       }
-      return serializedPool(async () => {
+      return poolQueue.run(async () => {
         const { document } = await loadPool(reference);
         const next: WebSearchKeyPoolDocument = { ...document, strategy };
         await writeIndex(reference, next, isCurrent);

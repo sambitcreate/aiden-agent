@@ -6,6 +6,8 @@
 // triggers coalesce, so a focus storm costs one re-read.
 // Platform-independent so the coalescing and change-gating are testable.
 
+import { createSerialQueue } from "../shared/serial-queue.js";
+
 export interface PortableConfigWatcher {
   /** Re-read now, joining an in-flight refresh rather than queueing another. */
   refresh(): Promise<void>;
@@ -86,17 +88,8 @@ export function createLastSafeSnapshotReload<T>(
   reconcile: (previous: T, current: T) => Promise<void>,
 ): LastSafeSnapshotReload {
   const snapshots = createLastSafeSnapshotTracker<T>();
-  let transitionTail: Promise<void> = Promise.resolve();
+  const serialQueue = createSerialQueue();
   const MAX_STABILITY_PASSES = 8;
-
-  function serialized<R>(operation: () => Promise<R>): Promise<R> {
-    const result = transitionTail.then(operation, operation);
-    transitionTail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  }
 
   async function reconcileUntilStable(previous: T, current: T): Promise<boolean> {
     let before = previous;
@@ -124,7 +117,7 @@ export function createLastSafeSnapshotReload<T>(
   }
 
   const run = (() =>
-    serialized(async () => {
+    serialQueue.run(async () => {
       const safeBefore = await cachedSafe();
       snapshots.seed(safeBefore ? await readSnapshot() : null, safeBefore);
 
@@ -146,7 +139,7 @@ export function createLastSafeSnapshotReload<T>(
     })) as LastSafeSnapshotReload;
 
   run.syncCurrent = () =>
-    serialized(async () => {
+    serialQueue.run(async () => {
       const safe = await cachedSafe();
       if (!safe) {
         snapshots.seed(null, false);
