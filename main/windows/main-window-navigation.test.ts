@@ -78,7 +78,7 @@ function setup(options: { designLive: boolean; rendererOrigin?: string; withRegi
     frames.set(id, frame);
     return frame;
   };
-  return { contents, registry, events, opened, dispose, placeAndAdmit, rebind: (next: unknown) => (bound = next) };
+  return { contents, registry, events, opened, frames, dispose, placeAndAdmit, rebind: (next: unknown) => (bound = next) };
 }
 
 test("flag off: window.open opens externally and is denied", () => {
@@ -206,6 +206,28 @@ test("flag on: other load failures, other frames and the flag off leave a failed
   off.contents.failLoad(off.contents.child(10, `${ORIGIN}/`), "https://example.com/");
   assert.deepEqual(off.events, []);
   assert.deepEqual(off.opened, []);
+});
+
+test("flag on: an app frame's own data: or blob: page, which the window's frame-src refuses, is counted with no toast and put back", () => {
+  const s = setup({ designLive: true });
+  const app = s.placeAndAdmit();
+  s.contents.failLoad(app, "data:text/html,<p>preview</p>");
+  s.contents.failLoad(app, `blob:${ORIGIN}/5b1c-preview`);
+  assert.equal(s.events.some((e) => e.kind === "navigation-refused"), false, "no Open in browser for these");
+  const blocked = s.events.filter((e) => e.kind === "blocked").slice(-1)[0];
+  assert.equal(blocked?.kind === "blocked" && blocked.count, 2);
+  assert.equal(s.events.filter((e) => e.kind === "navigation-restore").length, 2);
+
+  // A frame inside the app answers to the app's own policy, and a loopback page that
+  // refuses framing (frame-ancestors) isn't a way out: neither touches the app frame.
+  const quiet = setup({ designLive: true });
+  const parent = quiet.placeAndAdmit();
+  const nested = quiet.contents.child(40, `${ORIGIN}/inner`, "", parent);
+  quiet.frames.set(40, nested);
+  quiet.contents.failLoad(nested, "data:text/html,x");
+  quiet.contents.failLoad(parent, "http://127.0.0.1:4000/");
+  quiet.contents.failLoad(parent, "about:blank");
+  assert.deepEqual(quiet.events, []);
 });
 
 test("flag on: a placed frame is admitted only on its expected origin and initiator (G7, G8, G15)", () => {

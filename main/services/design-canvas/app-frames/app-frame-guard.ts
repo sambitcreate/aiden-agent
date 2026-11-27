@@ -187,6 +187,12 @@ export function decideBlockedLoad(
   const id = safe(() => load.frame!.frameTreeNodeId, null as number | null);
   if (id === null || !context.registry.isAppFrame(id)) return null;
   const parsed = parse(load.url);
-  if (appTargetAllowed(parsed, context.ownPorts)) return null;
+  // What the main window's frame-src lets an app iframe show: its blocked load
+  // came from the page's own frame-ancestors, not a way out. data: and blob:
+  // are allowed inside the app's frames but not for the app iframe itself.
+  const framable =
+    parsed !== null &&
+    (parsed.href === "about:blank" || parsed.href === "about:srcdoc" || (parsed.protocol === "http:" && isAppLoopback(parsed.href, context.ownPorts)));
+  if (framable) return null;
   return { blocked: hostOrScheme(parsed), ...(isWeb(parsed) ? { refusedUrl: load.url } : {}) };
 }
