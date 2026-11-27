@@ -25,7 +25,8 @@ export type AppRoutesAnswer =
 export type AppRoutePlaceAnswer =
   | { placed: string; pageId: string }
   | { already: string; pageId: string }
-  | { error: "unavailable" | "bad-route" | "unknown-root" | "full" };
+  // `unsaved` is the renderer's own: the canvas's pending save didn't land, so main wasn't asked.
+  | { error: "unavailable" | "bad-route" | "unknown-root" | "full" | "unsaved" };
 
 export type AppRouteSource = {
   load(appRoot?: string): Promise<AppRoutesAnswer>;
@@ -35,11 +36,12 @@ export type AppRouteSource = {
 /** The rows shown at most; past it, the person refines the filter. */
 export const APP_ROUTE_PICKER_ROWS = 200;
 
-const PLACE_ERRORS: Record<"unavailable" | "bad-route" | "unknown-root" | "full", string> = {
+const PLACE_ERRORS: Record<"unavailable" | "bad-route" | "unknown-root" | "full" | "unsaved", string> = {
   "bad-route": "That address isn't a page of this app.",
   full: "This page is full. Remove a frame or use another page.",
   "unknown-root": "That app isn't in this workspace any more.",
   unavailable: "Pages from your app can't be added right now.",
+  unsaved: "The canvas couldn't be saved, so the page wasn't added. Try again in a moment.",
 };
 
 const SOURCE_LINES: Record<AppRouteList["source"], string> = {
@@ -53,15 +55,18 @@ const TRUNCATED_LINE = "Not every route is listed: type /path, or list routes in
 /**
  * The person's Add, in order (M6.3): the canvas's pending save lands first, so
  * main's write can't conflict with it, then main places on the page on screen.
+ * When the save doesn't land (false or a rejection), main isn't asked: its copy
+ * is older than the screen.
  */
 export function appRoutePlacer(deps: {
-  flush(): Promise<unknown>;
+  flush(): Promise<boolean>;
   place(request: { appRoot: string; route: string; pageId: string; viewSize?: { w: number; h: number } }): Promise<AppRoutePlaceAnswer>;
   pageId(): string;
   viewSize(): { w: number; h: number } | undefined;
 }): AppRouteSource["place"] {
   return async (appRoot, route) => {
-    await deps.flush().catch(() => undefined);
+    const saved = await deps.flush().catch(() => false);
+    if (saved !== true) return { error: "unsaved" };
     const viewSize = deps.viewSize();
     return deps.place({ appRoot, route, pageId: deps.pageId(), ...(viewSize ? { viewSize } : {}) });
   };

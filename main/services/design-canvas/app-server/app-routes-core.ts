@@ -526,9 +526,8 @@ class ConfigReader {
       if (!this.take("await", "id") || !this.flatCall() || !this.take(")", "punct")) return false;
       return true;
     }
-    if (!this.take("flatRoutes", "id") || !this.take("(", "punct")) return false;
-    if (this.peek()?.value === "{" && !this.skipObject()) return false;
-    return this.take(")", "punct");
+    // Options (another folder, other ignored files) change what the walker would read, so only `flatRoutes()` is read.
+    return this.take("flatRoutes", "id") && this.take("(", "punct") && this.take(")", "punct");
   }
 
   /** `[ element, … ]` under `prefix`; false on anything it can't read. */

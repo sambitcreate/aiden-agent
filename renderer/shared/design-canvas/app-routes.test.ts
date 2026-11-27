@@ -18,6 +18,16 @@ test("a concrete route has no dot or empty segments, which would name another pa
   for (const route of ["/pricing/", "/v1.2/notes", "/files?path=../x", "/a?b=//c"]) assert.equal(isConcreteRoute(route), true, route);
 });
 
+test("a percent-encoded dot segment is a dot segment: the URL parser resolves it to another page", () => {
+  for (const route of ["/a/%2e%2e/admin", "/a/%2E%2e/admin", "/%2e/x", "/a/.%2E/b", "/a/%2e./b", "/a/%2E"]) {
+    assert.equal(isConcreteRoute(route), false, route);
+    // The oracle: the browser's own parser names a different path.
+    assert.notEqual(new URL(route, "http://x.invalid").pathname, route.split("?")[0], route);
+  }
+  for (const route of ["/v%2e1", "/%2e%2e%2e", "/caf\u00e9"]) assert.equal(isConcreteRoute(route), true, route);
+  assert.equal(isRoutePattern("/a/%2e%2e/[id]"), false);
+});
+
 test("pattern shapes: whole-segment brackets only, rooted, no empty segments", () => {
   assert.equal(isRoutePattern("/"), true);
   assert.equal(isRoutePattern("/blog/[slug]"), true);

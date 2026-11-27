@@ -708,11 +708,17 @@ export async function placeWrittenPagesOnCanvas(input: {
    * the pages and routes, and the person hasn't taken it off the canvas.
    */
   fallbackRoute?: WrittenAppRoute;
+  /**
+   * The workspace the routes were read from. A chat that is in another one
+   * now places nothing: its routes and roots belong to the canvas it left.
+   */
+  workspaceId?: string;
 }): Promise<{ frameIds: string[]; pageId?: string; focusId?: number; added: number[] }> {
   if (input.limit !== undefined && input.limit <= 0) return { frameIds: [], added: [] };
   // A chat deleted meanwhile has no canvas to put them on.
   const workspaceId = await input.store.workspaceIdOf(input.chatId);
   if (workspaceId === null) return { frameIds: [], added: [] };
+  if (input.workspaceId !== undefined && input.workspaceId !== workspaceId) return { frameIds: [], added: [] };
   const routes = input.routes ?? [];
   let rules: EntryRules | undefined;
   if (input.entry) {

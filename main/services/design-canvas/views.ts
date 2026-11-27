@@ -182,10 +182,15 @@ export class DesignCanvasViews {
   /**
    * Aiden shows `pageId` to the chat: from now on its tools read that page,
    * whether or not a canvas is open, looked at from where the chat last looked
-   * at it. Returns the change's `focusId`.
+   * at it. Returns the change's `focusId`. With `stillOwned`, it is asked
+   * after the views load and right before the change, which is synchronous:
+   * false keeps nothing and answers undefined (the chat left the workspace).
    */
-  async showPage(chatId: string, workspaceId: string, pageId: string): Promise<number> {
+  showPage(chatId: string, workspaceId: string, pageId: string): Promise<number>;
+  showPage(chatId: string, workspaceId: string, pageId: string, stillOwned: () => Promise<boolean>): Promise<number | undefined>;
+  async showPage(chatId: string, workspaceId: string, pageId: string, stillOwned?: () => Promise<boolean>): Promise<number | undefined> {
     const workspace = await this.workspace(workspaceId);
+    if (stillOwned && !(await stillOwned())) return undefined;
     const entry: Entry = workspace.entries.get(chatId) ?? { pageId, viewports: new Map(), focusId: 0, mounted: false, visible: false };
     entry.pageId = pageId;
     entry.focusId += 1;
@@ -367,8 +372,12 @@ export type DesignTurnPages = {
   resolver(workspaceId: string): Promise<(doc: Pick<DesignCanvas, "pages" | "chatPages">) => DesignChatView>;
   /** The chat's view for this turn, on a page that exists in `doc`. */
   view(doc: Pick<DesignCanvas, "pages" | "chatPages">, workspaceId: string): Promise<DesignChatView>;
-  /** Aiden shows `pageId`: later calls in the turn work on it. The change's `focusId`, when main keeps views. */
-  show(workspaceId: string, pageId: string): Promise<number | undefined>;
+  /**
+   * Aiden shows `pageId`: later calls in the turn work on it. The change's
+   * `focusId`, when main keeps views. With `stillOwned`, nothing is kept when
+   * it answers false just before the change.
+   */
+  show(workspaceId: string, pageId: string, stillOwned?: () => Promise<boolean>): Promise<number | undefined>;
 };
 
 export function designTurnPages(options: {
@@ -400,9 +409,11 @@ export function designTurnPages(options: {
     async view(doc, workspaceId) {
       return (await resolver(workspaceId))(doc);
     },
-    async show(workspaceId, pageId) {
+    async show(workspaceId, pageId, stillOwned) {
       shown = pageId;
-      return options.views?.showPage(options.chatId, workspaceId, pageId);
+      return stillOwned
+        ? options.views?.showPage(options.chatId, workspaceId, pageId, stillOwned)
+        : options.views?.showPage(options.chatId, workspaceId, pageId);
     },
   };
 }

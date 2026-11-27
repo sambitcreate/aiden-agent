@@ -3348,6 +3348,8 @@ async function prepareGeneration(
               workspaceRoot: pageRoot,
               paths: [],
               routes: [route],
+              // The turn's routes came from this workspace's apps.
+              workspaceId: routeWorkspaceId,
               shouldSave: canSaveWrittenPage,
               store: designCanvasStore,
               pages: designPages,

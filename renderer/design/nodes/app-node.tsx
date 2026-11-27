@@ -512,9 +512,12 @@ export function AppFrame({
 
   const requestCapture = useAppFrameCaptures(frame.id, contentRef, loaded && !stuck);
 
-  // S75: one document-level guard while any app frame shows a page.
+  // S75: one document-level guard while any app frame shows a page. A layout
+  // effect, so it is up in the same commit that puts the iframe in the DOM:
+  // a passive effect runs a task later, and a focus move in between went
+  // unanswered.
   const framing = shown !== null;
-  React.useEffect(() => (framing ? holdAppFrameFocusGuard() : undefined), [framing]);
+  React.useLayoutEffect(() => (framing ? holdAppFrameFocusGuard() : undefined), [framing]);
 
   // ── The page's bridge: untrusted, bounded, 60 a second ──
   const [page, setPage] = React.useState<{ key: string; path: string | null; error: { message: string; at?: { path: string; line: number } } | null }>({

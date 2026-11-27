@@ -231,6 +231,9 @@ test("parseReactRouterConfig: code after the default export's literal makes it u
     'export default [index("a.tsx")] + other;',
     "export default flatRoutes().concat(extraRoutes);",
     'export default flatRoutes({ rootDirectory: "pages" });',
+    // The spread form names another folder the same way.
+    'export default [...(await flatRoutes({ rootDirectory: "pages" }))] satisfies RouteConfig;',
+    'export default [route("/", "home.tsx"), ...flatRoutes({ ignoredRouteFiles: ["**/*.css"] })];',
   ]) {
     assert.equal(parseReactRouterConfig(config), null, config);
   }
