@@ -7934,12 +7934,7 @@ export class GitService {
     if (!GIT_OBJECT_ID.test(baseCommit)) {
       throw new GitServiceError("invalid_input", "The managed worktree snapshot base is invalid.");
     }
-    if (
-      workspaceSubpath !== "" &&
-      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
-    ) {
-      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
-    }
+    this.requireWorkspaceSubpath(workspaceSubpath);
     return this.enqueueMutation(repo.commonDir, async () => {
       signal?.throwIfAborted();
       const candidate = path.resolve(worktreePath);
@@ -8095,6 +8090,16 @@ export class GitService {
     return GIT_OBJECT_ID.test(commit) ? commit : undefined;
   }
 
+  private requireWorkspaceSubpath(workspaceSubpath: string): string {
+    if (
+      workspaceSubpath !== "" &&
+      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
+    ) {
+      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
+    }
+    return workspaceSubpath;
+  }
+
   /**
    * The captured tree the snapshot ref still anchors, or undefined when the ref
    * no longer resolves. Used to prove a safe deletion remains restorable.
@@ -8156,12 +8161,7 @@ export class GitService {
     if (!GIT_OBJECT_ID.test(baseCommit)) {
       throw new GitServiceError("invalid_input", "The managed worktree snapshot base is invalid.");
     }
-    if (
-      workspaceSubpath !== "" &&
-      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
-    ) {
-      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
-    }
+    this.requireWorkspaceSubpath(workspaceSubpath);
     return this.enqueueMutation(repo.commonDir, async () => {
       const managedRoot = await fs.realpath(root);
       // The target does not exist yet, so canonicalize its parent: ancestors
@@ -8318,12 +8318,7 @@ export class GitService {
   ): Promise<GitCreatedWorktree> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.validateBranchName(repo, branch);
-    if (
-      workspaceSubpath !== "" &&
-      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
-    ) {
-      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
-    }
+    this.requireWorkspaceSubpath(workspaceSubpath);
     return this.enqueueMutation(repo.commonDir, async () => {
       const managedRoot = await fs.realpath(root);
       const requestedTarget = path.resolve(worktreePath);
