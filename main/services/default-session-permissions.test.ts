@@ -199,7 +199,8 @@ test("session events: no subscriber means no listener; cancels prevent and cance
   assert.equal(prevented, true);
   assert.equal(chosen, "");
   chosen = "untouched";
-  emitter.emit("select-serial-port", { preventDefault: () => undefined }, { frame: null, portList: [] }, (id: unknown) => (chosen = id));
+  // Electron 43: select-serial-port is (event, portList, webContents, callback).
+  emitter.emit("select-serial-port", { preventDefault: () => undefined }, [], contents(1), (id: unknown) => (chosen = id));
   assert.equal(chosen, "untouched", "a subscriber that doesn't cancel leaves the chooser alone");
 
   removeDownload();
@@ -207,6 +208,31 @@ test("session events: no subscriber means no listener; cancels prevent and cance
   for (const event of ["will-download", "select-hid-device", "select-serial-port", "select-usb-device"]) {
     assert.equal(emitter.listenerCount(event), 0, event);
   }
+});
+
+test("the serial chooser's subscriber gets its web contents, and a cancel or a throw answers its real callback", () => {
+  const { target, emitter } = fakeTarget();
+  const dispatcher = claimDefaultSessionPermissions(target);
+  const seen: Array<{ kind: string; frame: unknown; contents: number | undefined }> = [];
+  const remove = dispatcher.onSelectDevice("design", (kind, details) => {
+    seen.push({ kind, frame: details.frame, contents: details.webContents?.id });
+    if (details.webContents?.id === 9) throw new Error("subscriber failed");
+    return details.webContents?.id === 7 ? "cancel" : undefined;
+  });
+  const choose = (webContents: Electron.WebContents) => {
+    const record = { prevented: false, chosen: "unanswered" as unknown };
+    emitter.emit("select-serial-port", { preventDefault: () => (record.prevented = true) }, [{ portId: "p1" }], webContents, (id: unknown) => (record.chosen = id));
+    return record;
+  };
+  assert.deepEqual(choose(contents(7)), { prevented: true, chosen: "" });
+  assert.deepEqual(choose(contents(9)), { prevented: true, chosen: "" }, "a throwing subscriber cancels, through the 4th argument");
+  assert.deepEqual(choose(contents(1)), { prevented: false, chosen: "unanswered" });
+  assert.deepEqual(seen.map((entry) => [entry.kind, entry.frame, entry.contents]), [
+    ["serial", null, 7],
+    ["serial", null, 9],
+    ["serial", null, 1],
+  ]);
+  remove();
 });
 
 test("with guardSetters a direct setPermissionRequestHandler call throws", () => {

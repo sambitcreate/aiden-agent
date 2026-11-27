@@ -60,7 +60,8 @@ export type WillDownloadHandler = (
 export type DeviceChooserKind = "hid" | "serial" | "usb";
 export type SelectDeviceHandler = (
   kind: DeviceChooserKind,
-  details: { frame: Electron.WebFrameMain | null },
+  /** HID and USB name the frame (null once it navigated or closed); serial names only its web contents. */
+  details: { frame: Electron.WebFrameMain | null; webContents?: Electron.WebContents },
 ) => "cancel" | undefined;
 
 export interface DefaultSessionPermissions {
@@ -255,22 +256,35 @@ export function claimDefaultSessionPermissions(
       }
     }) as Listener,
   );
-  const onSelectDevice = eventSubscribers<SelectDeviceHandler>(CHOOSER_EVENTS, (list, kind) =>
-    ((event: Electron.Event, details: { frame?: Electron.WebFrameMain | null }, callback: (id: string) => void) => {
-      for (const { handler } of list.slice()) {
-        let verdict: "cancel" | undefined;
-        try {
-          verdict = handler(kind as DeviceChooserKind, { frame: details?.frame ?? null });
-        } catch {
-          verdict = "cancel";
-        }
-        if (verdict === "cancel") {
-          event.preventDefault();
-          callback("");
-          return;
-        }
+  const chooseFor = (
+    list: ReadonlyArray<{ handler: SelectDeviceHandler }>,
+    kind: DeviceChooserKind,
+    event: Electron.Event,
+    details: Parameters<SelectDeviceHandler>[1],
+    callback: (id: string) => void,
+  ) => {
+    for (const { handler } of list.slice()) {
+      let verdict: "cancel" | undefined;
+      try {
+        verdict = handler(kind, details);
+      } catch {
+        verdict = "cancel";
       }
-    }) as Listener,
+      if (verdict === "cancel") {
+        event.preventDefault();
+        callback("");
+        return;
+      }
+    }
+  };
+  // Electron 43: HID and USB are (event, details, callback); serial is
+  // (event, portList, webContents, callback), with no frame.
+  const onSelectDevice = eventSubscribers<SelectDeviceHandler>(CHOOSER_EVENTS, (list, kind) =>
+    (kind === "serial"
+      ? (event: Electron.Event, _ports: unknown, webContents: Electron.WebContents, callback: (id: string) => void) =>
+          chooseFor(list, "serial", event, { frame: null, webContents }, callback)
+      : (event: Electron.Event, details: { frame?: Electron.WebFrameMain | null }, callback: (id: string) => void) =>
+          chooseFor(list, kind as DeviceChooserKind, event, { frame: details?.frame ?? null }, callback)) as Listener,
   );
 
   const dispatcher: DefaultSessionPermissions = {

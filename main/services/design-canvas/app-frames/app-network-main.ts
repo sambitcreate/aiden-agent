@@ -349,7 +349,14 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
     }),
   );
   removals.push(
-    deps.permissions.onSelectDevice(SUBSCRIBER, (_kind, details) => {
+    deps.permissions.onSelectDevice(SUBSCRIBER, (kind, details) => {
+      if (kind === "serial") {
+        // Serial names no frame. The main window hosts app frames and Aiden
+        // itself uses no chooser, so it cancels there and in export windows.
+        const contents = details.webContents;
+        if (!contents) return "cancel";
+        return isMainContents(contents) || registry.isExportContents(contents.id) ? "cancel" : undefined;
+      }
       const main = deps.mainContents();
       return frameInAppContext(main, details.frame) ? "cancel" : undefined;
     }),

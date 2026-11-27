@@ -365,19 +365,33 @@ test("a request an export window starts is stamped on the registry, so its expor
   remove();
 });
 
-test("HID, serial and USB choosers cancel for app context and pass for the main frame", () => {
+/** Emits a chooser event with Electron 43's real arguments; serial has no frame, only its web contents. */
+function choose(s: ReturnType<typeof setup>, event: string, target: { frame?: Frame | null; contents?: { id: number } }) {
+  let prevented = false;
+  let chosen: string | undefined;
+  const preventable = { preventDefault: () => (prevented = true) };
+  const callback = (id: string) => (chosen = id);
+  if (event === "select-serial-port") s.permissions.emitter.emit(event, preventable, [], target.contents, callback);
+  else s.permissions.emitter.emit(event, preventable, { frame: target.frame ?? null, deviceList: [] }, callback);
+  return { prevented, chosen };
+}
+
+test("HID and USB choosers cancel for app context and pass for the main frame", () => {
   const s = setup();
   const app = s.admit();
-  for (const event of ["select-hid-device", "select-serial-port", "select-usb-device"]) {
-    const outcome = (target: Frame) => {
-      let prevented = false;
-      let chosen: string | undefined;
-      s.permissions.emitter.emit(event, { preventDefault: () => (prevented = true) }, { frame: target }, (id: string) => (chosen = id));
-      return { prevented, chosen };
-    };
-    assert.deepEqual(outcome(app), { prevented: true, chosen: "" }, event);
-    assert.deepEqual(outcome(s.window().main), { prevented: false, chosen: undefined }, event);
+  for (const event of ["select-hid-device", "select-usb-device"]) {
+    assert.deepEqual(choose(s, event, { frame: app }), { prevented: true, chosen: "" }, event);
+    assert.deepEqual(choose(s, event, { frame: s.window().main }), { prevented: false, chosen: undefined }, event);
   }
+});
+
+test("the serial chooser, which names no frame, cancels in the main window and export windows only", () => {
+  const s = setup();
+  s.admit();
+  s.network!.registry.addExportContents(42);
+  assert.deepEqual(choose(s, "select-serial-port", { contents: s.window().contents }), { prevented: true, chosen: "" });
+  assert.deepEqual(choose(s, "select-serial-port", { contents: { id: 42 } }), { prevented: true, chosen: "" });
+  assert.deepEqual(choose(s, "select-serial-port", { contents: { id: 5 } }), { prevented: false, chosen: undefined }, "another window");
 });
 
 // ---- Downloads (D8, E3) -------------------------------------------------------
