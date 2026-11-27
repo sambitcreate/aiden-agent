@@ -25,6 +25,7 @@ import {
   APP_DEFAULT_VIEWPORT,
   appFrameName,
   isAppFrameId,
+  isAppRoute,
 } from "../../shared/design-canvas/app-frame";
 import { APP_FRAME_BLOCKED_HOSTS, type AppFrameDialogKind, type DesignAppFrameMountResult } from "../../shared/design-canvas/app-frame-events";
 import { designMinSize, type DesignFrame } from "../../shared/design-canvas/schema";
@@ -42,6 +43,7 @@ import { DESIGN_FRAME_HEADER_PX, useDesignNodeContext } from "./design-node-cont
 import { FrameActions } from "./frame-actions";
 import { DesignNodeResizer, FrameSkeleton, rectOnCanvas, useRetiringFrame } from "./frame-parts";
 import { FrameTitle } from "./frame-title";
+import { LayoutGuide } from "./layout-guide";
 
 /** At most this many bridge messages are read per second per frame; the rest are dropped (D12). */
 export const APP_BRIDGE_MESSAGES_PER_SECOND = 60;
@@ -161,10 +163,22 @@ function refusedHost(url: string): { label: string; openable: boolean } {
   }
 }
 
-/** One picture at a time, at most one per 2 s, a moment after the page last changed (D16). */
-function useAppFrameCaptures(frameId: string, content: React.RefObject<HTMLElement | null>): () => void {
+/**
+ * One picture at a time, at most one per 2 s, a moment after the page last
+ * changed (D16). Only while the loaded page is showing: a picture due when
+ * the page goes (the app stopped, the frame left) is dropped, never taken of
+ * the card in its place.
+ */
+function useAppFrameCaptures(frameId: string, content: React.RefObject<HTMLElement | null>, showing: boolean): () => void {
   const last = React.useRef(Number.NEGATIVE_INFINITY);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showingRef = React.useRef(showing);
+  showingRef.current = showing;
+  React.useEffect(() => {
+    if (showing) return;
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  }, [showing, frameId]);
   React.useEffect(
     () => () => {
       if (timer.current !== null) clearTimeout(timer.current);
@@ -177,6 +191,7 @@ function useAppFrameCaptures(frameId: string, content: React.RefObject<HTMLEleme
     const wait = Math.max(APP_FRAME_CAPTURE_SETTLE_MS, last.current + APP_FRAME_CAPTURE_GAP_MS - Date.now());
     timer.current = setTimeout(() => {
       timer.current = null;
+      if (!showingRef.current) return;
       last.current = Date.now();
       const rect = rectOnCanvas(content.current);
       // A frame partly off the canvas isn't taken: the picture would hold whatever covers the rest.
@@ -185,11 +200,12 @@ function useAppFrameCaptures(frameId: string, content: React.RefObject<HTMLEleme
   }, [frameId, content]);
 }
 
-/** Main's notices for this mount: blocked requests, suppressed dialogs, refused links. */
+/** Main's notices for this mount: blocked requests, suppressed dialogs, refused links, and putting the frame back. */
 function useAppFrameEvents(
   frameId: string,
   mountToken: string | null,
   onOpenInBrowser: (url: string) => void,
+  onRestore: () => void,
 ): { blocked: number; hosts: string[]; dialogs: AppFrameDialogKind[] } {
   const [state, setState] = React.useState<{ token: string | null; blocked: number; hosts: string[]; dialogs: AppFrameDialogKind[] }>({
     token: null,
@@ -198,8 +214,10 @@ function useAppFrameEvents(
     dialogs: [],
   });
   const openRef = React.useRef(onOpenInBrowser);
+  const restoreRef = React.useRef(onRestore);
   React.useLayoutEffect(() => {
     openRef.current = onOpenInBrowser;
+    restoreRef.current = onRestore;
   });
   React.useEffect(() => {
     if (mountToken === null) return;
@@ -217,12 +235,19 @@ function useAppFrameEvents(
     };
     const off = designCanvasApi.onDesignAppFrame((event) => {
       if (event.frameId !== frameId || event.mountToken !== mountToken) return;
-      if (event.kind === "blocked") {
+      if (event.kind === "navigation-restore") {
+        restoreRef.current();
+      } else if (event.kind === "blocked") {
         // Main sends running totals for this mount.
         setState((current) =>
           current.token === mountToken && current.blocked >= event.count
             ? current
-            : { ...current, token: mountToken, blocked: event.count, hosts: event.hosts },
+            : {
+                ...(current.token === mountToken ? current : { dialogs: [] }),
+                token: mountToken,
+                blocked: event.count,
+                hosts: event.hosts,
+              },
         );
       } else if (event.kind === "dialog-suppressed") {
         setState((current) =>
@@ -264,7 +289,13 @@ function BlockedLabel({ blocked, hosts, dialogs }: { blocked: number; hosts: str
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="bar" size="small" className="nodrag text-tertiary" onPointerDown={(event) => event.stopPropagation()}>
+        <Button
+          variant="bar"
+          size="small"
+          className="nodrag text-tertiary"
+          onPointerDown={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
           {blocked > 0 ? `${blocked} blocked` : "Dialogs off"}
         </Button>
       </PopoverTrigger>
@@ -294,7 +325,13 @@ function ErrorLabel({ error }: { error: { message: string; at?: { path: string; 
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="bar" size="small" className="nodrag text-status-red" onPointerDown={(event) => event.stopPropagation()}>
+        <Button
+          variant="bar"
+          size="small"
+          className="nodrag text-status-red"
+          onPointerDown={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
           Error
         </Button>
       </PopoverTrigger>
@@ -338,9 +375,6 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
   const scale = frame.scale ?? 0.5;
   const contentHeight = Math.max(0, frame.h - DESIGN_FRAME_HEADER_PX);
   const { snapshot } = useFrameSnapshot(frame.id, 0);
-
-  // S75: one document-level guard while any app frame is on the canvas.
-  React.useEffect(() => holdAppFrameFocusGuard(), []);
 
   // ── The app's status, with the instant rule for Start, Connect and Retry ──
   const base = snapshotOfApps ? appStatusFor(snapshotOfApps, appRoot) : null;
@@ -418,6 +452,8 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
   // The last iframe shown, kept while the frame leaves the live set so its picture can be taken first.
   const [retained, setRetained] = React.useState<{ key: string; origin: string; token: string } | null>(null);
   if (iframeKey !== null && retained?.key !== iframeKey) setRetained({ key: iframeKey, origin: origin!, token: token! });
+  // The iframe went while the frame stayed live (the app stopped or moved): there's nothing left to retire.
+  else if (iframeKey === null && live && retained !== null) setRetained(null);
   const retiring = useRetiringFrame({
     frameId: frame.id,
     version: 0,
@@ -427,7 +463,28 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
   });
   const shown = iframeKey !== null ? { key: iframeKey, origin: origin!, token: token! } : retiring ? retained : null;
   const loaded = shown !== null && loadedKey === shown.key;
-  const requestCapture = useAppFrameCaptures(frame.id, contentRef);
+
+  // Entering holds for the page that was on screen when the person entered:
+  // once it goes (the app stopped, restarted or moved), the frame is left and
+  // the next page mounts inert. A frame entered with no page is left at once.
+  const [enteredKey, setEnteredKey] = React.useState<string | null>(null);
+  if (entered && enteredKey === null && iframeKey !== null) setEnteredKey(iframeKey);
+  else if (!entered && enteredKey !== null) setEnteredKey(null);
+  const inside = entered && iframeKey !== null && enteredKey === iframeKey;
+  const stale = entered && (iframeKey === null || (enteredKey !== null && enteredKey !== iframeKey));
+  const leaveRef = React.useRef(onLeave);
+  React.useLayoutEffect(() => {
+    leaveRef.current = onLeave;
+  });
+  React.useEffect(() => {
+    if (stale) leaveRef.current();
+  }, [stale]);
+
+  const requestCapture = useAppFrameCaptures(frame.id, contentRef, loaded);
+
+  // S75: one document-level guard while any app frame shows a page.
+  const framing = shown !== null;
+  React.useEffect(() => (framing ? holdAppFrameFocusGuard() : undefined), [framing]);
 
   // ── The page's bridge: untrusted, bounded, 60 a second ──
   const [page, setPage] = React.useState<{ key: string; path: string | null; error: { message: string; at?: { path: string; line: number } } | null }>({
@@ -436,12 +493,14 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
     error: null,
   });
   const pageState = shown && page.key === shown.key ? page : { key: shown?.key ?? "", path: null, error: null };
-  const enteredRef = React.useRef({ entered, onLeave, dark: frame.colorScheme === "dark" });
+  const enteredRef = React.useRef({ entered: inside, onLeave, dark: frame.colorScheme === "dark" });
   React.useLayoutEffect(() => {
-    enteredRef.current = { entered, onLeave, dark: frame.colorScheme === "dark" };
+    enteredRef.current = { entered: inside, onLeave, dark: frame.colorScheme === "dark" };
   });
   const shownKey = shown?.key ?? null;
   const shownOrigin = shown?.origin ?? null;
+  /** The scheme this mount's page was last told (a page starts light until told). */
+  const postedScheme = React.useRef<{ key: string | null; dark: boolean }>({ key: null, dark: false });
   React.useEffect(() => {
     if (shownKey === null || shownOrigin === null) return;
     let windowStart = 0;
@@ -461,6 +520,8 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
       used += 1;
       switch (message.type) {
         case "ready":
+          // A fresh page starts in its own scheme.
+          postedScheme.current = { key: shownKey, dark: enteredRef.current.dark };
           if (enteredRef.current.dark) postToAppPage(guest, shownOrigin, { type: "set-scheme", dark: true });
           return;
         case "route":
@@ -488,24 +549,28 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
     return () => window.removeEventListener("message", receive);
   }, [shownKey, shownOrigin, requestCapture]);
 
-  // The Dark switch: posted to this frame's page only, when it changes after load.
+  // The Dark switch: posted to this frame's page only, once it has loaded,
+  // whenever the page wasn't last told the switch's state (so a press before
+  // load is sent at load).
   const dark = frame.colorScheme === "dark";
-  const postedDark = React.useRef<boolean | null>(null);
   React.useEffect(() => {
-    if (!loaded || shownOrigin === null) {
-      postedDark.current = null;
-      return;
-    }
-    if (postedDark.current === null) {
-      postedDark.current = dark;
-      return;
-    }
-    if (postedDark.current === dark) return;
-    postedDark.current = dark;
+    if (!loaded || shownKey === null || shownOrigin === null) return;
+    const told = postedScheme.current.key === shownKey ? postedScheme.current.dark : false;
+    if (told === dark) return;
+    postedScheme.current = { key: shownKey, dark };
     postToAppPage(iframeRef.current?.contentWindow, shownOrigin, { type: "set-scheme", dark });
-  }, [dark, loaded, shownOrigin]);
+  }, [dark, loaded, shownKey, shownOrigin]);
 
-  const events = useAppFrameEvents(frame.id, shown?.token ?? null, onOpenInBrowser);
+  // S1, D1: main says the window's frame-src left the frame on Chromium's blocked
+  // page; it goes back to the last path its own page reported, or its route.
+  const lastPathRef = React.useRef<string | null>(null);
+  lastPathRef.current = pageState.path !== null && isAppRoute(pageState.path) ? pageState.path : null;
+  const restore = React.useCallback(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || shownOrigin === null) return;
+    iframe.src = `${shownOrigin}${lastPathRef.current ?? route}`;
+  }, [shownOrigin, route]);
+  const events = useAppFrameEvents(frame.id, shown?.token ?? null, onOpenInBrowser, restore);
 
   // ── What the body shows ──
   let card: React.ReactNode = null;
@@ -530,6 +595,9 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
       <BlockedLabel {...events} />
     </>
   );
+
+  // Only a page on screen in the live set can be entered (not a card, a picture or a retiring frame).
+  const enterable = card === null && live && iframeKey !== null;
 
   let body: React.ReactNode;
   if (card !== null) {
@@ -566,23 +634,23 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
         ) : null}
         {shown ? (
           <div
-            className={cn("absolute inset-0 overflow-hidden", entered && "nodrag nowheel")}
-            style={{ pointerEvents: entered ? undefined : "none" }}
+            className={cn("absolute inset-0 overflow-hidden", inside && "nodrag nowheel")}
+            style={{ pointerEvents: inside ? undefined : "none" }}
           >
             <iframe
               key={shown.key}
               ref={iframeRef}
               data-app-frame-id={frame.id}
-              {...(entered ? { [APP_FRAME_ENTERED_ATTRIBUTE]: "" } : {})}
+              {...(inside ? { [APP_FRAME_ENTERED_ATTRIBUTE]: "" } : {})}
               // S75: nothing inside takes focus until the person enters the frame.
-              inert={!entered}
+              inert={!inside}
               name={appFrameName(frame.id, shown.token)}
               title={frame.title}
               sandbox={APP_FRAME_SANDBOX}
               allow={APP_FRAME_ALLOW}
               referrerPolicy="no-referrer"
               src={`${shown.origin}${route}`}
-              tabIndex={entered ? 0 : -1}
+              tabIndex={inside ? 0 : -1}
               onLoad={() => {
                 setLoadedKey(shown.key);
                 requestCapture();
@@ -604,10 +672,11 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
   }
 
   return (
-    <div className="h-full w-full" onDoubleClick={card !== null ? undefined : onEnter}>
+    <div className="h-full w-full" onDoubleClick={enterable ? onEnter : undefined}>
       <CanvasNodeChrome title={frame.title} titleSlot={titleSlot} selected={selected} flush status={statusRow} toolbar={actions}>
         <div ref={contentRef} className="relative h-full w-full overflow-hidden rounded-b-button">
           {body}
+          {frame.guide ? <LayoutGuide guide={frame.guide} scale={scale} /> : null}
         </div>
       </CanvasNodeChrome>
     </div>

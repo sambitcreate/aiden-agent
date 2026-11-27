@@ -498,6 +498,24 @@ test("refused links within a second make one toast with the latest, and Open in 
   assert.deepEqual(opened, ["https://site-5.example/"]);
 });
 
+test("when main says the frame landed on a blocked page, it goes back to the page's last in-app path", async () => {
+  const frame = appFrame();
+  const { mounts } = setup();
+  render(<Harness frame={frame} />);
+  const iframe = await liveIframe();
+  const start = iframe.getAttribute("src");
+  const mountToken = mounts()[0]!.mountToken;
+  // Before the page reports a path, it goes back to the frame's route.
+  notify({ kind: "navigation-restore", frameId: frame.id, mountToken });
+  assert.equal(iframes()[0]!.src, start);
+  const { guest } = giveWindow(iframes()[0]!);
+  post(guest, { type: "aiden-app:route", path: "/pricing/annual" });
+  notify({ kind: "navigation-restore", frameId: frame.id, mountToken: "z".repeat(16) });
+  assert.equal(iframes()[0]!.src, start, "another mount's notice changes nothing");
+  notify({ kind: "navigation-restore", frameId: frame.id, mountToken });
+  assert.equal(iframes()[0]!.src, `${new URL(start!).origin}/pricing/annual`);
+});
+
 // ── The page's bridge: untrusted and bounded ──
 
 test("the in-app path comes only from this frame's own page, and an error label opens the escaped message", async () => {
@@ -539,7 +557,9 @@ test("hot updates in a burst take one picture", async () => {
   };
   const { calls } = setup();
   render(<Harness frame={appFrame()} />);
-  const { guest } = giveWindow(await liveIframe());
+  const iframe = await liveIframe();
+  const { guest } = giveWindow(iframe);
+  fireEvent.load(iframe);
   for (let index = 0; index < 10; index += 1) post(guest, { type: "aiden-app:hmr" });
   await act(async () => new Promise((resolve) => setTimeout(resolve, APP_FRAME_CAPTURE_SETTLE_MS + 150)));
   assert.equal(calls.filter((call) => call.channel === "designCanvas:capture").length, 1);
@@ -554,6 +574,141 @@ test("the Dark switch reaches this frame's page only, on its own origin", async 
   fireEvent.load(iframe);
   rerender(<Harness frame={{ ...frame, colorScheme: "dark" }} />);
   assert.deepEqual(mine.posted, [{ data: { type: "aiden-app:set-scheme", dark: true }, origin: ORIGIN }]);
+});
+
+// ── Leaving: a stopped app, a frame that leaves the live set, a new mount (review-p3a-2) ──
+
+const captures = (calls: BotTestIpcCall[]) => calls.filter((call) => call.channel === "designCanvas:capture").length;
+const stopped = () => app({ phase: "stopped", origin: undefined, port: undefined, revision: 9 });
+function onCanvasRect() {
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    return { x: 0, y: 0, top: 0, left: 0, width: 640, height: 400, right: 640, bottom: 400, toJSON: () => ({}) } as DOMRect;
+  };
+}
+
+test("an app that stopped while live doesn't come back as an iframe when the frame then leaves the live set", async () => {
+  onCanvasRect();
+  const frame = appFrame();
+  const { mounts } = setup();
+  const { rerender } = render(<Harness frame={frame} />);
+  fireEvent.load(await liveIframe());
+  act(() => emitBotTestNotification("designApp:status", snapshotOf(stopped())));
+  await screen.findByText("Not running");
+  assert.equal(iframes().length, 0);
+  rerender(<Harness frame={frame} live={false} />);
+  assert.equal(iframes().length, 0, "no iframe for a used token on a dead origin");
+  assert.equal(mounts().length, 1);
+});
+
+test("a picture that was due when the app stopped isn't taken of the card that replaced the page", async () => {
+  onCanvasRect();
+  const { calls } = setup();
+  render(<Harness frame={appFrame()} />);
+  fireEvent.load(await liveIframe());
+  act(() => emitBotTestNotification("designApp:status", snapshotOf(stopped())));
+  await screen.findByText("Not running");
+  await act(async () => new Promise((resolve) => setTimeout(resolve, APP_FRAME_CAPTURE_SETTLE_MS + 150)));
+  assert.equal(captures(calls), 0);
+});
+
+test("a new mount's blocked label doesn't list the dialogs an earlier mount suppressed", async () => {
+  const frame = appFrame();
+  const { mounts } = setup();
+  render(<Harness frame={frame} />);
+  await liveIframe();
+  notify({ kind: "dialog-suppressed", frameId: frame.id, mountToken: mounts()[0]!.mountToken, dialog: "alert" });
+  assert.ok(await screen.findByRole("button", { name: "Dialogs off" }));
+  act(() => emitBotTestNotification("designApp:status", snapshotOf(app({ origin: "http://127.0.0.1:5174", port: 5174, revision: 9 }))));
+  await waitFor(() => assert.equal(mounts().length, 2));
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Dialogs off" }) === null, true));
+  notify({ kind: "blocked", frameId: frame.id, mountToken: mounts()[1]!.mountToken, count: 1, hosts: ["example.com"] });
+  fireEvent.click(await screen.findByRole("button", { name: "1 blocked" }));
+  await screen.findByRole("list", { name: "Blocked hosts" });
+  assert.equal(screen.queryByText(/Dialogs are turned off/u)?.textContent ?? null, null);
+});
+
+test("double-clicking the blocked or error label opens it without entering the frame", async () => {
+  const frame = appFrame();
+  let entered = 0;
+  const { mounts } = setup();
+  render(<Harness frame={frame} onEnter={() => (entered += 1)} />);
+  const { guest } = giveWindow(await liveIframe());
+  notify({ kind: "blocked", frameId: frame.id, mountToken: mounts()[0]!.mountToken, count: 1, hosts: ["example.com"] });
+  post(guest, { type: "aiden-app:error", kind: "error", message: "Boom" });
+  fireEvent.doubleClick(await screen.findByRole("button", { name: "1 blocked" }));
+  fireEvent.doubleClick(screen.getByRole("button", { name: "Error" }));
+  assert.equal(entered, 0);
+});
+
+test("a stopped app frame can't be entered by double-click", async () => {
+  let entered = 0;
+  setup({ apps: [stopped()] });
+  render(<Harness frame={appFrame()} onEnter={() => (entered += 1)} />);
+  fireEvent.doubleClick(await screen.findByText("Not running"));
+  assert.equal(entered, 0);
+});
+
+test("the Dark switch pressed before the page has loaded reaches it once it has", async () => {
+  const frame = appFrame();
+  setup();
+  const { rerender } = render(<Harness frame={frame} />);
+  const iframe = await liveIframe();
+  const mine = giveWindow(iframe);
+  post(mine.guest, { type: "aiden-app:ready" });
+  rerender(<Harness frame={{ ...frame, colorScheme: "dark" }} />);
+  assert.deepEqual(mine.posted, [], "nothing goes to a page that hasn't loaded");
+  fireEvent.load(iframe);
+  assert.deepEqual(mine.posted, [{ data: { type: "aiden-app:set-scheme", dark: true }, origin: ORIGIN }]);
+});
+
+test("an app frame draws the layout guide set on it", async () => {
+  setup();
+  render(<Harness frame={appFrame({ guide: "columns-12" })} />);
+  await liveIframe();
+  const guide = document.querySelector("[data-design-guide]");
+  assert.equal(guide?.getAttribute("data-design-guide"), "columns-12");
+  assert.equal(guide?.children.length, 12);
+});
+
+test("with live apps off, an app frame doesn't hold the focus guard: a page focus elsewhere is left alone", async () => {
+  const frame = appFrame();
+  setup();
+  render(<Harness frame={frame} designLive={false} composer />);
+  screen.getByText("Live apps are off");
+  // A stand-in app iframe from elsewhere (the guard acts on any not-entered app iframe).
+  const stray = document.createElement("iframe");
+  stray.setAttribute("data-app-frame-id", "app-elsewhere");
+  document.body.append(stray);
+  try {
+    screen.getByRole("textbox", { name: "Composer" }).focus();
+    stray.focus();
+    await settleFocus();
+    assert.equal(document.activeElement === stray, true, "no guard answered");
+  } finally {
+    stray.remove();
+  }
+});
+
+test("an entered frame whose app restarts is left, and the new page mounts inert", async () => {
+  let left = 0;
+  const frame = appFrame();
+  const { mounts } = setup();
+  render(<Harness frame={frame} entered onLeave={() => (left += 1)} />);
+  const first = await liveIframe();
+  assert.equal(first.hasAttribute("inert"), false);
+  act(() => emitBotTestNotification("designApp:status", snapshotOf(app({ origin: "http://127.0.0.1:5174", port: 5174, revision: 9 }))));
+  await waitFor(() => assert.equal(mounts().length, 2));
+  await waitFor(() => assert.equal(iframes().length === 1 && iframes()[0] !== first, true));
+  assert.equal(iframes()[0]!.hasAttribute("inert"), true, "the new page isn't entered");
+  assert.ok(left >= 1, "the canvas is told to leave");
+});
+
+test("a frame entered while its app isn't running is left at once", async () => {
+  let left = 0;
+  setup({ apps: [stopped()] });
+  render(<Harness frame={appFrame()} entered onLeave={() => (left += 1)} />);
+  await screen.findByText("Not running");
+  await waitFor(() => assert.ok(left >= 1));
 });
 
 // ── Frame actions ──

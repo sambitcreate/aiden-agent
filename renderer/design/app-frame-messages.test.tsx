@@ -230,3 +230,28 @@ test("a v1 page message from an app frame's window is never taken as a workspace
     false,
   );
 });
+
+test("an app frame entered while presenting is left when the presentation steps on, and the canvas's click leaves it too", async () => {
+  const note: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 0, y: 600, w: 240, h: 160, text: "hi", pageId: "page-1", createdBy: "person" };
+  setup({ ...emptyDesignCanvas(), revision: 1, frames: [appFrame, note] });
+  const region = await mount();
+  await liveAppIframe();
+  fireEvent.click(screen.getByRole("button", { name: "Present this page" }));
+  await screen.findByRole("toolbar", { name: "Presentation" });
+  fireEvent.doubleClick(screen.getByRole("group", { name: "Pricing app" }));
+  await waitFor(() => assert.equal(appIframe()?.hasAttribute("inert"), false), WAIT);
+  region.focus();
+  fireEvent.keyDown(region, { key: "ArrowRight", code: "ArrowRight" });
+  await waitFor(() => assert.ok(screen.getByRole("toolbar", { name: "Presentation" }).textContent?.includes("2 of 2")));
+  fireEvent.keyDown(region, { key: "ArrowLeft", code: "ArrowLeft" });
+  await waitFor(() => assert.ok(screen.getByRole("toolbar", { name: "Presentation" }).textContent?.includes("1 of 2")));
+  await liveAppIframe();
+  assert.equal(appIframe()!.hasAttribute("inert"), true, "back on the slide, the app isn't entered");
+
+  fireEvent.doubleClick(screen.getByRole("group", { name: "Pricing app" }));
+  await waitFor(() => assert.equal(appIframe()?.hasAttribute("inert"), false), WAIT);
+  const pane = document.querySelector<HTMLElement>(".react-flow__pane");
+  assert.ok(pane, "the canvas pane");
+  fireEvent.click(pane);
+  await waitFor(() => assert.equal(appIframe()?.hasAttribute("inert"), true), WAIT);
+});

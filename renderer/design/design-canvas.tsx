@@ -953,6 +953,8 @@ function LoadedDesignCanvas({
         to === "first" ? 0 : to === "last" ? last : Math.min(last, Math.max(0, current.index + (to === "next" ? 1 : -1)));
       return index === current.index ? current : { ...current, index };
     });
+    // A frame entered on one slide isn't entered on the next (Open full window's single frame stays entered).
+    if (!presentation?.single) setEntered(null);
   }
 
   function stopPresenting() {
@@ -1310,7 +1312,11 @@ function LoadedDesignCanvas({
               view.moved({ x: next.x, y: next.y, zoom: next.zoom });
             }}
             onPaneClick={(event) => {
-              if (presentation) return;
+              if (presentation) {
+                // Clicking off the slide leaves an entered frame; Open full window's single frame stays entered.
+                if (!presentation.single) setEntered(null);
+                return;
+              }
               if (comments.onPaneClick(event)) return;
               setEntered(null);
             }}

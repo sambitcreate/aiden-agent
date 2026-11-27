@@ -15,10 +15,13 @@
 // in the same task (Space probe, Electron 43.8.4). So `focusout` remembers
 // what lost focus, and the window's `blur` hands focus back to it.
 //
-// Known limit (2026-11-27, escalated): this restores Aiden's DOM focus, but
-// for a frame in another process Chromium keeps that frame focused, and a
-// keyboard's keys are routed to it. Restoring later (a timer) still leaks
-// some keys. See the plan's deviation 17 and the skipped K1 E2E.
+// This restores Aiden's DOM focus, but for a frame in another process
+// Chromium keeps that frame focused and routes a keyboard's keys to it. So
+// the primary defence is Blink's: main turns on BlockingFocusWithoutUserActivation
+// with the flag, and each app iframe's allow list sets
+// focus-without-user-activation 'none', so a page's own focus() does nothing
+// until the person activates the frame. This guard stays as defence in depth
+// (the K1 E2E is the canary; see the plan's deviation 17).
 
 /** Set on an app iframe while the person has entered it; the guard leaves that one alone. */
 export const APP_FRAME_ENTERED_ATTRIBUTE = "data-app-frame-entered";
@@ -51,6 +54,8 @@ function install(doc: Document): Guard {
   const view = doc.defaultView;
   // Set while the guard itself moves focus, so its own `focusin` doesn't end the move it is answering.
   let restoring = false;
+  // A second look queued before the last holder let go does nothing.
+  let removed = false;
   const focusBack = (element: HTMLElement) => {
     restoring = true;
     try {
@@ -61,7 +66,7 @@ function install(doc: Document): Guard {
   };
   /** Puts focus back where it belongs when an app iframe took it. True when it acted. */
   const settle = (frame: HTMLIFrameElement | null, lost: EventTarget | null): boolean => {
-    if (!frame) return false;
+    if (removed || !frame) return false;
     if (canTakeFocusBack(lost, doc)) {
       focusBack(lost);
       if (doc.activeElement === lost) return true;
@@ -100,6 +105,8 @@ function install(doc: Document): Guard {
   return {
     holders: 0,
     remove() {
+      removed = true;
+      recent = null;
       doc.removeEventListener("focusout", onFocusOut, true);
       doc.removeEventListener("focusin", onFocusIn, true);
       view?.removeEventListener("blur", onWindowBlur, true);
