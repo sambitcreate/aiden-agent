@@ -56,7 +56,7 @@ export function createDesignEntry(deps: {
   const written = async (
     chat: EnteringChat,
     workspaceRoot: string,
-  ): Promise<{ paths: string[]; routes?: WrittenAppRoute[]; fallbackRoute?: WrittenAppRoute }> => {
+  ): Promise<{ paths: string[]; routes?: WrittenAppRoute[]; fallbackRoute?: WrittenAppRoute; workspaceId?: string }> => {
     const live = deps.live;
     const workspaceId = live ? await deps.store.workspaceIdOf(chat.id) : null;
     // A reply still running has not saved its activity yet; its pages come from this run's record.
@@ -84,19 +84,21 @@ export function createDesignEntry(deps: {
         ? (snapshot.candidates.length === 1 ? snapshot.candidates[0]!.appRoot : snapshot.apps.length === 1 ? snapshot.apps[0]!.appRoot : undefined)
         : undefined;
     const wroteNothing = timeline.length === 0;
-    return { paths, routes, ...(wroteNothing && single !== undefined ? { fallbackRoute: { appRoot: single, route: "/" } } : {}) };
+    return { paths, routes, workspaceId, ...(wroteNothing && single !== undefined ? { fallbackRoute: { appRoot: single, route: "/" } } : {}) };
   };
   return (chat, workspaceRoot) =>
     deps.pending.track(
       chat.id,
       (async () => {
-        const { paths, routes, fallbackRoute } = await written(chat, workspaceRoot);
+        const { paths, routes, fallbackRoute, workspaceId } = await written(chat, workspaceRoot);
         const { frameIds, pageId, focusId, added } = await placeWrittenPagesOnCanvas({
           chatId: chat.id,
           workspaceRoot,
           paths,
           ...(routes ? { routes } : {}),
           ...(fallbackRoute ? { fallbackRoute } : {}),
+          // The routes came from this workspace's apps, so they land only while the chat is still there.
+          ...(workspaceId !== undefined ? { workspaceId } : {}),
           limit: EARLIER_PAGES_LIMIT,
           shouldSave: () => deps.designModeOn(chat.id),
           store: deps.store,

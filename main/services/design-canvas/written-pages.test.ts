@@ -1258,6 +1258,8 @@ function liveEntry(
     recent?: RecentWrittenPages;
     live?: boolean;
     newId?: () => string;
+    /** Runs while entry reads the apps snapshot, as a person acting meanwhile. */
+    onSnapshot?: () => void;
   } = {},
 ) {
   const reported: number[] = [];
@@ -1277,7 +1279,10 @@ function liveEntry(
       ? {}
       : {
           live: {
-            snapshot: async (workspaceId: string) => ({ workspaceId, target: options.target ?? "single", apps: [], candidates, chosen: [] }),
+            snapshot: async (workspaceId: string) => {
+              options.onSnapshot?.();
+              return { workspaceId, target: options.target ?? "single", apps: [], candidates, chosen: [] };
+            },
             readConfig: async () => null,
             onAppFrameAdded: (width: number) => reported.push(width),
           },
@@ -1294,6 +1299,18 @@ test("3b: entry places the chat's route files beside its pages", async (t) => {
   assert.deepEqual(doc.frames.map((frame) => frame.kind).sort(), ["app", "file"]);
   assert.deepEqual(appFramesOf(doc).map((frame) => frame.route), ["/pricing"]);
   assert.deepEqual(reported, [1280]);
+});
+
+test("3b: a chat that moves while entry reads its apps places nothing from the workspace it left, in either canvas", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  let workspace = "ws-1";
+  const store = new DesignChatCanvases({ store: canvases.workspaceStore, workspaceIdOf: async () => workspace });
+  const moving = { ...canvases, store };
+  const { enter, reported } = liveEntry(moving, { onSnapshot: () => (workspace = "ws-2") });
+  await enter({ id: "chat-1", title: "Chat", messages: wrote("app/pricing/page.tsx") }, workspaceRoot);
+  assert.deepEqual(appFramesOf(await canvases.workspaceStore.get("ws-1")), [], "nothing in the canvas it left");
+  assert.deepEqual(appFramesOf(await canvases.workspaceStore.get("ws-2")), [], "nor ws-1's routes in the canvas it moved to");
+  assert.deepEqual(reported, []);
 });
 
 test("3b: entry takes the newest 12 of one timeline of pages and routes", async (t) => {
