@@ -53,9 +53,17 @@ export const APP_FRAME_CAPTURE_GAP_MS = 2000;
 export const APP_FRAME_CAPTURE_SETTLE_MS = 400;
 /** Refused navigations show at most one toast per this long per frame; the latest link wins (D16). */
 export const APP_FRAME_REFUSED_TOAST_GAP_MS = 1000;
-/** A frame put back this many times within the window below, leading out again each time, stops being put back. */
-const APP_FRAME_RESTORES_IN_WINDOW = 2;
-const APP_FRAME_RESTORE_WINDOW_MS = 3000;
+/**
+ * Putting a frame back after a blocked way out (S1) is bounded per mount. A
+ * frame nobody has entered can't be clicked, so its ways out are its page's
+ * own: it is put back once. An entered frame is put back up to three times,
+ * and gets them back after the person stays in it a while with no way out,
+ * enters it afresh, or presses Reload.
+ */
+const APP_FRAME_RESTORES_NOT_ENTERED = 1;
+const APP_FRAME_RESTORES_ENTERED = 3;
+const APP_FRAME_RESTORE_STAY_MS = 10_000;
+const monotonicNow = () => performance.now();
 /** An in-app path is shown up to this many characters. */
 const PATH_CHARS = 60;
 
@@ -366,10 +374,24 @@ export type AppFrameProps = {
   onOpenInBrowser(url: string): void;
   titleSlot?: React.ReactNode;
   actions?: React.ReactNode;
+  /** A monotonic clock for the restore bound (tests pass their own). */
+  now?: () => number;
 };
 
 /** An app frame's body and title row. */
-export function AppFrame({ frame, chatId, selected = false, live, entered, onEnter, onLeave, onOpenInBrowser, titleSlot, actions }: AppFrameProps) {
+export function AppFrame({
+  frame,
+  chatId,
+  selected = false,
+  live,
+  entered,
+  onEnter,
+  onLeave,
+  onOpenInBrowser,
+  titleSlot,
+  actions,
+  now = monotonicNow,
+}: AppFrameProps) {
   const { designLive } = useAppCapabilities();
   const snapshotOfApps = useDesignAppsSnapshot(chatId, designLive);
   const appRoot = frame.appRoot ?? ".";
@@ -467,14 +489,19 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
   const shown = iframeKey !== null ? { key: iframeKey, origin: origin!, token: token! } : retiring ? retained : null;
   const loaded = shown !== null && loadedKey === shown.key;
 
+  // Set when the page keeps leading out of the app and the frame stops putting it back (S1).
+  const [stuckKey, setStuckKey] = React.useState<string | null>(null);
+  const stuck = shown !== null && stuckKey === shown.key;
+
   // Entering holds for the page that was on screen when the person entered:
-  // once it goes (the app stopped, restarted or moved), the frame is left and
-  // the next page mounts inert. A frame entered with no page is left at once.
+  // once it goes (the app stopped, restarted or moved), or the frame is stuck
+  // behind its card, the frame is left and goes inert. A frame entered with
+  // no page is left at once.
   const [enteredKey, setEnteredKey] = React.useState<string | null>(null);
   if (entered && enteredKey === null && iframeKey !== null) setEnteredKey(iframeKey);
   else if (!entered && enteredKey !== null) setEnteredKey(null);
-  const inside = entered && iframeKey !== null && enteredKey === iframeKey;
-  const stale = entered && (iframeKey === null || (enteredKey !== null && enteredKey !== iframeKey));
+  const inside = entered && iframeKey !== null && enteredKey === iframeKey && !stuck;
+  const stale = entered && (stuck || iframeKey === null || (enteredKey !== null && enteredKey !== iframeKey));
   const leaveRef = React.useRef(onLeave);
   React.useLayoutEffect(() => {
     leaveRef.current = onLeave;
@@ -483,9 +510,6 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
     if (stale) leaveRef.current();
   }, [stale]);
 
-  // Set when the page keeps leading out of the app and the frame stops putting it back (S1).
-  const [stuckKey, setStuckKey] = React.useState<string | null>(null);
-  const stuck = shown !== null && stuckKey === shown.key;
   const requestCapture = useAppFrameCaptures(frame.id, contentRef, loaded && !stuck);
 
   // S75: one document-level guard while any app frame shows a page.
@@ -505,8 +529,6 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
   });
   const shownKey = shown?.key ?? null;
   const shownOrigin = shown?.origin ?? null;
-  /** Set when the page says it is up (ready or a route), so a restore can tell a page that led straight out again. */
-  const pageCameUp = React.useRef(false);
   /** The scheme this mount's page was last told (a page starts light until told). */
   const postedScheme = React.useRef<{ key: string | null; dark: boolean }>({ key: null, dark: false });
   React.useEffect(() => {
@@ -528,13 +550,11 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
       used += 1;
       switch (message.type) {
         case "ready":
-          pageCameUp.current = true;
           // A fresh page starts in its own scheme.
           postedScheme.current = { key: shownKey, dark: enteredRef.current.dark };
           if (enteredRef.current.dark) postToAppPage(guest, shownOrigin, { type: "set-scheme", dark: true });
           return;
         case "route":
-          pageCameUp.current = true;
           setPage((current) => ({ ...(current.key === shownKey ? current : { error: null }), key: shownKey, path: message.path }));
           return;
         case "error":
@@ -573,12 +593,27 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
 
   // S1, D1: main says the window's frame-src left the frame on Chromium's blocked
   // page; it goes back to the last path its own page reported, or its route.
-  // Bounded: a path that leads straight out again (no word from its page in
-  // between) falls back to the route, and a third way out within 3 s stops
-  // the reloads; the frame then says so and offers Reload.
+  // Bounded per mount (see APP_FRAME_RESTORES_*), never by what the page says:
+  // the restore after one to a path always goes to the route, and a way out
+  // past the budget stops the reloads; the frame then says so and offers Reload.
   const lastPathRef = React.useRef<string | null>(null);
   lastPathRef.current = pageState.path !== null && isAppRoute(pageState.path) ? pageState.path : null;
-  const restores = React.useRef<{ key: string | null; at: number[]; toPath: boolean }>({ key: null, at: [], toPath: false });
+  type Restores = { key: string | null; count: number; lastAt: number | null; toPath: boolean };
+  const restores = React.useRef<Restores>({ key: null, count: 0, lastAt: null, toPath: false });
+  const clockRef = React.useRef(now);
+  clockRef.current = now;
+  const insideRef = React.useRef(inside);
+  insideRef.current = inside;
+  const insideSince = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (!inside) {
+      insideSince.current = null;
+      return;
+    }
+    // A fresh enter gives the frame its restores back.
+    insideSince.current = clockRef.current();
+    restores.current = { ...restores.current, count: 0 };
+  }, [inside]);
   const stuckRef = React.useRef(stuck);
   stuckRef.current = stuck;
   const forgetPath = React.useCallback(() => {
@@ -588,30 +623,32 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
   const restore = React.useCallback(() => {
     const iframe = iframeRef.current;
     if (!iframe || shownOrigin === null || shownKey === null || stuckRef.current) return;
-    const now = Date.now();
-    const previous = restores.current.key === shownKey ? restores.current : { key: shownKey, at: [], toPath: false };
-    const recent = previous.at.filter((at) => now - at < APP_FRAME_RESTORE_WINDOW_MS);
-    const straightBack = recent.length > 0 && !pageCameUp.current;
-    recent.push(now);
-    pageCameUp.current = false;
-    if (recent.length > APP_FRAME_RESTORES_IN_WINDOW) {
-      restores.current = { key: shownKey, at: recent, toPath: false };
+    const at = clockRef.current();
+    const previous: Restores = restores.current.key === shownKey ? restores.current : { key: shownKey, count: 0, lastAt: null, toPath: false };
+    const enteredNow = insideRef.current;
+    let count = previous.count;
+    // The person stayed in the frame a while since entering and since its last way out.
+    const stayedFrom = Math.max(previous.lastAt ?? Number.NEGATIVE_INFINITY, insideSince.current ?? Number.POSITIVE_INFINITY);
+    if (enteredNow && at - stayedFrom >= APP_FRAME_RESTORE_STAY_MS) count = 0;
+    count += 1;
+    if (count > (enteredNow ? APP_FRAME_RESTORES_ENTERED : APP_FRAME_RESTORES_NOT_ENTERED)) {
+      restores.current = { key: shownKey, count, lastAt: at, toPath: false };
       stuckRef.current = true;
       setStuckKey(shownKey);
       return;
     }
     let path = lastPathRef.current;
-    if (straightBack && previous.toPath) {
+    if (previous.toPath) {
       path = null;
       forgetPath();
     }
-    restores.current = { key: shownKey, at: recent, toPath: path !== null && path !== route };
+    restores.current = { key: shownKey, count, lastAt: at, toPath: path !== null && path !== route };
     iframe.src = `${shownOrigin}${path ?? route}`;
   }, [shownOrigin, shownKey, route, forgetPath]);
   const reload = () => {
     const iframe = iframeRef.current;
-    restores.current = { key: shownKey, at: [], toPath: false };
-    pageCameUp.current = false;
+    restores.current = { key: shownKey, count: 0, lastAt: null, toPath: false };
+    stuckRef.current = false;
     forgetPath();
     setStuckKey(null);
     if (iframe && shownOrigin !== null) iframe.src = `${shownOrigin}${route}`;
@@ -643,7 +680,7 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
   );
 
   // Only a page on screen in the live set can be entered (not a card, a picture or a retiring frame).
-  const enterable = card === null && live && iframeKey !== null;
+  const enterable = card === null && live && iframeKey !== null && !stuck;
 
   let body: React.ReactNode;
   if (card !== null) {

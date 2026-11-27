@@ -498,10 +498,16 @@ test("refused links within a second make one toast with the latest, and Open in 
   assert.deepEqual(opened, ["https://site-5.example/"]);
 });
 
+/** A clock the test moves by hand (the frame's restore bound is monotonic time). */
+function manualClock(start = 1_000) {
+  let at = start;
+  return { now: () => at, advance: (ms: number) => (at += ms) };
+}
+
 test("when main says the frame landed on a blocked page, it goes back to the page's last in-app path", async () => {
   const frame = appFrame();
   const { mounts } = setup();
-  render(<Harness frame={frame} />);
+  render(<Harness frame={frame} entered />);
   const iframe = await liveIframe();
   const start = iframe.getAttribute("src");
   const mountToken = mounts()[0]!.mountToken;
@@ -516,54 +522,104 @@ test("when main says the frame landed on a blocked page, it goes back to the pag
   assert.equal(iframes()[0]!.src, `${new URL(start!).origin}/pricing/annual`);
 });
 
-test("a page that leads straight out again is put back at most twice, then the frame says so and offers Reload", async () => {
+test("a frame nobody has entered is put back once; its next way out stops it, however long after, until Reload", async () => {
+  const clock = manualClock();
   const frame = appFrame();
   const { mounts } = setup();
-  render(<Harness frame={frame} />);
+  render(<Harness frame={frame} now={clock.now} />);
   const iframe = await liveIframe();
   const origin = new URL(iframe.getAttribute("src")!).origin;
-  const mountToken = mounts()[0]!.mountToken;
+  const restore = () => notify({ kind: "navigation-restore", frameId: frame.id, mountToken: mounts()[0]!.mountToken });
+
+  restore();
+  assert.equal(iframes()[0]!.src, `${origin}/pricing`);
+  iframes()[0]!.src = `${origin}/untouched`;
+  clock.advance(60_000);
+  restore();
+  assert.equal(iframes()[0]!.src, `${origin}/untouched`, "an inert frame can't be clicked: a second way out is the page's own");
+  assert.ok(screen.getByText("This page leads outside the app."));
+
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  assert.equal(iframes()[0]!.src, `${origin}/pricing`);
+  assert.equal(screen.queryByText("This page leads outside the app.")?.textContent ?? null, null);
+  restore();
+  assert.equal(screen.queryByText("This page leads outside the app.")?.textContent ?? null, null, "Reload gives the frame its restore back");
+  restore();
+  assert.ok(screen.getByText("This page leads outside the app."));
+});
+
+test("an entered frame gets three restores; after a path, the next goes to the route whatever the page says; a fourth leaves the frame and stops", async () => {
+  const clock = manualClock();
+  let left = 0;
+  let entered = 0;
+  const frame = appFrame();
+  const { mounts } = setup();
+  const props = { frame, now: clock.now, onLeave: () => (left += 1), onEnter: () => (entered += 1) };
+  const { rerender } = render(<Harness {...props} />);
+  const iframe = await liveIframe();
+  rerender(<Harness {...props} entered />);
+  assert.equal(iframes()[0]!.hasAttribute("inert"), false);
+  const origin = new URL(iframe.getAttribute("src")!).origin;
   const { guest } = giveWindow(iframe);
+  const restore = () => notify({ kind: "navigation-restore", frameId: frame.id, mountToken: mounts()[0]!.mountToken });
   post(guest, { type: "aiden-app:route", path: "/sso" });
-  const restore = () => notify({ kind: "navigation-restore", frameId: frame.id, mountToken });
 
   restore();
   assert.equal(iframes()[0]!.src, `${origin}/sso`, "first, the page it was on");
+  // The page says it came up at /sso before leading out again: that changes nothing.
+  post(guest, { type: "aiden-app:ready" });
+  post(guest, { type: "aiden-app:route", path: "/sso" });
+  clock.advance(2_000);
   restore();
-  assert.equal(iframes()[0]!.src, `${origin}/pricing`, "that led out at once: the frame's route");
+  assert.equal(iframes()[0]!.src, `${origin}/pricing`, "then the frame's route");
+  clock.advance(2_000);
   restore();
   assert.equal(iframes()[0]!.src, `${origin}/pricing`);
-  assert.ok(screen.getByText("This page leads outside the app."), "the route leads out too: no more reloads");
+  assert.equal(left, 0);
   iframes()[0]!.src = `${origin}/untouched`;
+  clock.advance(2_000);
   restore();
-  assert.equal(iframes()[0]!.src, `${origin}/untouched`, "a stuck frame isn't reloaded again");
-
-  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
-  assert.equal(screen.queryByText("This page leads outside the app.")?.textContent ?? null, null);
-  assert.equal(iframes()[0]!.src, `${origin}/pricing`);
+  assert.equal(iframes()[0]!.src, `${origin}/untouched`, "no fourth reload");
+  assert.ok(screen.getByText("This page leads outside the app."));
+  await waitFor(() => assert.ok(left >= 1, "the frame is left"));
+  assert.equal(iframes()[0]!.hasAttribute("inert"), true, "and goes inert behind the card");
+  fireEvent.doubleClick(screen.getByText("This page leads outside the app."));
+  assert.equal(entered, 0, "a stuck frame can't be entered");
 });
 
-test("ways out a while apart are each put back", async () => {
-  const realNow = Date.now;
-  let now = 1_000_000;
-  Date.now = () => now;
-  try {
-    const frame = appFrame();
-    const { mounts } = setup();
-    render(<Harness frame={frame} />);
-    const iframe = await liveIframe();
-    const origin = new URL(iframe.getAttribute("src")!).origin;
-    const { guest } = giveWindow(iframe);
-    for (let index = 0; index < 4; index += 1) {
-      post(guest, { type: "aiden-app:route", path: "/pricing/annual" });
-      now += 10_000;
-      notify({ kind: "navigation-restore", frameId: frame.id, mountToken: mounts()[0]!.mountToken });
-      assert.equal(iframes()[0]!.src, `${origin}/pricing/annual`, `restore ${index + 1}`);
-    }
-    assert.equal(screen.queryByText("This page leads outside the app.")?.textContent ?? null, null);
-  } finally {
-    Date.now = realNow;
+test("an entered frame that stays up a while between ways out gets its restores back", async () => {
+  const clock = manualClock();
+  const frame = appFrame();
+  const { mounts } = setup();
+  render(<Harness frame={frame} entered now={clock.now} />);
+  const iframe = await liveIframe();
+  const origin = new URL(iframe.getAttribute("src")!).origin;
+  for (let index = 0; index < 6; index += 1) {
+    iframes()[0]!.src = `${origin}/elsewhere`;
+    clock.advance(20_000);
+    notify({ kind: "navigation-restore", frameId: frame.id, mountToken: mounts()[0]!.mountToken });
+    assert.equal(iframes()[0]!.src, `${origin}/pricing`, `restore ${index + 1}`);
   }
+  assert.equal(screen.queryByText("This page leads outside the app.")?.textContent ?? null, null);
+});
+
+test("Reload clears the stuck state at once: a way out in the same moment is put back", async () => {
+  const clock = manualClock();
+  const frame = appFrame();
+  const { mounts } = setup();
+  render(<Harness frame={frame} now={clock.now} />);
+  const iframe = await liveIframe();
+  const origin = new URL(iframe.getAttribute("src")!).origin;
+  const restoreEvent = { kind: "navigation-restore", frameId: frame.id, mountToken: mounts()[0]!.mountToken };
+  notify(restoreEvent);
+  notify(restoreEvent);
+  const reload = screen.getByRole("button", { name: "Reload" });
+  act(() => {
+    reload.click();
+    iframes()[0]!.src = `${origin}/untouched`;
+    emitBotTestNotification("designCanvas:appFrame", restoreEvent);
+  });
+  assert.equal(iframes()[0]!.src, `${origin}/pricing`);
 });
 
 // ── The page's bridge: untrusted and bounded ──
