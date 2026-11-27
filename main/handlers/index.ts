@@ -107,6 +107,12 @@ export function registerHandlers(
 ): void {
   logger.info("handlers", "Registering IPC handlers...");
 
+  const mainWindowOwner = (message: string) => (event: unknown) => {
+    const inactive = () => new Error(message);
+    if (!isMainWindow(event as IpcMainInvokeEvent)) throw inactive();
+    return rendererDocumentOwner(event as IpcMainInvokeEvent, inactive);
+  };
+
   // Register app handlers using ipcMain API
   ipcMain.handle("app:getInfo", async (_event) => {
     return await appHandlers.getInfo();
@@ -182,11 +188,7 @@ export function registerHandlers(
         workspace.folderPath && !workspace.noWorkspace ? [{ workspaceRoot: workspace.folderPath, name: workspace.name }] : [],
       ),
     broadcast: (change) => ipcMain.broadcast(HOOKS_CHANGED_CHANNEL, change),
-    requireSender: (event) => {
-      const inactive = () => new Error("Hooks settings need the active window.");
-      if (!isMainWindow(event as IpcMainInvokeEvent)) throw inactive();
-      rendererDocumentOwner(event as IpcMainInvokeEvent, inactive);
-    },
+    requireSender: mainWindowOwner("Hooks settings need the active window."),
   });
   registerApprovalRuleHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
@@ -198,11 +200,7 @@ export function registerHandlers(
     broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
   });
   registerAnalyticsHandlers<IpcMainInvokeEvent>({
-    owner: (event) => {
-      const inactive = () => new Error("Usage data changes require the active application document.");
-      if (!isMainWindow(event)) throw inactive();
-      return rendererDocumentOwner(event, inactive);
-    },
+    owner: mainWindowOwner("Usage data changes require the active application document."),
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     analytics: analyticsService(),
   });
@@ -222,11 +220,7 @@ export function registerHandlers(
   registerAssistantLiveHandlers();
   registerAidenRemoteHandlers();
   registerAidenMcpHandlers<IpcMainInvokeEvent>({
-    owner: (event) => {
-      const inactive = () => new Error("Apps using Aiden can be changed only from the active Aiden window.");
-      if (!isMainWindow(event)) throw inactive();
-      return rendererDocumentOwner(event, inactive);
-    },
+    owner: mainWindowOwner("Apps using Aiden can be changed only from the active Aiden window."),
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     service: {
       status: aidenMcpServerStatus,
