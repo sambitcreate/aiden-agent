@@ -346,8 +346,9 @@ final class AidenChatViewModel {
     let attachmentStagingStore = AidenAttachmentStagingStore()
     var stagingAttachments: [AidenStagingAttachment] { attachmentStagingStore.items }
     @ObservationIgnored private var activeStagingBatchID: UUID?
-    /// Inner staging worker joined by `onRemovalCleanup`; never awaits `joinDeferredUploadRevocation()`.
-    @ObservationIgnored private var stagingWorkerTask: Task<Void, Never>?
+    /// Active and unwinding staging workers keyed by batch ID; joined by `onRemovalCleanup`
+    /// and never awaiting `joinDeferredUploadRevocation()`.
+    @ObservationIgnored private var stagingWorkerTasks: [UUID: Task<Void, Never>] = [:]
     /// Batch IDs whose already-promoted references survive user Stop / chat leave.
     @ObservationIgnored private var batchesKeepingStagedOnCancel: Set<UUID> = []
     private(set) var isUploadingAttachment = false
@@ -517,9 +518,11 @@ final class AidenChatViewModel {
         lifetime.onRemovalCleanup = { @MainActor [weak self] in
             // Neither worker awaits `joinDeferredUploadRevocation()`, so joining
             // them cannot create an upload -> purge -> upload deadlock on 401.
-            let staging = self?.stagingWorkerTask
-            staging?.cancel()
-            await staging?.value
+            while let workers = self?.stagingWorkerTasks.values, !workers.isEmpty {
+                let snapshot = Array(workers)
+                for worker in snapshot { worker.cancel() }
+                for worker in snapshot { await worker.value }
+            }
             let uploading = self?.uploadTask
             uploading?.cancel()
             _ = await uploading?.value
@@ -558,7 +561,7 @@ final class AidenChatViewModel {
         terminalReconciliationTask?.cancel()
         draftPersistenceTask?.cancel()
         attachmentPreparationTask?.cancel()
-        stagingWorkerTask?.cancel()
+        stagingWorkerTasks.values.forEach { $0.cancel() }
         runInputReceiptTask?.cancel()
         uploadTask?.cancel()
         skillCatalogTask?.cancel()
@@ -580,15 +583,15 @@ final class AidenChatViewModel {
         draftSession = nil
         draftGeneration &+= 1
         composerGeneration &+= 1
-        // Cancel in-flight staging without nilling `stagingWorkerTask` so
-        // `onRemovalCleanup` can join its cancellation and server cleanup.
+        // Cancel all active and unwinding staging workers without removing them
+        // from `stagingWorkerTasks` so `onRemovalCleanup` joins every cleanup.
         batchesKeepingStagedOnCancel = []
         attachmentStagingStore.resetAll()
         attachmentPreparationTask?.cancel()
         attachmentPreparationTask = nil
         attachmentPreparationID = nil
         activeStagingBatchID = nil
-        stagingWorkerTask?.cancel()
+        stagingWorkerTasks.values.forEach { $0.cancel() }
         uploadTask?.cancel()
         isUploadingAttachment = false
         uploadProgressID = nil
@@ -2216,12 +2219,12 @@ final class AidenChatViewModel {
         let worker = Task { [weak self] in
             guard let self else { return }
             defer {
+                stagingWorkerTasks.removeValue(forKey: preparationID)
                 batchesKeepingStagedOnCancel.remove(preparationID)
                 if activeStagingBatchID == preparationID {
                     activeStagingBatchID = nil
                     isUploadingAttachment = false
                     attachmentStagingStore.finishBatch()
-                    stagingWorkerTask = nil
                 }
                 if uploadProgressID == progressID {
                     uploadProgressID = nil
@@ -2469,7 +2472,7 @@ final class AidenChatViewModel {
                 coordinator.haptics.play(promotedReferences.isEmpty ? .error : .warning, scope: hapticScope)
             }
         }
-        stagingWorkerTask = worker
+        stagingWorkerTasks[preparationID] = worker
 
         // Outer task: awaits the worker, clears preparation gate, then joins
         // any deferred 401 revocation outside `onRemovalCleanup`'s awaited task.
@@ -2529,7 +2532,7 @@ final class AidenChatViewModel {
         attachmentPreparationTask?.cancel()
         attachmentPreparationTask = nil
         attachmentPreparationID = nil
-        stagingWorkerTask?.cancel()
+        stagingWorkerTasks.values.forEach { $0.cancel() }
         if uploadTask == nil {
             isUploadingAttachment = false
             uploadProgressID = nil

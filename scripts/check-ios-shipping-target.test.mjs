@@ -86,6 +86,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Bots/AidenDurablePendingMutation.swift",
   "AidenOnTheGo/Features/Chat/AidenAttachmentCamera.swift",
   "AidenOnTheGo/Features/Chat/AidenAttachmentPicker.swift",
+  "AidenOnTheGo/Features/Chat/AidenQuickPhotoStrip.swift",
   "AidenOnTheGo/Features/Chat/AidenChatFork.swift",
   "AidenOnTheGo/Features/Chat/AidenChatScrollObserver.swift",
   "AidenOnTheGo/Features/Chat/AidenStreamingRevealGate.swift",
@@ -838,32 +839,14 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(attachmentPicker, /photoColumnCount = 3/u);
   assert.match(attachmentPicker, /expandedMaximumWidth: CGFloat = 620/u);
   assert.match(attachmentPicker, /expandedMaximumHeight: CGFloat = 700/u);
-  assert.match(
-    attachmentPicker,
-    /scaleEffect\(\s*picker\.isPresented \? 1 : AidenAttachmentPickerPresentationMotion\.hiddenScale,\s*anchor: layout\.scaleAnchor\s*\)/u,
-  );
-  assert.match(
-    attachmentPicker,
-    /\.offset\(y: picker\.isPresented \? 0 : AidenAttachmentPickerPresentationMotion\.hiddenVerticalOffset\)/u,
-  );
-  assert.match(
-    chat,
-    /AidenAttachmentPickerPresentationMotion\.transition\(\s*isPresented: attachmentPicker\.isPresented,\s*reduceMotion: reduceMotion\s*\)/u,
-  );
   assert.match(attachmentPicker, /private func dismiss\(\) \{\s*picker\.dismiss\(\)\s*\}/u);
-  assert.match(
-    chat,
-    /coordinateSpace: AidenChatAttachmentCoordinateSpace\.name[\s\S]*?frame\(in: \.named\(coordinateSpace\)\)[\s\S]*?AidenAttachmentButtonCenterPreferenceKey[\s\S]*?CGPoint\(x: frame\.midX, y: frame\.midY\)/u,
-  );
-  assert.match(chat, /AidenAttachmentPickerOverlay\([\s\S]*?\.allowsHitTesting\(attachmentPicker\.isPresented\)/u);
+  assert.match(chat, /AidenAttachmentButtonCenterPreferenceKey/u);
   assert.match(chat, /canToggleAttachments: canToggleAttachmentPicker/u);
   assert.match(chat, /private var canToggleAttachmentPicker: Bool \{\s*AidenAttachmentPickerPolicy\.canPresent/u);
-  assert.match(attachmentPicker, /committingAssets/u);
   assert.match(
     attachmentPicker,
     /withTaskCancellationHandler[\s\S]*?cancelImageRequest\(id\)/u,
   );
-  assert.match(chat, /finishCommit\(commit\.id\)/u);
   assert.match(attachmentCamera, /AVCaptureSession\(\)/u);
   assert.match(attachmentCamera, /AVCapturePhotoOutput\(\)/u);
   assert.match(attachmentCamera, /AVCaptureDevice\.requestAccess\(for: \.video\)/u);

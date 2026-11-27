@@ -7231,6 +7231,90 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testRemovalJoinsOlderCancelledStagedWorkerAfterReplacementBatchStarts() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-staged-old-worker-removal-\(UUID())")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        let gate = AidenChatWriteTestGate()
+        let cache = AidenChatCache(root: root, beforeAttachmentImageWrite: { await gate.waitIfArmed() })
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).pngData {
+            UIColor.systemBlue.setFill()
+            $0.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        }
+        let firstID = "att_" + String(repeating: "x", count: 43)
+        let secondID = "att_" + String(repeating: "y", count: 43)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "DELETE" {
+                return (204, "application/json", Data())
+            }
+            guard request.httpMethod == "POST", request.url?.path.hasSuffix("/attachments") == true else { return nil }
+            let count = AidenChatProgressLifecycleURLProtocol.uploadRequestCount
+            let id = count == 1 ? firstID : secondID
+            let isImage = count == 1
+            return (201, "application/json", try! JSONSerialization.data(withJSONObject: [
+                "id": id,
+                "name": isImage ? "first.png" : "second.txt",
+                "mimeType": isImage ? "image/png" : "text/plain",
+                "kind": isImage ? "image" : "text",
+                "size": isImage ? png.count : 2,
+                "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600)),
+            ]))
+        }
+
+        // Batch 1 uploads an image and pauses inside `cache.saveAttachmentImage`.
+        await gate.arm()
+        let batch1 = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(kind: .image, displayName: "first.png") { _, _ in
+                .image(name: "first.png", mimeType: "image/png", data: png)
+            },
+        ]))
+        await waitForChatWrite(gate)
+
+        // User stops batch 1 and immediately starts replacement batch 2 while batch 1's worker is still unwinding.
+        model.cancelUploads()
+        let batch2 = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(kind: .file, displayName: "second.txt") { _, _ in
+                .text(name: "second.txt", mimeType: "text/plain", text: "ok")
+            },
+        ]))
+        await batch2.value
+        XCTAssertEqual(model.pendingAttachments.map(\.id), [firstID, secondID])
+
+        // Removing the chat must wait until the older cancelled batch 1 worker also unwinds and deletes.
+        let returnedEarly = expectation(description: "removal waits for older unwinding staging worker")
+        returnedEarly.isInverted = true
+        var gateHeld = true
+        let removalStarted = expectation(description: "removal started")
+        let removing = Task {
+            removalStarted.fulfill()
+            await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+            if gateHeld { returnedEarly.fulfill() }
+        }
+        await fulfillment(of: [removalStarted], timeout: 2)
+        await fulfillment(of: [returnedEarly], timeout: 0.15)
+
+        gateHeld = false
+        await gate.release()
+        await removing.value
+        await batch1.value
+
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 2, "both older and replacement batch attachments are deleted on removal")
+        XCTAssertTrue(model.pendingAttachments.isEmpty)
+        XCTAssertTrue(model.stagingAttachments.isEmpty)
+        let image = AidenMessageAttachment(id: firstID, name: "first.png", mimeType: "image/png", kind: .image, size: png.count)
+        let persisted = await AidenChatCache(root: root).attachmentImage(
+            instanceId: "instance-progress-lifecycle",
+            deviceId: "device-progress-lifecycle",
+            chatId: model.chat.id,
+            attachment: image
+        )
+        XCTAssertNil(persisted)
+    }
+
+    @MainActor
     func testRemovalCancelsOwnedUploadAndRejectsHeldImageCompletion() async throws {
         try await assertRemovalJoinsUploadCleanup()
     }
