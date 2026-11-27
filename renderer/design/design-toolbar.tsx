@@ -41,6 +41,9 @@ import { DESIGN_DRAW_SHORTCUTS } from "./canvas-keymap-core";
 import { DesignCommentsPanel } from "./design-comments-panel";
 import type { DesignDrawTool } from "./design-drawing";
 import { DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../shared/design-canvas/schema";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { AppRoutePicker, type AppRouteSource } from "./app-route-picker";
+import { useDesignAppsSnapshot } from "./design-app-chip";
 
 export type DesignAddKind = "note" | "group" | "file" | "image";
 
@@ -90,6 +93,7 @@ export function DesignToolbar({
   onPage,
   drawTool,
   onDraw,
+  appRoutes,
 }: {
   doc: DesignCanvas;
   /** The chat whose canvas this is; the page picker marks its own page. */
@@ -110,7 +114,15 @@ export function DesignToolbar({
   canAddFiles: boolean;
   onAdd(kind: DesignAddKind): void;
   onPage(action: DesignPageAction): void;
+  /** 3b (S87): Add ▸ Page from app…, shown with live app frames on. */
+  appRoutes?: AppRouteSource;
 }) {
+  const { designLive } = useAppCapabilities();
+  const snapshot = useDesignAppsSnapshot(chatId, designLive && appRoutes !== undefined);
+  // An attached server or a canvas.json url app counts, whatever the target says (M6.4).
+  const hasApp = !!snapshot && snapshot.target !== "unavailable" && (snapshot.apps.length > 0 || snapshot.candidates.length > 0);
+  const [picking, setPicking] = React.useState(false);
+  const addRef = React.useRef<HTMLButtonElement | null>(null);
   return (
     <div
       role="toolbar"
@@ -171,7 +183,7 @@ export function DesignToolbar({
       </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="bar" size="small" iconOnly aria-label="Add" title="Add">
+          <Button ref={addRef} variant="bar" size="small" iconOnly aria-label="Add" title="Add">
             <Plus />
           </Button>
         </DropdownMenuTrigger>
@@ -183,8 +195,19 @@ export function DesignToolbar({
           <DropdownMenuItem disabled={!canAddFiles} onSelect={() => onAdd("image")}>
             Image…
           </DropdownMenuItem>
+          {designLive && appRoutes ? (
+            <DropdownMenuItem disabled={!hasApp} onSelect={() => setPicking(true)}>
+              <span className="flex flex-col">
+                <span>Page from app…</span>
+                {hasApp ? null : <span className="text-small text-tertiary">No web app in this workspace</span>}
+              </span>
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      {designLive && appRoutes ? (
+        <AppRoutePicker open={picking} onOpenChange={setPicking} source={appRoutes} returnFocus={() => addRef.current} />
+      ) : null}
     </div>
   );
 }

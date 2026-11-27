@@ -1008,6 +1008,7 @@
       "files": [
         "main/handlers/bot-issues.test.ts",
         "main/handlers/bot-health.test.ts",
+        "renderer/design/app-route-picker.test.tsx",
         "renderer/main/bots/bot-health-section.test.tsx",
         "renderer/main/bots/bot-interruptions-page.test.tsx",
         "renderer/components/bots/routine-proposal-card.test.tsx",

@@ -57,6 +57,7 @@ import {
 } from "./design-side-panel";
 import { reorderLayer, stepLayer, type DesignLayerPlace } from "./layers-core";
 import { DesignToolbar, type DesignAddKind, type DesignPageAction } from "./design-toolbar";
+import { appRoutePlacer, type AppRouteSource } from "./app-route-picker";
 import { selectLiveFrames } from "./live-set-core";
 import {
   DesignNodeContext,
@@ -755,6 +756,24 @@ function LoadedDesignCanvas({
     }
   };
 
+  // 3b (S87): Add ▸ Page from app…; main places on the page on screen, after the pending save lands.
+  const pageIdRef = React.useRef(pageId);
+  pageIdRef.current = pageId;
+  const viewSizeRef = React.useRef(viewSize);
+  viewSizeRef.current = viewSize;
+  const appRoutes = React.useMemo<AppRouteSource>(
+    () => ({
+      load: (appRoot) => designCanvasApi.getDesignAppRoutes(chatId, appRoot === undefined ? {} : { appRoot }),
+      place: appRoutePlacer({
+        flush,
+        place: (request) => designCanvasApi.placeDesignAppRoute(chatId, request),
+        pageId: () => pageIdRef.current,
+        viewSize: () => (viewSizeRef.current.w >= 1 && viewSizeRef.current.h >= 1 ? { ...viewSizeRef.current } : undefined),
+      }),
+    }),
+    [chatId, flush],
+  );
+
   const onAdd = (kind: DesignAddKind) => {
     if (kind === "note") {
       const id = add({ kind: "note", title: "Note", text: "", w: 240, h: 160, createdBy: "person" });
@@ -1395,6 +1414,7 @@ function LoadedDesignCanvas({
                 onPage={onPage}
                 drawTool={drawTool}
                 onDraw={chooseDrawTool}
+                appRoutes={appRoutes}
               />
             }
           >
