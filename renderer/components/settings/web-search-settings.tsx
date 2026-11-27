@@ -654,101 +654,92 @@ function ProviderSetupDialog({
     (!providerNeedsEndpoint(provider) || endpointDraft.trim().length > 0) &&
     (!providerNeedsZone(provider) || zoneDraft.trim().length > 0);
 
-  const saveConfig = async () => {
-    if (!hasConfigFields || !configValid || busy) return;
-    setBusy("config");
+  const runProviderMutation = async (
+    kind: "credential" | "config" | "existing-auth",
+    work: () => Promise<WebSearchRendererSnapshot>,
+    success: string,
+    fallback: string,
+    onSaved?: () => void,
+  ) => {
+    setBusy(kind);
     setMessage(null);
     setError(null);
     try {
-      const nextConfig: BoundedNonSecretProviderConfig = {};
-      if (providerNeedsEndpoint(provider)) nextConfig.endpoint = endpointDraft.trim();
-      if (providerNeedsZone(provider)) nextConfig.zone = zoneDraft.trim();
-      const next = await webSearchApi.setProviderConfig(provider.id, nextConfig);
+      const next = await work();
       onSnapshot(next);
-      setMessage("Provider settings saved. Setup does not send a test request.");
+      onSaved?.();
+      setMessage(success);
     } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t save provider settings."));
+      setError(errorMessage(caught, fallback));
     } finally {
       setBusy(null);
     }
+  };
+
+  const saveConfig = async () => {
+    if (!hasConfigFields || !configValid || busy) return;
+    await runProviderMutation(
+      "config",
+      () => {
+        const nextConfig: BoundedNonSecretProviderConfig = {};
+        if (providerNeedsEndpoint(provider)) nextConfig.endpoint = endpointDraft.trim();
+        if (providerNeedsZone(provider)) nextConfig.zone = zoneDraft.trim();
+        return webSearchApi.setProviderConfig(provider.id, nextConfig);
+      },
+      "Provider settings saved. Setup does not send a test request.",
+      "Couldn’t save provider settings.",
+    );
   };
 
   const saveCredential = async () => {
     const value = keyDraft.trim();
     if (!value || !providerNeedsApiKey(provider) || busy) return;
-    setBusy("credential");
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await webSearchApi.setCredential(provider.id, value);
-      onSnapshot(next);
-      setKeyDraft("");
-      setMessage("API key saved. This does not select the provider or send a test request.");
-    } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t save the API key."));
-    } finally {
-      setBusy(null);
-    }
+    await runProviderMutation(
+      "credential",
+      () => webSearchApi.setCredential(provider.id, value),
+      "API key saved. This does not select the provider or send a test request.",
+      "Couldn’t save the API key.",
+      () => setKeyDraft(""),
+    );
   };
 
   const removeCredential = async () => {
     if (!hasCredential || busy) return;
-    setBusy("credential");
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await webSearchApi.removeCredential(provider.id);
-      onSnapshot(next);
-      setKeyDraft("");
-      setMessage(
-        "API key removed. The provider’s route membership and Web Search switch are unchanged.",
-      );
-    } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t remove the API key."));
-    } finally {
-      setBusy(null);
-    }
+    await runProviderMutation(
+      "credential",
+      () => webSearchApi.removeCredential(provider.id),
+      "API key removed. The provider’s route membership and Web Search switch are unchanged.",
+      "Couldn’t remove the API key.",
+      () => setKeyDraft(""),
+    );
   };
 
   const consentExistingAuth = async () => {
     if (!supportsExistingAuth || !existingAuthAvailable || !existingAuthModelId || busy) {
       return;
     }
-    setBusy("existing-auth");
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await webSearchApi.consentExistingAuth({
-        targetProviderId: "openai",
-        sourceProviderId: "openai",
-        modelId: existingAuthModelId,
-        consent: true,
-      });
-      onSnapshot(next);
-      setMessage("OpenAI account approved for Web Search. Route selection is unchanged.");
-    } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t approve the saved OpenAI account."));
-    } finally {
-      setBusy(null);
-    }
+    await runProviderMutation(
+      "existing-auth",
+      () =>
+        webSearchApi.consentExistingAuth({
+          targetProviderId: "openai",
+          sourceProviderId: "openai",
+          modelId: existingAuthModelId,
+          consent: true,
+        }),
+      "OpenAI account approved for Web Search. Route selection is unchanged.",
+      "Couldn’t approve the saved OpenAI account.",
+    );
   };
 
   const revokeExistingAuth = async () => {
     if (!supportsExistingAuth || !existingAuthReady || busy) return;
-    setBusy("existing-auth");
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await webSearchApi.revokeExistingAuth();
-      onSnapshot(next);
-      setMessage(
-        "OpenAI account approval revoked. The saved provider credential and route are unchanged.",
-      );
-    } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t revoke the saved OpenAI account."));
-    } finally {
-      setBusy(null);
-    }
+    await runProviderMutation(
+      "existing-auth",
+      () => webSearchApi.revokeExistingAuth(),
+      "OpenAI account approval revoked. The saved provider credential and route are unchanged.",
+      "Couldn’t revoke the saved OpenAI account.",
+    );
   };
 
   const routeModeDescription =
