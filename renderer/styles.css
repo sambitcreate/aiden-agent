@@ -2194,14 +2194,16 @@ textarea {
   height: 11px;
 }
 
-.appearance-tile-label {
+.appearance-tile-label,
+.appearance-width-option-label {
   padding: 3px 9px;
   border-radius: var(--radius-control);
   font-size: var(--text-small);
   font-weight: 500;
 }
 
-.appearance-tile[aria-checked="true"] .appearance-tile-label {
+.appearance-tile[aria-checked="true"] .appearance-tile-label,
+.appearance-width-option[aria-checked="true"] .appearance-width-option-label {
   background: var(--surface-list-selection);
   color: var(--text-primary);
 }
@@ -2280,18 +2282,6 @@ textarea {
 }
 .appearance-width-preview-column i:nth-child(2) { width: 100%; }
 .appearance-width-preview-column i:nth-child(3) { width: 84%; }
-
-.appearance-width-option-label {
-  padding: 3px 9px;
-  border-radius: var(--radius-control);
-  font-size: var(--text-small);
-  font-weight: 500;
-}
-
-.appearance-width-option[aria-checked="true"] .appearance-width-option-label {
-  background: var(--surface-list-selection);
-  color: var(--text-primary);
-}
 
 /* Settings → Appearance → Sidebar: the width picker's cards, three across,
    each previewing the sidebar's rows instead of a chat column. */
