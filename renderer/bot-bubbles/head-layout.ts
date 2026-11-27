@@ -19,8 +19,7 @@ export const STACK_GAP = 12;
 export const FLICK_SIDE_MS = 160;
 /** How far a flick carries the head up or down (ms of travel). */
 export const FLICK_Y_MS = 120;
-/** The × target's diameter, its centre's height above the bottom, and its pull radius. */
-export const CLOSE_TARGET_SIZE = 58;
+/** The × target's centre height above the bottom, and its pull radius. */
 export const CLOSE_TARGET_BOTTOM = 92;
 export const CLOSE_TARGET_PULL = 84;
 /** One arrow press moves a head this far up or down. */
