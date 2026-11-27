@@ -157,22 +157,21 @@ export function decideAppRequest(request: AppRequest, context: AppPolicyContext)
       return { verdict, context: kind, target };
     }
 
-    // Frameless (D4).
-    if (!parsed || !NETWORK_SCHEMES.has(parsed.protocol)) {
-      // Not network (N11). An unparsable URL with an app initiator still cancels.
-      if (!parsed && request.initiatorOrigin !== undefined && request.initiatorOrigin !== context.rendererOrigin) {
-        return { verdict: "cancel", context: "frameless-app", target };
-      }
-      return { verdict: "untouched", context: null, target };
-    }
+    // Frameless (D4). An app page's worker or service worker has no frame, so
+    // its initiator decides first, for every scheme: it may not reach Aiden's
+    // own schemes, files or another site's blobs any more than its page may.
     const initiator = request.initiatorOrigin;
-    if (initiator !== undefined && initiator !== "") {
-      if (initiator === context.rendererOrigin) return { verdict: "untouched", context: null, target };
-      if (initiator === "null" || context.isAppOrigin(initiator) || isLoopbackHttpOrigin(initiator)) {
-        return { verdict: appRule(parsed, context.ownPorts), context: "frameless-app", target };
-      }
+    const fromAiden = initiator === undefined || initiator === "" || initiator === context.rendererOrigin;
+    if (!fromAiden && (initiator === "null" || context.isAppOrigin(initiator) || isLoopbackHttpOrigin(initiator))) {
+      return { verdict: appRule(parsed, context.ownPorts), context: "frameless-app", target };
+    }
+    if (!parsed || !NETWORK_SCHEMES.has(parsed.protocol)) {
+      // Not network, from Aiden or no initiator (N11). An unparsable URL from anyone else still cancels.
+      if (!parsed && !fromAiden) return { verdict: "cancel", context: "frameless-app", target };
       return { verdict: "untouched", context: null, target };
     }
+    // Aiden's renderer, or another site's page in some other window (N10).
+    if (initiator !== undefined && initiator !== "") return { verdict: "untouched", context: null, target };
     if (LOOPBACK_HOSTS.has(parsed.hostname)) return { verdict: "untouched", context: null, target };
     if (context.frameless.some((prefix) => request.url.startsWith(prefix))) {
       return { verdict: "untouched", context: null, target };

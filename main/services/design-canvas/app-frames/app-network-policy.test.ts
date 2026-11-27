@@ -184,9 +184,33 @@ test("D3 rows N1–N11: frameless requests by initiator", () => {
     assert.equal(v("https://example.com/"), "cancel"); // N8
     assert.equal(v("https://allowed.example/updates/latest.yml"), "untouched"); // N9
     assert.equal(v("https://api.example.com/", renderer), "untouched"); // N10
-    assert.equal(v("aiden-design://grant/x", APP), "untouched"); // N11
-    assert.equal(v("data:text/plain,x", APP), "untouched"); // N11
-    assert.equal(v("blob:http://127.0.0.1:5173/x", APP), "untouched"); // N11
+    // N11: non-network schemes are untouched only for Aiden's renderer or no initiator.
+    assert.equal(v("aiden-design://grant/x", renderer), "untouched");
+    assert.equal(v("aiden-design://grant/x"), "untouched");
+    assert.equal(v("data:text/plain,x"), "untouched");
+  }
+});
+
+test("a worker of an app page gets the app rule for every scheme, so it can't reach Aiden's own schemes or files", () => {
+  for (const renderer of ["file://", "http://127.0.0.1:4143"]) {
+    const w = world(renderer);
+    const v = (url: string, initiator?: string) => appRequestVerdict(w.frameless(url, initiator), w.context);
+    for (const initiator of [APP, "null", "http://127.0.0.1:9999"]) {
+      for (const url of [
+        "aiden-design://grant/design/a.html",
+        "aiden-attachment://abc",
+        "aiden-asset://x/y.png",
+        "aiden-genui://frame/index.html",
+        "file:///etc/hosts",
+        "blob:https://example.com/0d6c",
+        "chrome-extension://abc/x.js",
+        "not a url",
+      ]) {
+        assert.equal(v(url, initiator), "cancel", `${initiator} → ${url}`);
+      }
+      assert.equal(v("data:text/plain,x", initiator), "allow", `${initiator} → data:`);
+      assert.equal(v("blob:http://127.0.0.1:5173/0d6c", initiator), "allow", `${initiator} → loopback blob`);
+    }
   }
 });
 
