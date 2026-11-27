@@ -41,6 +41,19 @@ test("remember keeps loopback origins only, canonical and without paths, newest 
   assert.deepEqual(JSON.parse(await readFile(s.file, "utf8")), { origins: ["http://[::1]:3000", "http://127.0.0.1:5173"] });
 });
 
+test("a loopback page on the default port is remembered and cleared, written with or without :80", async (t) => {
+  const s = await setup(t);
+  await s.origins.remember("http://localhost/");
+  await s.origins.remember("http://127.0.0.1:80/index.html");
+  await s.origins.remember("http://[::1]/");
+  assert.deepEqual(await s.origins.list(), ["http://localhost", "http://127.0.0.1", "http://[::1]"]);
+  await s.origins.remember("http://localhost:80");
+  assert.deepEqual(await s.origins.list(), ["http://127.0.0.1", "http://[::1]", "http://localhost"], "the same origin, so it isn't listed twice");
+  await s.origins.clear();
+  assert.deepEqual(s.cleared, ["http://127.0.0.1", "http://[::1]", "http://localhost"]);
+  assert.deepEqual(await s.origins.list(), []);
+});
+
 test(`past ${APP_SW_ORIGINS_MAX} origins, the oldest are cleared before they are dropped; one that fails to clear stays for the next try`, async (t) => {
   const s = await setup(t, { failFor: "http://127.0.0.1:5001" });
   for (let port = 5000; port < 5000 + APP_SW_ORIGINS_MAX + 3; port++) await s.origins.remember(`http://127.0.0.1:${port}`);

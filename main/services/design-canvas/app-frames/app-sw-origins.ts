@@ -10,7 +10,8 @@ import path from "node:path";
 
 export const APP_SW_ORIGINS_MAX = 64;
 
-const ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d{1,5}$/u;
+// The URL serializer drops the default port, so a page on :80 is `http://localhost`.
+const ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/u;
 
 export type AppServiceWorkerOrigins = {
   /** Adds an origin; past 64, the oldest are cleared first and dropped once cleared. */
