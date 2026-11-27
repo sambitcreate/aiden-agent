@@ -13,6 +13,7 @@ import { createBotOwnWrites } from "./own-writes.js";
 import { createBotEventRunner, eventRoutineRunStore, eventRoutineTask } from "./runner.js";
 import { createBotEventRoutineStore, viewOf, type BotEventRoutine } from "./store.js";
 import { createBotWebhookHandler } from "./webhook.js";
+import { MemoryPersistence } from "../task-persistence-test-support.js";
 
 const roots: string[] = [];
 after(() => {
@@ -691,19 +692,6 @@ test("the own-writes journal keeps the version a Bot's own write left, since the
   await journal.record("bot-a", "/home/bot/Inbox/other.md");
   assert.equal(journal.writtenSince("bot-a", "/home/bot/Inbox/summary.md", 0), undefined, "old entries are pruned");
 });
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-  async load(): Promise<T> {
-    return structuredClone(this.data);
-  }
-  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    this.data = draft;
-    return result;
-  }
-}
 
 test("a finished event run is recorded under the event's id, delivered, and settles its receipt", async () => {
   const store = createBotEventRoutineStore({ profileDir: fixedProfile() });

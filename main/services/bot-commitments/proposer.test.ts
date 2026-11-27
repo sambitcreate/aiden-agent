@@ -7,22 +7,12 @@ import { createScheduleStore } from "../schedule-store.js";
 import { createBotCommitmentProposer } from "./proposer.js";
 import { createBotCommitmentStore } from "./store.js";
 import { createNoteFollowUpTool } from "./tool.js";
+import { MemoryPersistence } from "../task-persistence-test-support.js";
 
 const roots: string[] = [];
 after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-  async load(): Promise<T> { return structuredClone(this.data); }
-  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    this.data = draft;
-    return result;
-  }
-}
 
 function harness(at = Date.UTC(2026, 9, 27, 12)) {
   const root = mkdtempSync(path.join(os.tmpdir(), "aiden-commitments-"));

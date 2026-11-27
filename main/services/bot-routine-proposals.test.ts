@@ -24,24 +24,12 @@ import { projectBotTranscript } from "./bot-runtime/live-projection.js";
 import { BOT_ROUTINE_PROPOSALS_FILE } from "./bot-routine-proposals.js";
 import { botSessionDirectory } from "./bot-routine-notes.js";
 import { createBotSuggestionBudget, type BotSuggestionBudget } from "./bot-runtime/bot-suggestion-budget.js";
+import { MemoryPersistence } from "./task-persistence-test-support.js";
 
 const roots: string[] = [];
 after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-  async load(): Promise<T> {
-    return structuredClone(this.data);
-  }
-  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    this.data = draft;
-    return result;
-  }
-}
 
 function harness(options: { suggestionBudget?: BotSuggestionBudget; ownerAsked?: boolean } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "aiden-routine-proposals-"));

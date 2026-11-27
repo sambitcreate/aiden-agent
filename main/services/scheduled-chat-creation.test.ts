@@ -6,21 +6,7 @@ import test from "node:test";
 import { createChatStore } from "./chat-store-core.js";
 import { createScheduleStore } from "./schedule-store.js";
 import { createScheduledChatClaim } from "./scheduled-chat-creation.js";
-
-class MemoryPersistence<T> {
-  constructor(protected data: T) {}
-
-  async load(): Promise<T> {
-    return structuredClone(this.data);
-  }
-
-  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    this.data = draft;
-    return result;
-  }
-}
+import { MemoryPersistence } from "./task-persistence-test-support.js";
 
 class FailingTaskPersistence<T> extends MemoryPersistence<T> {
   fail: "before" | "after" | null = null;

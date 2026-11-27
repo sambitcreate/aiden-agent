@@ -7,19 +7,7 @@ import type { ScheduledRun } from "../types.js";
 import { BOT_WAKE_UP_ENTRY_KIND, botWakeUpWhen } from "../../../renderer/shared/bot-wake-ups.js";
 import { createWakeUpTool, type BotWakeUpEntryData } from "./wake-up-tool.js";
 import { createBotWakeUps, resolveBotWakeUpTime } from "./wake-ups.js";
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-  async load(): Promise<T> {
-    return structuredClone(this.data);
-  }
-  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    this.data = draft;
-    return result;
-  }
-}
+import { MemoryPersistence } from "../task-persistence-test-support.js";
 
 const MINUTE = 60_000;
 

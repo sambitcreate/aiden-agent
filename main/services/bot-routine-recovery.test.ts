@@ -14,20 +14,7 @@ import { createScheduleStore } from "./schedule-store.js";
 import { createBotRoutineExecutor, createBotRoutineService } from "./scheduled-bot-routines.js";
 import type { BotRoutineFailureKind } from "../../renderer/shared/bot-routine-failure.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
-
-class MemoryPersistence<T> {
-  constructor(private data: T) {}
-  async load(): Promise<T> {
-    return structuredClone(this.data);
-  }
-  async update<R>(mutation: (draft: T) => R | Promise<R>, isCurrent: () => boolean = () => true): Promise<R> {
-    if (!isCurrent()) throw new Error("Stale persistence operation.");
-    const draft = structuredClone(this.data);
-    const result = await mutation(draft);
-    this.data = draft;
-    return result;
-  }
-}
+import { MemoryPersistence } from "./task-persistence-test-support.js";
 
 const T = 1_800_000_000_000;
 
