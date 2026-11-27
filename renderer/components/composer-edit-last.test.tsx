@@ -10,7 +10,7 @@ import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import { loadComposerDraft, stageComposerText } from "../lib/composer-draft-store";
 import { openLayer } from "../lib/layer-stack";
-import type { Chat, ChatMessage, Workspace } from "../lib/types";
+import type { Chat, ChatMessage } from "../lib/types";
 import type { ComposerHistoryEntry } from "../lib/composer-history";
 import { TEST_WORKSPACE, createTestQueryClient, settle } from "../lib/test-harness";
 

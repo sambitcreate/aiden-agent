@@ -51,6 +51,7 @@ const PRIVATE_KEY = "wave4-batch-b-private-key-4e3d9c";
 const PRIVATE_BODY = "WAVE4_BATCH_B_PRIVATE_UPSTREAM_BODY_4e3d9c";
 
 type BatchProviderId = "anysearch" | "xcrawl" | "valyu";
+type FixtureProvider = "anysearch-search" | "xcrawl-search" | "valyu-search";
 
 const support = adapterTestSupport({ key: PRIVATE_KEY, body: PRIVATE_BODY });
 const { assertSecureRequest, createAdapterRequest } = support;

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
 import { openBotHandoff, type BotHandoffOpenFrom, type BotHandoffOpeners } from "./bot-handoff-open.js";
 import { handoffCard as card } from "./test-support/handoff-fixtures.js";
 

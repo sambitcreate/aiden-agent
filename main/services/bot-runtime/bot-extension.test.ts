@@ -31,7 +31,7 @@ import { spawnHarnessChild } from "./test-support/child.js";
 import { approvalReplayDeps, SCENARIO_RULE_HANDOFF, SCENARIO_SCRIPT_TOOL } from "./test-support/extension-scenario.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
-import { botToolResults, openBotHarness } from "./test-support/harness.js";
+import { botToolResults, openBotHarness, type BotToolResultModel } from "./test-support/harness.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const scenarioFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-support", "extension-scenario.ts");
@@ -691,7 +691,7 @@ test("(h) the memory section stays byte-identical through the Bot's saves; a per
 // --- Rule hand-offs (plan §4.4) ------------------------------------------
 
 const RULE_HANDOFF = () => ({ allowed: true as const, handoff: { ...SCENARIO_RULE_HANDOFF, rule: { ...SCENARIO_RULE_HANDOFF.rule } } });
-const resultText = (result: ToolResultModel | undefined) => result?.content.map((part) => part.text ?? "").join("") ?? "";
+const resultText = (result: BotToolResultModel | undefined) => result?.content.map((part) => part.text ?? "").join("") ?? "";
 
 async function handoffTurn(options: Parameters<typeof recordingDeps>[0]) {
   const gated = countingTool("gated");

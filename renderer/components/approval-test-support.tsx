@@ -1,4 +1,3 @@
-import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChatApprovalCard } from "./chat-approval-card.js";
 import type { ApprovalPrompt } from "../lib/ipc.js";

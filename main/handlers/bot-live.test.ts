@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { BotLiveEvent } from "../../renderer/shared/bot-live.js";
+import type { BotLiveEvent, BotLiveSnapshot } from "../../renderer/shared/bot-live.js";
 import { botLiveSnapshotFixture } from "../../renderer/main/bots/test-fixtures.js";
 import type { BotLiveProjection, BotLiveSink } from "../services/bot-runtime/live-projection.js";
 import { isBotChatInFront, registerBotLiveHandlers, type BotChatFrontInput, type BotLiveOwner } from "./bot-live.js";

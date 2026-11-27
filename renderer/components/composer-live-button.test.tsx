@@ -14,7 +14,7 @@ import { idleLiveController } from "./assistant/assistant-live-test-fixture";
 import type { AssistantLiveController } from "./assistant/use-assistant-live";
 import { DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { mountWithBotRouter } from "../main/bots/test-providers";
-import type { Chat, Workspace } from "../lib/types";
+import type { Chat } from "../lib/types";
 import { TEST_WORKSPACE, createTestQueryClient } from "../lib/test-harness";
 
 // With an empty draft, the button in Send's place starts Aiden Live; typing,

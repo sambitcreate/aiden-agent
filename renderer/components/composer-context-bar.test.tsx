@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Composer } from "./composer";
 import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
-import type { Chat, GitInfo, Workspace } from "../lib/types";
+import type { Chat, GitInfo } from "../lib/types";
 import { TEST_WORKSPACE, createTestQueryClient, settle } from "../lib/test-harness";
 
 // The real Composer and its context bar, with IPC faked. Boolean oracles

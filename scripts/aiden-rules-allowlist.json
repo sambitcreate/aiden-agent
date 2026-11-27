@@ -21,7 +21,6 @@
   {"rule":"no-source-grep-test","file":"main/services/aiden-remote-router.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/services/app-updater-core.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/services/bot-capability-production-shape.test.ts","reason":"legacy; replace with behavioral test"},
-  {"rule":"no-source-grep-test","file":"main/services/bot-computers/host.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/services/bot-system-prompt.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/services/chat-activity-core.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/services/chat-workspace-authority.test.ts","reason":"legacy; replace with behavioral test"},

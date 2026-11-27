@@ -8,7 +8,7 @@ import { Composer } from "./composer";
 import { Toaster, TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import { restoreUnsentMessage, stageComposerText, takeComposerAttachmentSeed } from "../lib/composer-draft-store";
-import type { Attachment, Chat, Workspace } from "../lib/types";
+import type { Attachment, Chat } from "../lib/types";
 import { TEST_WORKSPACE, createTestQueryClient, settle } from "../lib/test-harness";
 
 // A cancelled worktree send hands its message back to the draft. The real

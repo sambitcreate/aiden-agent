@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Composer } from "./composer";
 import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
-import type { Chat, Workspace } from "../lib/types";
+import type { Chat } from "../lib/types";
 import { TEST_WORKSPACE, createTestQueryClient } from "../lib/test-harness";
 
 // On-device dictation with a model that keeps up shows the words in the draft
