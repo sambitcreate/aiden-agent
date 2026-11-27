@@ -126,6 +126,23 @@ async function liveIframe(): Promise<HTMLIFrameElement> {
   return iframes()[0]!;
 }
 
+/**
+ * The iframe at the moment it enters the DOM: a mutation observer's callback
+ * runs right after React's commit, before any passive effect has.
+ */
+async function iframeAsInserted(): Promise<HTMLIFrameElement> {
+  if (iframes().length > 0) return iframes()[0]!;
+  return new Promise((resolve) => {
+    const observer = new MutationObserver(() => {
+      const iframe = iframes()[0];
+      if (!iframe) return;
+      observer.disconnect();
+      resolve(iframe);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+}
+
 function notify(event: Record<string, unknown>) {
   act(() => emitBotTestNotification("designCanvas:appFrame", event));
 }
@@ -270,6 +287,19 @@ test("in Chromium's order (the composer's focusout on the body, then the window'
     await settleFocus();
     assert.equal(document.activeElement === composer, true, `attempt ${attempt + 1}: the composer has focus back`);
   }
+});
+
+test("the guard is up from the commit that puts the iframe in: a page that takes focus as its frame appears is answered", async () => {
+  setup();
+  render(<Harness frame={appFrame()} composer />);
+  const iframe = await iframeAsInserted();
+  const composer = screen.getByRole("textbox", { name: "Composer" });
+  composer.focus();
+  composer.blur();
+  pageTakesFocus(iframe);
+  window.dispatchEvent(new window.FocusEvent("blur"));
+  await settleFocus();
+  assert.equal(document.activeElement === composer, true, "the composer has focus back");
 });
 
 test("a window blur long after the composer lost focus doesn't send focus back to it", async () => {
