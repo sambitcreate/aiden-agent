@@ -197,7 +197,6 @@ struct AidenAppShellView: View {
     /// so building them there read and decoded the saved navigation each time.
     @State private var parts = AidenAppShellParts()
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
-    @State private var searchText = ""
     @State private var activeSheet: ShellSheet?
     /// Each list tab's split columns.
     @State private var inboxColumns = AidenSplitColumns()
