@@ -28,7 +28,7 @@ Files outside the workspace, including symlinks that point out of it, are refuse
 
 ## Live apps (experimental)
 
-With live apps, design mode runs your workspace's own web app so the canvas can show it. Phase 2b runs the dev server, and Phase 2c adds a status chip, its logs, Retry, and connecting a dev server you already run; showing the app on the canvas comes with the next phases.
+With live apps, design mode runs your workspace's own web app so the canvas can show it. Phase 2b runs the dev server, and Phase 2c adds a status chip, its logs, Retry, and connecting a dev server you already run. Phase 3a adds [app frames](#app-frames): Aiden places the app's routes on the canvas, and you can download them as pictures. Showing them live inside the frames comes next.
 
 **Turning it on.** Start Aiden with `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1`. Live apps run on macOS and Linux only. With the flag off, nothing here runs.
 
@@ -61,5 +61,9 @@ With live apps, design mode runs your workspace's own web app so the canvas can 
 **A server in `.aiden/canvas.json`.** An app entry can name a server you run instead of a script: `{"version": 1, "apps": [{"root": "apps/web", "url": "http://127.0.0.1:5173"}]}`. The url must be `http:` on `localhost`, `127.0.0.1` or `[::1]` with a port from 1024 to 65535, and nothing after the port but an optional `/`. When design mode turns on, Aiden shows a **Connect to <process> at <address>?** card naming the process and folder it found holding that port; **Allow** connects only if the same process still holds it. Aiden remembers the approval for that address, entry and workspace folder, and asks again when any of them change. A url wins over a `script` in the same entry, and Aiden never runs the script of an entry with a url, even when the url is one it won't connect to; the menu then says the url is invalid. Such an entry can't be chosen to run in **Choose apps…** either. Aiden can connect such an entry through its `design_app` tool, after the same card, but it can't connect to any other server.
 
 **In the browser panel.** Running design apps, started or connected, are listed first under **Local servers** in the browser panel, labelled "design mode", so you can open one there.
+
+<a id="app-frames"></a>**App frames.** Aiden can place a route of the running app on the canvas as an app frame, with `canvas_place_frame`. The frame is sized like a browser window (1280 × 800 unless Aiden picks another size), drawn at a scale, and resizing it from a corner keeps its shape. Until live frames arrive, the frame shows its last picture with "Not live on the canvas yet". With live apps off, app frames from an earlier run say "Live apps are off", and Aiden can't place new ones.
+
+**Downloading an app frame.** Download saves the route as a PNG, at the frame's width in browser pixels, or as a PDF. Aiden draws it in a hidden window with your app's cookies and storage, and waits until the page has made no new request for half a second, or at most 15 seconds. The app must be running in this workspace: otherwise you see "Start the app to download this frame.", and no Save dialog opens. Frames inside your app draw empty. The hidden window shows no dialogs, opens no windows, starts no downloads and is refused every permission. It reaches only servers on this computer, and not Aiden's own. Other local services stay reachable, as they are from your browser. WebTransport (HTTP/3 over QUIC), WebRTC relays over TCP and the dev server's own server-side requests aren't covered.
 
 **Privacy.** The app's folder, scripts, port and output stay on your device. Usage data records only which framework and package manager an app used and whether it ran. See [analytics](analytics.md).

@@ -702,10 +702,10 @@ export class AppFrameRegistry {
 
 ### Task 0: Baseline
 
-- [ ] Branch `t3/design-mode-v2-p3a` from `t3/design-mode-v2-p2c` at `798fb4093` or later. Build the native helpers a fresh worktree needs (`npm run build:native:c`, `npm run build:vcc`) and run `npm ci` in `packages/cli` (2c As built #22).
-- [ ] Confirm each "Stacking" item (`rg -n "forgetWorkspace|appForOrigin|isAppOrigin|onOriginsChanged" main/services/design-canvas/app-server/app-server-main.ts`, `rg -n "useDesignAppsSnapshot" renderer/design`, `rg -n "designApp:retry" renderer main`), and that `node_modules/electron/package.json` is 43.8.4 or later with `initiatorOrigin`, `framesInSubtree` and the `will-frame-navigate` `initiator` in `electron.d.ts`. These are baseline checks, not tests. If anything differs, update "What exists today" and D21 first.
-- [ ] Confirm the acceptance launch: `main/bootstrap.ts:51` loads `display-capture-acceptance.js` instead of `main/index.ts`, so it never meets the dispatchers.
-- [ ] Run `npm run test:design-mode`, `npm run test:gemini-live`, `npx tsx --test scripts/renderer-csp.test.ts`, `node --test scripts/check-aiden-rules.test.mjs` and `npx tsc --noEmit -p .`. Expected: PASS. Record failures as pre-existing.
+- [x] Branch `t3/design-mode-v2-p3a` from `t3/design-mode-v2-p2c` at `798fb4093` or later. Build the native helpers a fresh worktree needs (`npm run build:native:c`, `npm run build:vcc`) and run `npm ci` in `packages/cli` (2c As built #22).
+- [x] Confirm each "Stacking" item (`rg -n "forgetWorkspace|appForOrigin|isAppOrigin|onOriginsChanged" main/services/design-canvas/app-server/app-server-main.ts`, `rg -n "useDesignAppsSnapshot" renderer/design`, `rg -n "designApp:retry" renderer main`), and that `node_modules/electron/package.json` is 43.8.4 or later with `initiatorOrigin`, `framesInSubtree` and the `will-frame-navigate` `initiator` in `electron.d.ts`. These are baseline checks, not tests. If anything differs, update "What exists today" and D21 first.
+- [x] Confirm the acceptance launch: `main/bootstrap.ts:51` loads `display-capture-acceptance.js` instead of `main/index.ts`, so it never meets the dispatchers.
+- [x] Run `npm run test:design-mode`, `npm run test:gemini-live`, `npx tsx --test scripts/renderer-csp.test.ts`, `node --test scripts/check-aiden-rules.test.mjs` and `npx tsc --noEmit -p .`. Expected: PASS. Record failures as pre-existing.
 
 ### Task 1: The fixture app
 
@@ -713,7 +713,7 @@ export class AppFrameRegistry {
 - Create: `tests/fixtures/design-live-app/` with `package.json`, `index.html`, `vite.config.ts`, `src/main.tsx`, `src/App.tsx`, `src/Home.tsx`, `src/Pricing.tsx`, `src/Probe.tsx`, `src/Login.tsx`, `src/worker.ts`, `public/sw.js`, `README.md`
 - Modify: `.gitignore` if needed for the fixture's `node_modules` link and `.vite-cache/`
 
-- [ ] **Step 1: Write the fixture.**
+- [x] **Step 1: Write the fixture.**
   - **`package.json`:** `"scripts": {"dev": "vite"}` and `devDependencies` for `vite`, `@vitejs/plugin-react`, `react` and `react-dom` at the repo root's ranges, so 2b's detection (`app-server-core.ts:104`, `:126-146`) finds Vite. **No lockfile**: the symlinked `node_modules` counts as the person's install, and no install runs.
   - **`vite.config.ts`:** `cacheDir: ".vite-cache"` inside the fixture copy, so the dep optimizer never writes into the repo root's `node_modules` through the link; `@vitejs/plugin-react`; and one middleware plugin: `GET /go-out` → `302 https://example.com/`; `GET /go-login` → `302 /login`; `GET /r-own?port=N` → `307 http://127.0.0.1:N/`; `GET /r-evil` → `302 http://localhost.evil.test/`; `POST /api/login` sets `Set-Cookie: sid=fixture; HttpOnly; Path=/` (no `SameSite`, so Chromium's default `Lax` applies) and redirects to `/login?ok=1`; `GET /api/me` answers the cookie's value or 401; `GET /framed` answers with `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'; script-src 'self'`; `GET /reporting?to=URL` answers with `Reporting-Endpoints: e="URL"`, `Report-To`, `NEL` and `Content-Security-Policy: script-src 'none'; report-to e`; `GET /f.zip` answers `Content-Disposition: attachment`.
   - No router: `App.tsx` switches on `location.pathname` and listens to `popstate`. Vite's SPA fallback serves `index.html` for every route.
@@ -721,8 +721,8 @@ export class AppFrameRegistry {
   - `/pricing`: `<h1>Pricing</h1>` on a known line of `Pricing.tsx`, and a component `PriceCard` used twice;
   - `/probe?target=<host:port>&own=<port>&udp=<port>`: on a button press (so the E2E controls timing), tries each way out against the given observer targets and writes each outcome to `#result` as JSON: `fetch`, `<img>`, `new WebSocket("wss://…")`, `new EventSource`, CSS `@import`/`@font-face`/`background-image`, `<link rel=prefetch|modulepreload|preconnect|dns-prefetch>`, a speculation-rules prefetch, `<a ping>`, `navigator.sendBeacon` while alive, `new WebTransport` from the page, a dedicated worker, a shared worker and a `blob:` worker each running `fetch`, `<img src="aiden-attachment://…">`/`<script src="aiden-design://…">`/`<link href="aiden-asset://…">`, `fetch("/r-own?port=<own>")`, `fetch("/r-evil")`, `fetch("/go-out")`, `window.open`, `alert("x")`, `confirm("x")`, `print()`, `navigator.mediaDevices.getUserMedia({audio: true})`, `getDisplayMedia()`, `Notification.requestPermission()`, `navigator.geolocation.getCurrentPosition`, `video.requestPictureInPicture()`, `document.documentElement.requestFullscreen()`, `navigator.clipboard.readText()`, an `<iframe src="https://www.youtube.com/embed/x">`, a `top.location` assignment, `location = "mailto:x"`, an `<a download href="/f.zip">` click, `history.go(-1)`, a `pagehide` beacon, a "focus thief" toggle (`setInterval(() => input.focus(), 50)`), and registering `/sw.js`, whose `fetch` handler calls the target, opens a `WebTransport`, and registers a background `sync`;
   - `/login`: a form that posts to `/api/login`; `/api/me` returns the signed-in name.
-- [ ] **Step 2: Check it runs** headlessly on the host (no window): link `node_modules` to the repo root's (as 2b's Vite test does), start `npx vite --host 127.0.0.1 --port 0 --strictPort` against a temp copy from a scratch script, `curl` `/`, `/go-out` and `/api/me`, and stop it. Expected: 200, 302, 401, and no `.vite/` written under the repo root's `node_modules`. Also run `detectFramework` on the fixture's `package.json` from a one-off `tsx -e`. Expected: `vite`. Nothing is committed from the script.
-- [ ] **Step 3:** Commit `test(design): a Vite + React 19 fixture app for live frames`.
+- [x] **Step 2: Check it runs** headlessly on the host (no window): link `node_modules` to the repo root's (as 2b's Vite test does), start `npx vite --host 127.0.0.1 --port 0 --strictPort` against a temp copy from a scratch script, `curl` `/`, `/go-out` and `/api/me`, and stop it. Expected: 200, 302, 401, and no `.vite/` written under the repo root's `node_modules`. Also run `detectFramework` on the fixture's `package.json` from a one-off `tsx -e`. Expected: `vite`. Nothing is committed from the script.
+- [x] **Step 3:** Commit `test(design): a Vite + React 19 fixture app for live frames`.
 
 ### Task 2: Pre-build checks in the Space — React 19 source mapping and the Electron probes
 
@@ -731,16 +731,16 @@ export class AppFrameRegistry {
 - Modify: `package.json` (`test:design-mode`), `scripts/ci-test-registry.json` (`renderer-other`: it is a happy-dom suite)
 - Scratch (untracked, inside the worktree so the Space sync carries it; never committed): `.p3a-probe/react-source-check.mjs`, `.p3a-probe/electron-probes.mjs`, `.p3a-probe/observer.mjs`
 
-- [ ] **Step 1: Write failing tests** (happy-dom plus pure):
+- [x] **Step 1: Write failing tests** (happy-dom plus pure):
   - `decodeSourceMapLine` maps a generated line and column to the original source and line, for a real inline map produced by Vite's own `transformWithOxc`/plugin-react output of a three-line JSX module (built in the test, no network);
   - the walk on a fake React 18 fiber (`_debugSource {fileName, lineNumber}`) gives the component, owners and `path:line`;
   - on a fake React 19 fiber with `_debugStack` whose first app frame is `http://127.0.0.1:5173/src/Pricing.tsx?t=1:14:7`, with a stubbed `fetch` returning a module carrying an inline map, gives `src/Pricing.tsx` and the original line;
   - a frame under `/@fs/`, `/node_modules/` or another origin gives no path;
   - no fiber gives the `data-aiden-src` stamp, else nothing.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement** the walk and decoder.
-- [ ] **Step 4: The React check.** Run `npm run test:e2e:space -- --run node_modules/.bin/electron .p3a-probe/react-source-check.mjs`: it starts Vite on a temp copy of the fixture, opens a hidden `BrowserWindow` at `/pricing`, runs the walk on the `<h1>` through `executeJavaScript`, and prints the result. Expected: `src/Pricing.tsx` and the `<h1>`'s line. **Record the outcome** in this plan's As built. If it fails, apply D14's fallback now (drop the decoder; the walk returns the component and owners), and change Task 14's assertion to the component name.
-- [ ] **Step 5: The Electron probes.** Run `npm run test:e2e:space -- --run node_modules/.bin/electron .p3a-probe/electron-probes.mjs`. The script starts `observer.mjs` (a TCP listener, a TLS-less HTTP listener, a UDP listener on 127.0.0.1 and on the Space's non-loopback interface, a DNS stub, and an `aiden-attachment:`-style test scheme handler with a hit counter), launches a main window that frames the fixture through a parent page with the 3a sandbox, installs a recording `webRequest` subscriber on the default session, and runs each probe twice where a switch matters (switch off, then on). It prints a JSON report. **Record every result** in As built:
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement** the walk and decoder.
+- [x] **Step 4: The React check.** Run `npm run test:e2e:space -- --run node_modules/.bin/electron .p3a-probe/react-source-check.mjs`: it starts Vite on a temp copy of the fixture, opens a hidden `BrowserWindow` at `/pricing`, runs the walk on the `<h1>` through `executeJavaScript`, and prints the result. Expected: `src/Pricing.tsx` and the `<h1>`'s line. **Record the outcome** in this plan's As built. If it fails, apply D14's fallback now (drop the decoder; the walk returns the component and owners), and change Task 14's assertion to the component name.
+- [x] **Step 5: The Electron probes.** Run `npm run test:e2e:space -- --run node_modules/.bin/electron .p3a-probe/electron-probes.mjs`. The script starts `observer.mjs` (a TCP listener, a TLS-less HTTP listener, a UDP listener on 127.0.0.1 and on the Space's non-loopback interface, a DNS stub, and an `aiden-attachment:`-style test scheme handler with a hit counter), launches a main window that frames the fixture through a parent page with the 3a sandbox, installs a recording `webRequest` subscriber on the default session, and runs each probe twice where a switch matters (switch off, then on). It prints a JSON report. **Record every result** in As built:
   1. **WebTransport** from the frame, a dedicated worker and the service worker against the UDP observer: does `onBeforeRequest` see it; do datagrams arrive; does `disable-blink-features=WebTransport` make `WebTransport` undefined in all three (W1, W2)?
   2. **Preconnect and DNS prefetch**: does `<link rel=preconnect>` to an observer host open a TCP connection; does `dns-prefetch` reach the DNS stub, with `blink-settings=dnsPrefetchingEnabled=false` (already set, `main/index.ts:264`) and with `X-DNS-Prefetch-Control: off` on the response (A40)?
   3. **Custom schemes**: does `onBeforeRequest` fire for `<img>`, `<script>` and `<link>` loads of a `standard`/`secure`, `supportFetchAPI: false` scheme, and does a cancel there keep the handler's counter at 0 (A35)?
@@ -752,7 +752,7 @@ export class AppFrameRegistry {
   9. **Export scale**: does `capturePage` under `enableDeviceEmulation({deviceScaleFactor: 2})` at zoom 1 return 2× pixels (D18)?
   10. **Background sync**: when the service worker registers `sync` and `periodicSync`, does the permission check handler see a call, and with what name (D8)?
   11. **Reporting**: with the reporting headers stripped by a headers subscriber, does the observer see any report upload (H1)?
-- [ ] **Step 6: Apply the outcomes.** Defaults stand whatever the probes show (D7, S71). Then:
+- [x] **Step 6: Apply the outcomes.** Defaults stand whatever the probes show (D7, S71). Then:
   - ~~if any WebTransport datagram arrives with the switch on, stop and escalate~~ Resolved 2026-11-24: datagrams arrived in every mode, and the main session made WebTransport a documented gap (S71), with no switch;
   - if preconnect or DNS still reaches the observer, write the gap into S71 (next to S5) and into Task 15's docs, and mark A40 as "documented gap" in Task 14 instead of asserting zero;
   - if custom-scheme loads aren't seen by `webRequest`, stop and escalate, as for WebTransport: A22–A24 and A35 can't hold, and a check in the `aiden-*` protocol handlers has to be designed and reviewed before Task 7;
@@ -761,8 +761,8 @@ export class AppFrameRegistry {
   - if siblings move on `history.go`, record H2 as a documented limit in Task 15's docs;
   - if `inert` doesn't stop the focus loop, stop and escalate: S75 needs another mechanism before Task 11;
   - if `capturePage` stays 1×, S73 records PNG at 1×.
-- [ ] **Step 7: Register** `react-source-walk.test.ts` (`renderer-other`). Run `npm run test:ci-policy`.
-- [ ] **Step 8:** Commit `feat(design): React source walk for live frames, checked against React 19` (the probe outcomes go into As built in Task 15's commit).
+- [x] **Step 7: Register** `react-source-walk.test.ts` (`renderer-other`). Run `npm run test:ci-policy`.
+- [x] **Step 8:** Commit `feat(design): React source walk for live frames, checked against React 19` (the probe outcomes go into As built in Task 15's commit).
 
 ### Task 3: The `app` frame kind
 
@@ -770,7 +770,7 @@ export class AppFrameRegistry {
 - Create: `renderer/shared/design-canvas/app-frame.ts`, `app-frame.test.ts`
 - Modify: `renderer/shared/design-canvas/schema.ts`, `schema.test.ts`, `renderer/shared/design-canvas/frame-export.ts` (and its test), `renderer/design/live-set-core.ts`, `live-set-core.test.ts`, `renderer/design/nodes/registry.ts`, `renderer/design/nodes/app-node.tsx` (new: the static card only), `package.json`, `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - **`isAppRoute`, as a table.** Accepted: `/`, `/pricing`, `/blog/hello-world?x=1`. Refused: `""`, `pricing`, `//evil.com`, `/\evil`, `http://x/`, `/a\nb`, a bidi override, 2 049 characters, a number.
   - **`isAppRoot`:** `.`, `web`, `apps/site` accepted; `..`, `./web`, `/abs`, `web/../x`, `a\b` refused.
   - **`appFrameBox`:** `1280 × 800` at 0.5 gives `w 640`, `h 400 + header`; `1333 × 777` at `0.3333` gives integer `w` and `h` (444 and 259 + header).
@@ -780,11 +780,11 @@ export class AppFrameRegistry {
   - **Schema:** an app frame parses with every field and `w`/`h` recomputed from viewport and scale (a stored `w` of 9 999 is replaced); a bad route, root, viewport (199, 4 001, 1.5) or scale drops the frame; `label` is cut at 60; `variantOf` keeps a valid id; `designWidth`, `tweaks`, `dark`, `printMode` and `paper` on an app frame are dropped; **parse → serialize → parse is a fixed point** for an app frame at scale `0.3333` and at `0.05` with viewport 200 (the generic clamp doesn't move it); existing kinds' cases unedited.
   - **Export formats:** `designExportFormats({kind: "app"})` is `["png", "pdf"]`; `isDesignPrintable("app")` is false.
   - **Live set:** app frames compete with file frames for the six; an entered app frame is always live.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement** D15. `AppNode` is the static card (title, "Live apps are off", the snapshot or skeleton). It gets its live body in Task 11.
-- [ ] **Step 4: Register** `app-frame.test.ts` (`core-git`). Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Rerun, plus `npm run test:design-mode` and `npx tsc --noEmit -p .`. Expected: PASS.
-- [ ] **Step 6:** Commit `feat(design): the app frame kind`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement** D15. `AppNode` is the static card (title, "Live apps are off", the snapshot or skeleton). It gets its live body in Task 11.
+- [x] **Step 4: Register** `app-frame.test.ts` (`core-git`). Run `npm run test:ci-policy`.
+- [x] **Step 5:** Rerun, plus `npm run test:design-mode` and `npx tsc --noEmit -p .`. Expected: PASS.
+- [x] **Step 6:** Commit `feat(design): the app frame kind`.
 
 ### Task 4: The two default-session dispatchers and the one-owner rule
 
@@ -792,7 +792,7 @@ export class AppFrameRegistry {
 - Create: `main/services/default-session-web-request.ts`, `default-session-web-request.test.ts`, `main/services/default-session-permissions.ts`, `default-session-permissions.test.ts`
 - Modify: `main/index.ts` (claim both inside `app.whenReady()` before the first `createMainWindow`), `main/services/gemini-live/service-main.ts` (pass the owner slot), `main/services/gemini-live/display-media-contract.ts` (`export` on `DisplayMediaGuardSession`, nothing else), `scripts/check-aiden-rules.mjs`, `scripts/check-aiden-rules.test.mjs`, `scripts/aiden-rules-allowlist.json`, `package.json`, `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Write failing tests** against a fake `webRequest` and a fake permission target that record every setter call and listener:
+- [x] **Step 1: Write failing tests** against a fake `webRequest` and a fake permission target that record every setter call and listener:
   - **webRequest:**
     - `a second claim of the same webRequest throws` (§11 item 4);
     - `with no subscriber no Electron listener is set`; adding one sets it; removing the last sets `null`;
@@ -813,11 +813,11 @@ export class AppFrameRegistry {
     - `with guardSetters, a direct setPermissionRequestHandler call throws`.
   - **Gemini Live through the slot:** `installGeminiLiveDisplayMediaGuards(slot, …)` with a bound fake document grants its microphone request and denies another document's; calling it twice with `ownerSlot("gemini-live")` returns the same dispose (the `WeakMap` sees one object); dispose leaves the slot empty and the target handlers `null` (no layer).
   - **`default-session-owner` rule** (`check-aiden-rules.test.mjs`): flags `webRequest.on*`, `setPermissionCheckHandler`, `setPermissionRequestHandler`, `setDisplayMediaRequestHandler`, `setDevicePermissionHandler` and `on("will-download" | "select-hid-device" | "select-serial-port" | "select-usb-device")` reached through `session.defaultSession`, `session.fromPartition("")`, `<expr>.webContents.session` and `mainWindow.webContents.session` in any file but `default-session-*.ts`; passes partition sessions (`fromPartition("persist:x")`); an allowlisted file passes.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement** D6 and D8's dispatcher (no design layer yet), and the `default-session-owner` AST rule. Allowlist `main/services/gemini-live/display-capture-acceptance.ts` (its own launch mode, `:149-263`) with that reason. The rule's limit (a session reached dynamically escapes it) is why the runtime setter guard exists; say so in the rule's comment. Wire the claims in `main/index.ts` inside `app.whenReady()` before the first `createMainWindow` (`:2497`), with `guardSetters: !app.isPackaged`, and change `service-main.ts:145` to `defaultSessionPermissions.ownerSlot("gemini-live")`.
-- [ ] **Step 4: Register** both test files (`core-git`), and append them to `test:gemini-live` as well as `test:design-mode`. Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Rerun, plus `npm run test:gemini-live` with Live's existing tests **unedited**, `node --test scripts/check-aiden-rules.test.mjs`, `npm run check:aiden-rules` and `npx tsc --noEmit -p main/tsconfig.json`. Expected: PASS.
-- [ ] **Step 6:** Commit `feat(main): one owner each for the default session's webRequest, permissions and session events`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement** D6 and D8's dispatcher (no design layer yet), and the `default-session-owner` AST rule. Allowlist `main/services/gemini-live/display-capture-acceptance.ts` (its own launch mode, `:149-263`) with that reason. The rule's limit (a session reached dynamically escapes it) is why the runtime setter guard exists; say so in the rule's comment. Wire the claims in `main/index.ts` inside `app.whenReady()` before the first `createMainWindow` (`:2497`), with `guardSetters: !app.isPackaged`, and change `service-main.ts:145` to `defaultSessionPermissions.ownerSlot("gemini-live")`.
+- [x] **Step 4: Register** both test files (`core-git`), and append them to `test:gemini-live` as well as `test:design-mode`. Run `npm run test:ci-policy`.
+- [x] **Step 5:** Rerun, plus `npm run test:gemini-live` with Live's existing tests **unedited**, `node --test scripts/check-aiden-rules.test.mjs`, `npm run check:aiden-rules` and `npx tsc --noEmit -p main/tsconfig.json`. Expected: PASS.
+- [x] **Step 6:** Commit `feat(main): one owner each for the default session's webRequest, permissions and session events`.
 
 ### Task 5: The network policy, the registry and Aiden's own ports
 
@@ -825,8 +825,8 @@ export class AppFrameRegistry {
 - Create: `main/services/design-canvas/app-frames/app-network-policy.ts`, `app-network-policy.test.ts`, `app-frame-registry.ts`, `app-frame-registry.test.ts`, `main/services/loopback-ports.ts`, `loopback-ports.test.ts`, `renderer/shared/design-canvas/app-frame-events.ts`
 - Modify: `main/services/aiden-remote-service.ts`, `aiden-mcp-server.ts`, `mcp-oauth-loopback.ts`, `acp/mcp-bridge.ts`, `bot-computers/viewer-hub.ts`, `browser/files.ts`, `devices/local-device-host.ts`, `devices/device-hub-proxy.ts`, `app-updater.ts` (register loopback ports), `scripts/check-aiden-rules.mjs`, `scripts/check-aiden-rules.test.mjs`, `scripts/aiden-rules-allowlist.json`, `package.json`, `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: The frameless audit (D4), in the Space.** With the flag on and a logging-only subscriber behind a scratch env var (untracked `.p3a-probe/audit.mjs`, a Playwright script run with `npm run test:e2e:space -- --run node .p3a-probe/audit.mjs`), launch the built app (`file://` renderer) and: send a chat, open a link preview, use spellcheck, open Settings → About (update check), start and stop Gemini Live if a key is present, start an MCP OAuth sign-in against the test OAuth server, load an image attachment. Log every `frame: null` request with its `initiatorOrigin` (or its absence), scheme and host. Record in As built: the exact `initiatorOrigin` the renderer's own frameless requests carry (`"file://"` or `"null"`, m16), every initiator-less network request, and what couldn't be exercised (no Gemini key, no OAuth provider). Add to `APP_FRAMELESS_ALLOWLIST` only what was observed, with a comment naming each owner; it starts empty. If the renderer's initiator is `"null"`, stop and amend D4 first.
-- [ ] **Step 2: Write failing tests.**
+- [x] **Step 1: The frameless audit (D4), in the Space.** With the flag on and a logging-only subscriber behind a scratch env var (untracked `.p3a-probe/audit.mjs`, a Playwright script run with `npm run test:e2e:space -- --run node .p3a-probe/audit.mjs`), launch the built app (`file://` renderer) and: send a chat, open a link preview, use spellcheck, open Settings → About (update check), start and stop Gemini Live if a key is present, start an MCP OAuth sign-in against the test OAuth server, load an image attachment. Log every `frame: null` request with its `initiatorOrigin` (or its absence), scheme and host. Record in As built: the exact `initiatorOrigin` the renderer's own frameless requests carry (`"file://"` or `"null"`, m16), every initiator-less network request, and what couldn't be exercised (no Gemini key, no OAuth provider). Add to `APP_FRAMELESS_ALLOWLIST` only what was observed, with a comment naming each owner; it starts empty. If the renderer's initiator is `"null"`, stop and amend D4 first.
+- [x] **Step 2: Write failing tests.**
   - **`appRequestVerdict`: D3's table, every row**, each with its verdict written by hand in the test (no derivation from the policy's own sets). Fabricated frames are plain objects `{frameTreeNodeId, parent, url, origin, isMainFrame}`; a getter that throws stands in for a destroyed frame and must give `cancel` in the main window; A45's frame has a `parent` chain ending at `null` without reaching the main frame; A47's frame isn't registered but has a loopback `origin`. The renderer origin is tested both as `file://` and as the dev origin `http://127.0.0.1:4143` (A28, N10).
   - **Cancel cache:** a second identical cancel within 1 s doesn't call `appContext` again; an allow is never cached; after 1 s the walk runs again. **Load:** 10 000 cancels from one fabricated frame complete in under 250 ms of policy time, and an interleaved main-frame request is decided in under 5 ms.
   - **`isAppLoopback`:** normalization rows (A9, `[0:0:0:0:0:0:0:1]`, `LOCALHOST`), and `ownPorts` rows.
@@ -845,11 +845,11 @@ export class AppFrameRegistry {
   - **Loopback ports:** add, has, delete, snapshot.
   - **Each listening service:** after its `listen`, `aidenLoopbackPorts.has(port)`; after close, not. For `local-device-host.ts`: the hub's reserved port is registered before spawn and removed when the hub stops; a reused agent daemon's `httpPort` from `daemon.json` is registered, and removed when it is found unhealthy. For `app-updater.ts`: a fake `autoUpdater` whose `getFeedURL()` returns `http://127.0.0.1:61234` at `update-downloaded` registers 61234; a non-loopback feed URL registers nothing. These extend each service's existing suite with new cases; existing cases stay unedited.
   - **`loopback-listen-registered` rule** (`check-aiden-rules.test.mjs`): a module with `server.listen(0, "127.0.0.1")` and no `aidenLoopbackPorts.add` is flagged; with the call, it passes; an allowlisted file passes; `*.test.ts` and `fixtures/` are skipped.
-- [ ] **Step 3:** Run. Expected: FAIL.
-- [ ] **Step 4: Implement** D3–D5, D7's pure header rules, the registry, the cancel cache, and the event parser in `app-frame-events.ts` (with its own cases in `app-frame.test.ts`). Add the port registrations to the services listed in D5, and the drift rule with D5's allowlist entries and reasons. `npm run check:aiden-rules` must report nothing new.
-- [ ] **Step 5: Register** the three new test files (`core-git`). Run `npm run test:ci-policy`.
-- [ ] **Step 6:** Rerun, plus the touched services' suites, `node --test scripts/check-aiden-rules.test.mjs` and `npm run check:aiden-rules`. Expected: PASS.
-- [ ] **Step 7:** Commit `feat(design): the live-frame network policy, frame registry and Aiden's own ports`.
+- [x] **Step 3:** Run. Expected: FAIL.
+- [x] **Step 4: Implement** D3–D5, D7's pure header rules, the registry, the cancel cache, and the event parser in `app-frame-events.ts` (with its own cases in `app-frame.test.ts`). Add the port registrations to the services listed in D5, and the drift rule with D5's allowlist entries and reasons. `npm run check:aiden-rules` must report nothing new.
+- [x] **Step 5: Register** the three new test files (`core-git`). Run `npm run test:ci-policy`.
+- [x] **Step 6:** Rerun, plus the touched services' suites, `node --test scripts/check-aiden-rules.test.mjs` and `npm run check:aiden-rules`. Expected: PASS.
+- [x] **Step 7:** Commit `feat(design): the live-frame network policy, frame registry and Aiden's own ports`.
 
 ### Task 6: Main window navigation, S1, admission and the guard
 
@@ -857,7 +857,7 @@ export class AppFrameRegistry {
 - Create: `main/windows/main-window-navigation.ts`, `main-window-navigation.test.ts`, `main/services/design-canvas/app-frames/app-frame-guard.ts`, `app-frame-guard.test.ts`
 - Modify: `main/index.ts` (call `installMainWindowNavigation(createdWindow, deps)` instead of the inline handlers at `:1953-1975`, for every created window), `package.json`, `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Write the flag-off tests first, against today's code moved verbatim** into `installMainWindowNavigation`, with a fake `webContents` (an `EventEmitter` with `getURL`, `mainFrame` and `setWindowOpenHandler`) and a recording `openExternal`:
+- [x] **Step 1: Write the flag-off tests first, against today's code moved verbatim** into `installMainWindowNavigation`, with a fake `webContents` (an `EventEmitter` with `getURL`, `mainFrame` and `setWindowOpenHandler`) and a recording `openExternal`:
   - `window.open opens externally and is denied`;
   - `a main-frame navigation to another URL is prevented and opened externally`; the same URL is allowed;
   - `a redirect is prevented and opened externally` (today's behaviour for every frame, kept with the flag off);
@@ -865,7 +865,7 @@ export class AppFrameRegistry {
   - **the new flag-off rows:** G9, G10, G11, G12, G14 (flag off) and G21: a direct subframe to `http://127.0.0.1:5173` is refused; a genui frame and a file frame self-navigating to loopback are refused; a `frame: null` loopback target is refused; to the renderer's own dev origin it is allowed.
 
   Move the code, run them. Expected: PASS except the new rows, which FAIL until Step 4.
-- [ ] **Step 2: Write failing flag-on tests.**
+- [x] **Step 2: Write failing flag-on tests.**
   - **`app-frame-guard` as a table (pure):** every flag-on row of D9's guard table, G1–G24, each verdict written by hand, with fabricated frames, records and initiators.
   - **Register and invoke, flag on**, with a real registry:
     - `a subframe redirect never calls openExternal`: loopback → external is prevented, reported blocked, and sends one `navigation-refused` with the redirect target; loopback → loopback proceeds (S1's two rows, G1, G2);
@@ -876,11 +876,11 @@ export class AppFrameRegistry {
     - `before install, a loopback subframe is refused` (G22);
     - `a second window gets the same handlers`: install for window A, close it, install for window B; an app frame in B is admitted and a genui frame in B is refused;
     - `with the flag on, select-bluetooth-device is answered with an empty choice`.
-- [ ] **Step 3:** Run. Expected: FAIL.
-- [ ] **Step 4: Implement** D9, D11's refusals, admission through the registry, and the Bluetooth handler.
-- [ ] **Step 5: Register** both test files (`core-git`). Run `npm run test:ci-policy`.
-- [ ] **Step 6:** Rerun, plus `npx tsx --test main/services/design-canvas/frame-navigation.test.ts` unedited. Expected: PASS.
-- [ ] **Step 7:** Commit `fix(main): subframe redirects never open the browser; admit and guard live app frames`.
+- [x] **Step 3:** Run. Expected: FAIL.
+- [x] **Step 4: Implement** D9, D11's refusals, admission through the registry, and the Bluetooth handler.
+- [x] **Step 5: Register** both test files (`core-git`). Run `npm run test:ci-policy`.
+- [x] **Step 6:** Rerun, plus `npx tsx --test main/services/design-canvas/frame-navigation.test.ts` unedited. Expected: PASS.
+- [x] **Step 7:** Commit `fix(main): subframe redirects never open the browser; admit and guard live app frames`.
 
 ### Task 7: Wiring the design subscribers, admission IPC, console and service workers
 
@@ -888,7 +888,7 @@ export class AppFrameRegistry {
 - Create: `main/services/design-canvas/app-frames/app-network-main.ts`, `app-network-main.test.ts`, `main/windows/main-window-console.ts`, `main-window-console.test.ts`, `main/services/design-canvas/app-frames/app-sw-origins.ts`, `app-sw-origins.test.ts`
 - Modify: `main/index.ts` (install `installAppNetwork` right after the claims, before the first window; replace the inline `console-message` listener at `:1945-1951` with `installMainWindowConsole` for every created window), `main/handlers/design-canvas.ts` and `design-canvas.test.ts` (`designCanvas:appFrameMount`), `renderer/preload-channels.ts`, `package.json`, `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Write failing tests** with the real dispatchers over fake targets, a real registry and a fake `DesignAppServers` (`isAppOrigin`, `appForOrigin`, `onOriginsChanged`, `forgetWorkspace`, `snapshot`):
+- [x] **Step 1: Write failing tests** with the real dispatchers over fake targets, a real registry and a fake `DesignAppServers` (`isAppOrigin`, `appForOrigin`, `onOriginsChanged`, `forgetWorkspace`, `snapshot`):
   - **flag off:** `installAppNetwork({enabled: false})` adds no subscriber, no deny layer, no download or chooser subscriber and no console counter; the fake targets record no setter call;
   - **flag on, requests:** a request from a registered app frame to `https://example.com/` is cancelled and its host reaches a `blocked` event for that frame's `{frameId, mountToken}`; a main-frame request is untouched (M1); a `frame: null` request with no initiator to a non-allowlisted host is cancelled and logs one `design-live frameless-cancel` with the host only, and a second within a minute logs nothing;
   - **flag on, headers:** an app-frame response from an app origin with `Set-Cookie: sid=1` comes back `SameSite=None; Secure`; the same response for a non-app frame is untouched; `X-Frame-Options` goes only for the app frame; `Report-To` goes for any app-context response; the `connect-src` CSP is added to an app-context document response;
@@ -909,25 +909,25 @@ export class AppFrameRegistry {
   - **`designCanvas:appFrameMount` (register and invoke):** flag off → `{error: "live-off"}`; a frame that isn't `kind: "app"` → `unavailable`; an app root not running in the chat's workspace → `app-not-running`; the same `appRoot` running in **another** workspace → `app-not-running` (resolved by `workspaceId`); running → `{origin}` and a waiting record the registry admits; a full registry → `too-many-frames`; a `url` or `origin` field in the payload is ignored;
   - **console (`main-window-console.test.ts`):** a `[aiden-live] microphone-ready` from the main frame is forwarded; the same text from a subframe isn't and doesn't use the budget; with the flag on, "Ignored call to 'alert()'. The document is sandboxed…" from an app-context frame sends one `dialog-suppressed`, a second within 5 s doesn't, and the same text from a non-app frame sends nothing;
   - **service workers (`app-sw-origins.test.ts`, temp dir and fake session):** `remember` keeps at most 64 origins and only origins; `clear` calls `clearStorageData({origin, storages: ["serviceworkers"]})` for each and empties the file; a corrupt file clears nothing and is reset; the design wiring calls `remember` on admission, `clear` for that workspace's origins on `forgetWorkspace`, and `clear` once at startup with the flag on **and** off (S1).
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement.** `designAppServers.onOriginsChanged` needs no action: the policy reads `isAppOrigin` on each request. The startup clear runs after ready and never blocks window creation. Add `"designCanvas:appFrame"` (send) and `"designCanvas:appFrameMount"` (invoke) to `renderer/preload-channels.ts` with their sites, so the IPC inventory test passes. When `AIDEN_E2E_DESIGN_LIVE_RECORD` is set and `app.isPackaged` is false, attach D6's recorder.
-- [ ] **Step 4: Register** the three new test files (`core-git`); append `main-window-console.test.ts` and `app-network-main.test.ts` to `test:gemini-live` too. Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Rerun, plus the IPC contract test, `npm run test:gemini-live`, `npx tsx --test main/handlers/design-canvas.test.ts` and `npx tsc --noEmit -p .`. Expected: PASS.
-- [ ] **Step 6:** Commit `feat(design): live app frames reach only loopback and get no permissions`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement.** `designAppServers.onOriginsChanged` needs no action: the policy reads `isAppOrigin` on each request. The startup clear runs after ready and never blocks window creation. Add `"designCanvas:appFrame"` (send) and `"designCanvas:appFrameMount"` (invoke) to `renderer/preload-channels.ts` with their sites, so the IPC inventory test passes. When `AIDEN_E2E_DESIGN_LIVE_RECORD` is set and `app.isPackaged` is false, attach D6's recorder.
+- [x] **Step 4: Register** the three new test files (`core-git`); append `main-window-console.test.ts` and `app-network-main.test.ts` to `test:gemini-live` too. Run `npm run test:ci-policy`.
+- [x] **Step 5:** Rerun, plus the IPC contract test, `npm run test:gemini-live`, `npx tsx --test main/handlers/design-canvas.test.ts` and `npx tsc --noEmit -p .`. Expected: PASS.
+- [x] **Step 6:** Commit `feat(design): live app frames reach only loopback and get no permissions`.
 
 ### Task 8: The CSP
 
 **Files:**
 - Modify: `main-window.html`, `scripts/verify-renderer-csp.mjs`, `scripts/renderer-csp.test.ts`
 
-- [ ] **Step 1: Write failing tests** in `renderer-csp.test.ts`:
+- [x] **Step 1: Write failing tests** in `renderer-csp.test.ts`:
   - the production build of a page with the new `frame-src` keeps its three loopback sources (they are not stripped like `script-src`'s);
   - `assertProductionRendererCsp` rejects a `main-window.html` whose `frame-src` adds `https:`, `http:`, `*` or `http://example.com`, and one missing `aiden-design:`;
   - another page with `frame-src https:` is rejected.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement** D11: the `frame-src` change and `assertFrameSrc`. Task 6's refusals are already in place, so the wider `frame-src` never admits a frame the guard doesn't.
-- [ ] **Step 4:** Rerun, plus `npm run build` (which runs `verify-renderer-csp.mjs` on the real build). Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): the main window may frame admitted loopback apps`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement** D11: the `frame-src` change and `assertFrameSrc`. Task 6's refusals are already in place, so the wider `frame-src` never admits a frame the guard doesn't.
+- [x] **Step 4:** Rerun, plus `npm run build` (which runs `verify-renderer-csp.mjs` on the real build). Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): the main window may frame admitted loopback apps`.
 
 ### Task 9: The v2 bridge source and its messages
 
@@ -935,8 +935,8 @@ export class AppFrameRegistry {
 - Create: `main/services/design-canvas/bridge-core-source.ts`, `main/services/design-canvas/app-frames/app-bridge-source.ts`, `app-bridge-source.test.ts`, `renderer/shared/design-canvas/app-bridge-messages.ts`, `app-bridge-messages.test.ts`
 - Modify: `main/services/design-canvas/bridge-source.ts` (built from the core), `package.json`, `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Move v1's core** into `bridge-core-source.ts` and rebuild `DESIGN_BRIDGE_SOURCE` from it. Run `npx tsx --test main/services/design-canvas/bridge-source.test.ts` **unedited**. Expected: PASS.
-- [ ] **Step 2: Write failing tests**, running the real v2 script in happy-dom with a stand-in parent (as v1's test does) and a fake importer:
+- [x] **Step 1: Move v1's core** into `bridge-core-source.ts` and rebuild `DESIGN_BRIDGE_SOURCE` from it. Run `npx tsx --test main/services/design-canvas/bridge-source.test.ts` **unedited**. Expected: PASS.
+- [x] **Step 2: Write failing tests**, running the real v2 script in happy-dom with a stand-in parent (as v1's test does) and a fake importer:
   - **once-guard (S11):** a second run with the same nonce installs nothing (one `ready`); a page that pre-set `window.__aidenAppBridge = "guess"` still gets the bridge; a new nonce installs again (a new document);
   - **the expression's value:** evaluating the injected expression gives `undefined`, even when the page replaced `Promise.prototype.then` first;
   - **answers only its parent:** a `pick-at` from another source gets no reply;
@@ -949,11 +949,11 @@ export class AppFrameRegistry {
   - **source-at:** answers through Task 2's walk;
   - **v1 core:** `pick-at` and `locate` answer as v1's (one case each, to prove the shared core is wired).
   - **`parseAppBridgeMessage`, as a table:** each type's valid shape, `escape` included; a wrong prefix, unknown type, non-string fields, an oversized path or message, 9 owners, a negative or fractional line, `at.path` of `/@fs/x` or `../x`, and a `source` with `path` but no `line` are dropped or trimmed as D12 says.
-- [ ] **Step 3:** Run. Expected: FAIL.
-- [ ] **Step 4: Implement** D12 and D13.
-- [ ] **Step 5: Register** `app-bridge-source.test.ts` (happy-dom, `renderer-other`, as v1's `bridge-source.test.ts`) and `app-bridge-messages.test.ts` (`core-git`). Run `npm run test:ci-policy`.
-- [ ] **Step 6:** Rerun, plus `npm run test:design-mode`. Expected: PASS.
-- [ ] **Step 7:** Commit `feat(design): the live app bridge, its once-guard and its message parser`.
+- [x] **Step 3:** Run. Expected: FAIL.
+- [x] **Step 4: Implement** D12 and D13.
+- [x] **Step 5: Register** `app-bridge-source.test.ts` (happy-dom, `renderer-other`, as v1's `bridge-source.test.ts`) and `app-bridge-messages.test.ts` (`core-git`). Run `npm run test:ci-policy`.
+- [x] **Step 6:** Rerun, plus `npm run test:design-mode`. Expected: PASS.
+- [x] **Step 7:** Commit `feat(design): the live app bridge, its once-guard and its message parser`.
 
 ### Task 10: Injection
 
@@ -961,7 +961,7 @@ export class AppFrameRegistry {
 - Create: `main/services/design-canvas/app-frames/app-bridge-main.ts`, `app-bridge-main.test.ts`
 - Modify: `main/index.ts` (install with every created main window, flag on only), `package.json`, `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Write failing tests** with a fake `webContents` emitter and fake `WebFrameMain`s that record `executeJavaScript(code, userGesture)` calls:
+- [x] **Step 1: Write failing tests** with a fake `webContents` emitter and fake `WebFrameMain`s that record `executeJavaScript(code, userGesture)` calls:
   - `a registered app frame gets the bridge on dom-ready, with a nonce, and userGesture false`;
   - `did-frame-finish-load in the same document reuses the nonce`, so the script runs with the same value (the once-guard does the rest);
   - `after did-frame-navigate the nonce is new`;
@@ -971,11 +971,11 @@ export class AppFrameRegistry {
   - `an executeJavaScript that rejects is swallowed`, and one that resolves to a thenable isn't awaited further;
   - `a recreated window gets injection too`;
   - `flag off installs no listener`.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Register** (`core-git`). Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Rerun. Expected: PASS.
-- [ ] **Step 6:** Commit `feat(design): inject the bridge into live app frames`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Register** (`core-git`). Run `npm run test:ci-policy`.
+- [x] **Step 5:** Rerun. Expected: PASS.
+- [x] **Step 6:** Commit `feat(design): inject the bridge into live app frames`.
 
 ### Task 11: The live app node
 
@@ -1016,7 +1016,7 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
 **Files:**
 - Modify: `main/services/design-canvas/canvas-tools.ts`, `canvas-tools.test.ts`, `main/services/llm-client.ts` (pass `designLive` and `apps`)
 
-- [ ] **Step 1: Write failing tests:**
+- [x] **Step 1: Write failing tests:**
   - **flag off:** the `canvas_place_frame` definition (name, description, parameters) is deep-equal to the one built with the deps today's tests use, and `kind: "app"` is refused with the existing kind error;
   - **flag on:** placing `{kind: "app", route: "/pricing"}` in a one-app workspace makes an app frame with `appRoot "."`, viewport 1280 × 800, scale 0.5 and the D15 box, on the turn's page; a second call reuses it; `duplicate: true` adds one;
   - an unknown `appRoot`, a bad route and a `width` of 100 are tool errors naming the rule;
@@ -1024,10 +1024,10 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
   - `canvas_read` lists the app frame with its route and `live`;
   - `canvas_inspect` and `canvas_duplicate` on it give their D17 errors; `canvas_update_frame {dark: true}`, `{paper: "a4"}` and `{printMode: …}` on it error and `{colorScheme: "dark"}` works; a resize changes `scale`, keeps the viewport and keeps the aspect ratio;
   - no `report` call (D19).
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement** D17.
-- [ ] **Step 4:** Rerun, plus `npm run test:design-mode` and `npx tsc --noEmit -p .`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): Aiden places live app frames`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement** D17.
+- [x] **Step 4:** Rerun, plus `npm run test:design-mode` and `npx tsc --noEmit -p .`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): Aiden places live app frames`.
 
 ### Task 13: Export on the default session
 
@@ -1035,7 +1035,7 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
 - Create: `main/services/design-canvas/app-frames/app-export.ts`
 - Modify: `main/handlers/design-canvas.ts` (route app frames in `designCanvas:export`; refuse them in `designCanvas:source`; widen `DesignCanvasExportResult`), `main/handlers/design-canvas.test.ts`
 
-- [ ] **Step 1: Write failing tests** in `design-canvas.test.ts`'s register-and-invoke suite, with a fake app renderer and a recording `saveFile`:
+- [x] **Step 1: Write failing tests** in `design-canvas.test.ts`'s register-and-invoke suite, with a fake app renderer and a recording `saveFile`:
   - an app frame with a running app asks the app renderer for `http://127.0.0.1:5173/pricing` at its viewport width and `colorScheme`, and writes its bytes;
   - the app root is resolved by the chat's `workspaceId` and `appRoot`: the same root running in another workspace gives `{error: "app-not-running"}`;
   - no running app: `{error: "app-not-running"}`, and **`saveFile` was never called**;
@@ -1044,10 +1044,10 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
   - `designCanvas:source` on an app frame: `{error: "unavailable"}`;
   - file and artifact frames still go to `renderDesignFrame` (existing cases unedited).
   - **`app-export.ts` decisions** (pure helpers, tested in the same file): the export window's options carry the default session, `sandbox: true`, `disableDialogs`, no preload; its zoom is 1 on each commit; the capture request asks for `deviceScaleFactor: 2` for PNG (or 1, per Task 2's recorded outcome); its web contents is registered as an export window for the render's life and unregistered on success, failure and timeout; the download subscriber cancels a download from it (E3).
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement** D18. The window itself is production-only, as `frame-render.ts` is; its decisions are in the helpers above, the registry, the policy (the `sandbox` CSP), the guard and the dispatchers, already tested, plus Task 14's E2E.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): download live app frames, drawn on the default session`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement** D18. The window itself is production-only, as `frame-render.ts` is; its decisions are in the helpers above, the registry, the policy (the `sandbox` CSP), the guard and the dispatchers, already tested, plus Task 14's E2E.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): download live app frames, drawn on the default session`.
 
 ### Task 14: E2E, observer oracles and screenshots
 
@@ -1099,8 +1099,8 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
 **Files:**
 - `README.md` (checked only), `PRODUCT.md`, `docs/design-mode.md`, `docs/plans/README.md`, `docs/superpowers/specs/2026-11-23-design-mode-live-app-design.md`, `.memory/design-mode.md`, this plan
 
-- [ ] **Step 1: Check registration.** Every new test file was registered in its task (Tasks 2, 3, 4, 5, 6, 7, 9, 10 and 11). Run `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 2: `docs/design-mode.md`.** Rewrite line 31 ("showing the app on the canvas comes with the next phases") to say live frames show the app on the canvas and link the new section. Add a "Live frames" section:
+- [x] **Step 1: Check registration.** Every new test file was registered in its task (Tasks 2, 3, 4, 5, 6, 7, 9, 10 and 11). Run `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 2: `docs/design-mode.md`.** Rewrite line 31 ("showing the app on the canvas comes with the next phases") to say live frames show the app on the canvas and link the new section. Add a "Live frames" section:
   - placing a route (Aiden places them in 3a; Add ▸ Page from app comes later), entering (double-click or ↩) and leaving (Esc or a click on the canvas), and the overlays for each phase;
   - **localhost only:** what passes (the app's own server and other loopback servers, not Aiden's own ports), what is blocked, the "N blocked" label and its popover, Open in browser;
   - no dialogs, popups, downloads or top navigation; device and other permissions are denied; frames can't take keyboard focus until entered;
@@ -1113,11 +1113,11 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
   - what isn't covered: WebTransport (HTTP/3 over QUIC, from pages, workers and service workers), WebRTC TURN over TCP, the dev server's own server-side requests (S5), and whatever Task 2 recorded for preconnect and DNS (S71) and joint history (H2);
   - **loopback is broad:** other local services, including a separately run `aiden serve`, are reachable as they would be from the person's browser;
   - **dev only:** in `npm run dev` the renderer (`http://127.0.0.1:4143`) and an app on `127.0.0.1` are the same site, so they may share a renderer process, and a runaway app can freeze Aiden's window. Packaged builds load the renderer from `file://`.
-- [ ] **Step 3: PRODUCT.md.** Line 69 describes the flagged 2b behaviour and says workspace pages are "served only to the canvas in a sandbox with no network". Add a clause after the flagged dev-server sentence: with the same flag, the canvas shows the running app live in frames that reach only localhost (not Aiden's own ports), with no dialogs, popups, downloads or device permissions, a blocked label listing refused hosts, and PNG or PDF download. Keep the sandbox sentence true for workspace pages.
-- [ ] **Step 4: Spec.** Add "### Phase 3a amendments (2026-11-24)" with S57–S77 (below), and update the status line at the top to name this plan.
-- [ ] **Step 5: Plan index.** Extend the design mode v2 row in `docs/plans/README.md` with "Phase 3a (live app frames) planned 2026-11-24, stacked on 2c, plan [p3a](../superpowers/plans/2026-11-24-design-mode-v2-p3a-live-frames.md)". When the PR opens, change it to "Phase 3a (live app frames) built, in review as #NNN".
-- [ ] **Step 6: Memory.** Add a "v2 Phase 3a: live frames" section to `.memory/design-mode.md`: the files; the two dispatchers and their one-owner rule (AST rule plus runtime setter guard); admission by placement record; the frame registry and the never-evict rule; D3's rules, the cancel cache and the frameless allowlist (and the renderer initiator Task 5 recorded); Aiden's own ports and the drift rule; the permission layer, session events and Live's owner slot; S1; WebTransport and the response headers; the bridge nonce, importer and `escape`; inert; the React 19 outcome; the cookie outcome; Task 2's probe outcomes; the test files and lanes. Update the v2 summary line.
-- [ ] **Step 7: Stale claims.** Run `rg -n "frame-src|allow-modals|webRequest|will-redirect|will-download|localhost only|blocked|live frame|next phases" README.md PRODUCT.md docs .memory packages/cli/README.md` and fix what 3a made wrong. Expected: README unchanged (flagged, Phase 7 adds the line); `docs/keyboard.md` unchanged (no new shortcut; Esc and ↩ already documented for frames, checked); onboarding unchanged (Phase 7); `host-platform-capabilities.ts` unchanged.
+- [x] **Step 3: PRODUCT.md.** Line 69 describes the flagged 2b behaviour and says workspace pages are "served only to the canvas in a sandbox with no network". Add a clause after the flagged dev-server sentence: with the same flag, the canvas shows the running app live in frames that reach only localhost (not Aiden's own ports), with no dialogs, popups, downloads or device permissions, a blocked label listing refused hosts, and PNG or PDF download. Keep the sandbox sentence true for workspace pages.
+- [x] **Step 4: Spec.** Add "### Phase 3a amendments (2026-11-24)" with S57–S77 (below), and update the status line at the top to name this plan.
+- [x] **Step 5: Plan index.** Extend the design mode v2 row in `docs/plans/README.md` with "Phase 3a (live app frames) planned 2026-11-24, stacked on 2c, plan [p3a](../superpowers/plans/2026-11-24-design-mode-v2-p3a-live-frames.md)". When the PR opens, change it to "Phase 3a (live app frames) built, in review as #NNN".
+- [x] **Step 6: Memory.** Add a "v2 Phase 3a: live frames" section to `.memory/design-mode.md`: the files; the two dispatchers and their one-owner rule (AST rule plus runtime setter guard); admission by placement record; the frame registry and the never-evict rule; D3's rules, the cancel cache and the frameless allowlist (and the renderer initiator Task 5 recorded); Aiden's own ports and the drift rule; the permission layer, session events and Live's owner slot; S1; WebTransport and the response headers; the bridge nonce, importer and `escape`; inert; the React 19 outcome; the cookie outcome; Task 2's probe outcomes; the test files and lanes. Update the v2 summary line.
+- [x] **Step 7: Stale claims.** Run `rg -n "frame-src|allow-modals|webRequest|will-redirect|will-download|localhost only|blocked|live frame|next phases" README.md PRODUCT.md docs .memory packages/cli/README.md` and fix what 3a made wrong. Expected: README unchanged (flagged, Phase 7 adds the line); `docs/keyboard.md` unchanged (no new shortcut; Esc and ↩ already documented for frames, checked); onboarding unchanged (Phase 7); `host-platform-capabilities.ts` unchanged.
 - [ ] **Step 8:** Tick this plan's boxes, add "As built" notes (Task 2's probe report, Task 5's audit, the cookie and React outcomes), and commit `docs(design): Phase 3a docs, spec amendments and memory`.
 
 ## Spec amendments S57–S77 (Task 15 writes these)
@@ -1331,6 +1331,17 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
     - The renderer toast text for the two new errors is added now ("Start the app to download this frame." and "Live apps are off."), not in Task 11, so the widened result type never reaches an unmapped error.
     - The default session keeps zoom per host. In development the app's host (`localhost`) can also be the main window's, so zoom 1 is set on every commit and the render is held inside `designFrameZoomGate` (the same gate `frame-render.ts` uses).
     - The E3 download cancel for export windows was already covered by `app-network-main.test.ts` and is unchanged.
+
+14. **Task 14 and 15 as far as Task 11 allows (2026-11-27).**
+    - The `AIDEN_E2E_DESIGN_LIVE_ALL=1` switch lives in `tests/e2e/fixtures.ts`, where the launch environment is built, not in `design-mode-helpers.ts`. A test's own environment is spread after it, so a test can still set the flag itself.
+    - `AppNode`'s static card now says "Not live on the canvas yet" with the flag on and "Live apps are off" only with it off. Task 12 lets Aiden place app frames with the flag on, so the old sentence would have been false. `AppFrameBody` is split out, and `app-node.test.tsx` starts with those two cases; Task 11 extends it.
+    - `tests/e2e/design-live-frames.spec.ts`, its observers and the screenshots wait for Task 11: without the live node there is no app iframe to drive. The flag-off and flag-on v1 runs and the flag-on chat-send smoke run ran (see Build status).
+    - The docs describe what is built: app frames that Aiden places, the static card, and Download. The "Live frames" docs section from Task 15 Step 2 (entering, overlays, blocked label, cookies, the dev-only process note) lands with Task 11.
+    - `docs/pi-gui-artifacts.md` gave the main window's `frame-src` from before design mode; it was corrected.
+
+### Build status (2026-11-27)
+
+Built: Tasks 0–10, 12 and 13, plus Task 14's flag-on switch and v1 runs, and Task 15's docs, spec amendments and memory for what is built. **Blocked:** Task 11, by probe 8 (S75), escalated to the owner. Task 14's live-frame spec and screenshots wait for Task 11. **Open:** Task 5's frameless audit. The allowlist is empty, and it is checked against real traffic once live frames can load.
 
 ### Task 2 probe outcomes (Linux Space, Electron 43.8.4)
 
