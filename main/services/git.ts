@@ -3471,10 +3471,20 @@ export class GitService {
           );
         }
 
-        await fs.writeFile(transaction.messagePath, `${message}\n`, {
-          encoding: "utf8",
-          mode: 0o600,
-        });
+        const writeMessage = (text: string) =>
+          fs.writeFile(transaction.messagePath, `${text}\n`, {
+            encoding: "utf8",
+            mode: 0o600,
+          });
+        const readBoundedMessage = async (invalidMessage: string) => {
+          const text = (await fs.readFile(transaction.messagePath, "utf8")).trim();
+          if (!text || text.includes("\u0000") || text.length > 10_000) {
+            throw new GitServiceError("invalid_input", invalidMessage);
+          }
+          return text;
+        };
+
+        await writeMessage(message);
         await this.runHook(repo, "pre-commit", [], transaction.tempIndexPath, signal);
         await this.runHook(
           repo,
@@ -3483,17 +3493,10 @@ export class GitService {
           transaction.tempIndexPath,
           signal,
         );
-        let finalMessage = (await fs.readFile(transaction.messagePath, "utf8")).trim();
-        if (!finalMessage || finalMessage.includes("\u0000") || finalMessage.length > 10_000) {
-          throw new GitServiceError(
-            "invalid_input",
-            "The prepared commit message must be between 1 and 10,000 characters.",
-          );
-        }
-        await fs.writeFile(transaction.messagePath, `${finalMessage}\n`, {
-          encoding: "utf8",
-          mode: 0o600,
-        });
+        let finalMessage = await readBoundedMessage(
+          "The prepared commit message must be between 1 and 10,000 characters.",
+        );
+        await writeMessage(finalMessage);
         await this.runHook(
           repo,
           "commit-msg",
@@ -3501,17 +3504,10 @@ export class GitService {
           transaction.tempIndexPath,
           signal,
         );
-        finalMessage = (await fs.readFile(transaction.messagePath, "utf8")).trim();
-        if (!finalMessage || finalMessage.includes("\u0000") || finalMessage.length > 10_000) {
-          throw new GitServiceError(
-            "invalid_input",
-            "The commit-message hook produced an invalid commit message.",
-          );
-        }
-        await fs.writeFile(transaction.messagePath, `${finalMessage}\n`, {
-          encoding: "utf8",
-          mode: 0o600,
-        });
+        finalMessage = await readBoundedMessage(
+          "The commit-message hook produced an invalid commit message.",
+        );
+        await writeMessage(finalMessage);
         subject = finalMessage.split(/\r?\n/, 1)[0];
 
         const hookTree = (
