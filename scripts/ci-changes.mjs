@@ -379,8 +379,6 @@ export function buildDiffArgs({ eventName, baseSha, headSha }) {
   return ["diff", "--name-only", "--no-renames", "-z", `${baseSha}${separator}${headSha}`];
 }
 
-export const buildDiffArguments = buildDiffArgs;
-
 function envValue(environment, optionValue, ...names) {
   if (optionValue !== undefined) {
     return optionValue;
@@ -522,8 +520,6 @@ export function detectChangedAreas(options = {}) {
     manifestChangeIsHostOnly(spawn, baseSha, headSha, cwd);
   return { ...analyzeChangedPaths(paths, { eventName, forceFull, hostOnlyManifest }), changedPaths: paths };
 }
-
-export const runChangedAreaDetection = detectChangedAreas;
 
 function outputLines(result) {
   const summary =
