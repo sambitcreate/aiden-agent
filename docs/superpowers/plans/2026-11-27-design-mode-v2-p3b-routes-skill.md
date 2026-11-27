@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Revision 3 (2026-11-27).** This revision applies review-p3b-plan-2, which confirmed revision 2's 14 fixes and raised 2 Majors and 4 Minors. All six were verified and accepted:
+> - the analytics task now sits right after Task 4, as Task 5, with old Tasks 5–8 renumbered 6–9;
+> - `entry.fallbackRoute`, the `DesignChatView` placement view and the `:561` guard are added;
+> - the skills type is fixed, and `withDesignModeSection` takes `designMdOn || liveAppsOn`;
+> - the analytics test is split into two cases;
+> - the convention-folder rules are made consistent, with `ENOENT` skipped.
+
 > **Revision 2 (2026-11-27).** This revision applies review-p3b-plan, which found 2 Blockers, 9 Majors and 3 Minors. All 14 were checked against `20e263fe1` and accepted. Each is mapped to its decision, task and test in "Applied review decisions" at the end.
 
 **Goal:** Aiden and the person can put any page of the workspace's real web app on the canvas by route, and Aiden designs in the app itself: a route file it writes lands on the chat's page as a live app frame, and the prompt and the `aiden-design` skill teach the live-app workflow. All of this is behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE`.
@@ -135,7 +142,11 @@ All are **proposed**. They become spec amendments S78–S88 in Task 15. Each fol
 - **`app-routes.ts` (disk).** A walker that follows **no** links, matching `app-detect.ts`, `canvas-config.ts` and `app-fingerprint.ts` (review B2):
   - **The root is confined before any read.**
     - `realWorkspace = realpath(workspaceRoot)`.
-    - Every segment of `appRoot`, and each fixed convention folder on the way down (`src`, `app`, `pages`, `routes`), is `lstat`ed. A symlink or a non-directory ends discovery with `null`.
+    - Every segment of `appRoot` (its parents included) is `lstat`ed. A symlink or a non-directory there ends discovery with `null`, and so does an app root whose realpath is outside the workspace.
+    - Each fixed convention folder on the way down (`src`, `app`, `pages`, `routes`) is `lstat`ed too, and is handled on its own (m2-4):
+      - a missing one (`ENOENT`) is skipped, because a Next app may have `app/` and no `pages/`;
+      - a symlink or a non-directory is also **skipped**, so that convention gives no routes, and the others are still read.
+      - Only the app root's own path gives `null`.
     - `realpath(<workspace>/<appRoot>)` must be inside `realWorkspace` (`isPathInside`).
   - **Inside the walk.** Every `Dirent` that `isSymbolicLink()` is skipped, whether a file or a folder. Nothing is read through a link, even one that points back inside the root.
   - **The two parsed files** (`src/routeTree.gen.ts`, `app/routes.ts`) are read with `readBounded` at their real path. Its `O_NOFOLLOW | O_NONBLOCK` turns a symlinked file into `null`, which means fallback.
@@ -268,7 +279,7 @@ This is a seventh, read-only action. The spec says Aiden "prefers `.aiden/canvas
   - Entry takes the **newest 12 across both kinds**, keeping their order, then splits them: design/ pages go through today's `entryPlacement`, and route files are placed as app frames on the page it chose.
   - Route frames don't change that page choice, which stays 1b's rule.
   - App routes are deduplicated against **the target page only**, plus `removedAppRoutes`, never other pages or other chats' pages.
-  - With no writes of either kind, entry places that app's `/` only when:
+  - With no writes of either kind, `entry.ts` can't know which page `entryPlacement` will pick, or whether that page is empty. It passes `entry.fallbackRoute: {appRoot, route: "/"}` (only for a `single` target), and `placeWrittenPagesOnCanvas` decides inside its `store.update` (M2-2). It places that app's `/` only when:
     - the target page is empty after v1 placement;
     - the snapshot's target is `single`;
     - `/` isn't in `removedAppRoutes`.
@@ -282,7 +293,7 @@ S18's order stands for **every** placement 3b adds: the tool, written routes, en
 - The person's Add takes the page on screen, sent with the call and checked by main (S87).
 - §6.5's "where Aiden's work lands" is rewritten to say exactly this.
   - The spec's draft text ("the chat's own page unless the person is looking at another") is the same rule seen from the person's side.
-  - Nothing new is built for it. Task 15 updates the spec text and the prompt line, and Task 7's tests pin the order for route placements.
+  - Nothing new is built for it. Task 15 updates the spec text and the prompt line, and Task 8's tests pin the order for route placements.
 - **Rationale.** 3a and 1b already put every frame on the page the turn's view names. A second rule for app frames would put two frames from one turn on two pages.
 
 ### S85 — The remaining tool changes (proposed; revised for M1, M2, M7, m3)
@@ -333,6 +344,7 @@ S18's order stands for **every** placement 3b adds: the tool, written routes, en
     - `(true, false)` is today's flag-on string (section + `DESIGN_MD_PROMPT_BULLET`), strictly equal. This covers Windows, an excluded `design_app`, and `turn-wiring.test.ts`.
     - `(designMd, true)` is `LIVE_DESIGN_MODE_PROMPT_SECTION`, plus `DESIGN_MD_PROMPT_BULLET` **verbatim** when `designMd` is true.
   - llm-client's two call sites (`:3212`, `:3377`) pass both values.
+  - `:3377` also passes `withDesignModeSection(…, {live: designMdOn || liveAppsOn})`. Today that is `{live: designMdOn}`, which would keep a stored v1 section on a turn with `design_app` but no `design_system` (m2-2).
 - **Replacing a stored live prompt.**
   - `withDesignModeSection` (`design-md/turn.ts:184`) today replaces a stored copy only if it contains `DESIGN_MD_PROMPT_BULLET`.
   - It also replaces one that contains the exported `LIVE_APP_PROMPT_MARKER` (the live section's first bullet). A chat that flips to a turn without `design_app` therefore drops the live text.
@@ -458,7 +470,8 @@ export function mergeRouteList(input: {
 export const ROUTE_LIMITS: { depth: 10; entries: 2000; routes: 500; fileBytes: 262_144; listed: 200 };
 
 // main/services/design-canvas/app-server/app-routes.ts (new, disk; strict no-follow, B2)
-/** null: the app root or a convention folder is a link, not a folder, or outside the workspace's realpath. */
+/** null: the app root or one of its parent segments is a link or not a folder, or its realpath is outside the workspace.
+ *  A convention folder (src, app, pages, routes) that is missing (ENOENT), a link or not a folder is skipped, giving no routes from that convention. */
 export function discoverRoutes(workspaceRoot: string, appRoot: string, framework: FrameworkId | undefined,
   options?: { signal?: AbortSignal }): Promise<{ patterns: string[]; truncated: boolean } | null>;
 /** For placement: the pattern a written file maps to, or null. Pure over the path (routeFromFile); no disk read. */
@@ -494,14 +507,21 @@ type SaveOptions = { undone?: string[] /* isDesignRelativePath, as today */; und
 // written-pages.ts (modified)
 export type WrittenAppRoute = { appRoot: string; route: string };
 export function placeWrittenAppRoutes(doc: DesignCanvas, routes: readonly WrittenAppRoute[], newId: () => string,
-  view: { pageId: string }, options: { skipRemoved: boolean; room: number /* left of the turn's 12 */ }): { doc: DesignCanvas; frameIds: string[]; widths: number[] };
-// placeWrittenPagesOnCanvas: input gains routes?: WrittenAppRoute[]; its result gains
+  view: DesignChatView /* as placeWrittenPageFrames takes it (written-pages.ts:274), so frames land beside what is in view */,
+  options: { skipRemoved: boolean; room: number /* left of the turn's 12 */ }): { doc: DesignCanvas; frameIds: string[]; widths: number[] };
+// placeWrittenPagesOnCanvas: input gains
+//   routes?: WrittenAppRoute[]
+//   entry.fallbackRoute?: WrittenAppRoute   // entry's "/" (M2-2): placed inside store.update, after entryPlacement and
+//                                           // placeWrittenPageFrames, only if framesOnPage(doc, view.pageId) is empty and
+//                                           // the key isn't in removedAppRoutes
+// its early return (written-pages.ts:561, `showable.length === 0 && !rules`) also requires (input.routes?.length ?? 0) === 0
+// its result gains
 //   added: number[]   // viewport widths of app frames kept after commit and the post-write shouldSave (M3)
 // pagesWrittenInChat(messages, options?: { isRouteFile?(path: string): boolean }) — left out: today's list exactly
 
 // skill.ts (modified)
 export function aidenDesignSkill(live: boolean): typeof AIDEN_DESIGN_SKILL;
-export function designCanvasSkills(flags: { designMode: boolean; designLive: boolean }): readonly Skill[];
+export function designCanvasSkills(flags: { designMode: boolean; designLive: boolean }): readonly SkillRegistryCandidate[];   // skill-registry-core.ts:11, what listBuiltin takes
 
 // canvas-tools.ts (modified, M5)
 export const LIVE_DESIGN_MODE_PROMPT_SECTION: string;
@@ -520,12 +540,12 @@ export type DesignCanvasPlaceAppRouteResult =
 
 ## Global Constraints
 
-- **Flag off is today.** Tasks 4, 5, 6, 7, 8, 10 and 12 each include a flag-off case: the tool definitions and `design_app`'s action list deep-equal the ones built with today's dependencies; the prompt and skill strictly equal today's; no route classifier runs; the IPC answers `unavailable`; the menu has no new item; and no event is sent.
+- **Flag off is today.** Tasks 4, 6, 7, 8, 9, 10 and 12 each include a flag-off case: the tool definitions and `design_app`'s action list deep-equal the ones built with today's dependencies; the prompt and skill strictly equal today's; no route classifier runs; the IPC answers `unavailable`; the menu has no new item; and no event is sent.
 - **Never run the person's code to learn routes** (S78). No `import()`, no `require`, no `typescript`, no child process. Reads are bounded, no-follow, and confined to the app root.
 - **Route strings are untrusted.** They come from file names and the person's config. They are validated by `isAppRoute`/`isRoutePattern`, shown as text nodes only, and given to the model as JSON values only. No security decision reads a route: the origin still comes from main's server record (3a D2).
 - **Main decides URLs and boxes** for the person's Add (S87). The renderer sends an app root and a route string, and main checks both.
 - **No new network.** Discovery reads disk. Nothing contacts a framework registry or the dev server for routes.
-- **Analytics** (AGENTS.md Product analytics): only S88's two properties, through `main/services/analytics/`. The registry entry, the docs row and a test land in Task 9. No renderer-side analytics.
+- **Analytics** (AGENTS.md Product analytics): only S88's two properties, through `main/services/analytics/`. The registry entry, the docs row and a test land in Task 5. No renderer-side analytics.
 - **UI rules** (AGENTS.md, `GUI.md`, `docs/design-guide.md`). Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-specimen.html` before Task 12. Then:
   - shared squircle `Button`s and Radix overlays from `ui.tsx`;
   - semantic tokens only;
@@ -550,11 +570,11 @@ export type DesignCanvasPlaceAppRouteResult =
 
 ## Review Focus
 
-1. **A route folder full of non-pages.** Next `app/` holds `layout.tsx`, `loading.tsx`, `error.tsx`, `route.ts` handlers, `_components/` and `@modal/`; TanStack holds `__root.tsx` and `-utils.ts`. A person expects only real pages listed, and editing `layout.tsx` to place nothing. *Pinned by* Task 1's non-page rows and Task 7's "edit layout places nothing".
+1. **A route folder full of non-pages.** Next `app/` holds `layout.tsx`, `loading.tsx`, `error.tsx`, `route.ts` handlers, `_components/` and `@modal/`; TanStack holds `__root.tsx` and `-utils.ts`. A person expects only real pages listed, and editing `layout.tsx` to place nothing. *Pinned by* Task 1's non-page rows and Task 8's "edit layout places nothing".
 2. **A huge or hostile tree.** A monorepo app root with 50 000 files must answer quickly and partly (`truncated`). A symlinked app root, parent or convention folder, a symlink loop, or a symlinked `routes.ts` must never be followed, and nothing outside the root may be read. *Pinned by* Task 2's caps and its spy-recorded confinement cases (B2).
-3. **The same route twice.** Aiden edits `pricing/page.tsx` ten times in a turn, or the person already placed `/pricing`. One frame, focused, never a second. *Pinned by* Task 7's dedupe cases and Task 11's `already`.
-4. **A route the person removed.** They delete the `/pricing` frame, and Aiden edits `pricing/page.tsx` again. It must not come back by itself, but Aiden's explicit `canvas_place_frame` may. *Pinned by* Task 6's store cases and Task 7's skip case.
-5. **Two chats, one workspace.** Chat A's route writes land on A's page, never on B's, even when B's canvas is on screen. *Pinned by* Task 7's two-chat case and Task 13's E2E.
+3. **The same route twice.** Aiden edits `pricing/page.tsx` ten times in a turn, or the person already placed `/pricing`. One frame, focused, never a second. *Pinned by* Task 8's dedupe cases and Task 11's `already`.
+4. **A route the person removed.** They delete the `/pricing` frame, and Aiden edits `pricing/page.tsx` again. It must not come back by itself, but Aiden's explicit `canvas_place_frame` may. *Pinned by* Task 7's store cases and Task 8's skip case.
+5. **Two chats, one workspace.** Chat A's route writes land on A's page, never on B's, even when B's canvas is on screen. *Pinned by* Task 8's two-chat case and Task 13's E2E.
 
 ---
 
@@ -685,7 +705,9 @@ export type DesignCanvasPlaceAppRouteResult =
     - `apps/web` is a symlink to a folder outside the workspace: `null`.
     - `apps/web` is a symlink to a folder **inside** the workspace: `null`, because links aren't followed.
     - `apps` (a parent segment) is a symlink: `null`.
-    - `src/routes` is a symlink (outside or inside): no routes from it.
+    - `src/routes` is a symlink (outside or inside): no routes from it, and the result isn't `null`.
+    - A Next app with `app/` and no `pages/` or `src/` (`ENOENT`) lists `app/`'s routes.
+    - A Next app whose `pages` is a regular file still lists `app/`'s routes.
     - `src/routeTree.gen.ts` is a symlink to a real tree file inside the root: not used, so the walk proceeds as if it were missing.
     - `app/routes.ts` is a symlink: `null` from the read, so fallback.
     - A file `src/routes/about.tsx` that is a symlink: not listed.
@@ -756,7 +778,26 @@ export type DesignCanvasPlaceAppRouteResult =
 - [ ] **Step 4:** Rerun. Expected: PASS.
 - [ ] **Step 5:** Commit `feat(design): design_app lists an app's routes`.
 
-### Task 5: The device table, and `canvas_place_frame`'s `device`, `variantOf` and `label`
+### Task 5: `design_app_frame_added`
+
+**Files:**
+- Modify: `main/services/analytics/analytics-events.ts`, `analytics-feature-reports.test.ts`, `docs/analytics.md`
+
+The four call sites are wired in Tasks 6, 8, 9 and 11. This task adds the event they report, and comes first because `reportAnalyticsEvent` is typed on the registry's names (`main/services/analytics/analytics-report.ts:26`), so those tasks need the entry to compile.
+
+- [ ] **Step 1: Write the failing tests** in `analytics-feature-reports.test.ts`, following its pattern (`captureAnalyticsEvents(t)`, `reportAnalyticsEvent`, `await analyticsSettled()`, `deepEqual`):
+  - `{source: "person", device_bucket: "phone"}` is sent as given;
+  - `{source: "bot", device_bucket: "phone"}` and `{source: "person", device_bucket: "watch"}`, reported separately, each record `{event: "design_app_frame_added", props: undefined}`. A required property out of its list drops the whole payload in `pickValidProps` (`analytics-events.ts:216-234`), as `design_app_started`'s test shows (`analytics-feature-reports.test.ts:296-310`);
+  - an extra `route: "/x"` prop is dropped.
+- [ ] **Step 2:** Run. Expected: FAIL.
+- [ ] **Step 3: Implement.**
+  - Add the registry entry after `design_app_started`, with a comment naming 3b.
+  - Add the docs row in `docs/analytics.md`'s design section: "`design_app_frame_added` · a live app frame was placed (by the person's Add, or by Aiden) · `source`, `device_bucket` · never the route, app or framework".
+  - Settings' "What's sent" sheet renders from the registry, so it needs no change.
+- [ ] **Step 4:** Rerun, plus `npm run test:analytics`. Expected: PASS.
+- [ ] **Step 5:** Commit `feat(analytics): design_app_frame_added`.
+
+### Task 6: The device table, and `canvas_place_frame`'s `device`, `variantOf` and `label`
 
 **Files:**
 - Create: `renderer/shared/design-canvas/app-devices.ts`, `app-devices.test.ts`
@@ -766,7 +807,7 @@ export type DesignCanvasPlaceAppRouteResult =
 - Modify: `main/services/llm-client.ts` (wire `onAppFrameAdded` to S88's call site 1)
 
 **Interfaces:**
-- Consumes: the `design_app_frame_added` registry entry (Task 9, built before this task).
+- Consumes: the `design_app_frame_added` registry entry (Task 5).
 - Produces: `APP_DEVICES`, `isAppDevice` and `deviceBucket`; `canvas_place_frame`'s `device`, `variantOf` and `label`; `DesignCanvasToolDeps.onAppFrameAdded`.
 
 - [ ] **Step 1: Write the failing tests:**
@@ -796,7 +837,7 @@ export type DesignCanvasPlaceAppRouteResult =
 - [ ] **Step 4:** Rerun, plus `npx tsc --noEmit -p .`. Expected: PASS.
 - [ ] **Step 5:** Register `app-devices.test.ts` (`core-git`) and commit `feat(design): device sizes, variants and labels for app frames`.
 
-### Task 6: Retargeting and resizing app frames, blocked counts, and removed routes with their undo
+### Task 7: Retargeting and resizing app frames, blocked counts, and removed routes with their undo
 
 **Files:**
 - Modify: `canvas-tools.ts`, `canvas-tools.test.ts`
@@ -840,13 +881,13 @@ export type DesignCanvasPlaceAppRouteResult =
 - [ ] **Step 4:** Rerun, plus `npm run test:design-mode`. Expected: PASS.
 - [ ] **Step 5:** Commit `feat(design): retarget and resize app frames, report blocked counts, remember removed routes`.
 
-### Task 7: Route-aware placement of written files
+### Task 8: Route-aware placement of written files
 
 **Files:**
 - Modify: `main/services/design-canvas/written-pages.ts`, `written-pages.test.ts`; `main/services/llm-client.ts:3226-3312`, `:6346-6348`, `:6828-6830`
 
 **Interfaces:**
-- Consumes: `routeForWrittenFile` (Task 2), `designAppServers.snapshot` and `readCanvasConfig`, `removedAppRoutes` (Task 6), and `deviceBucket` (Task 5).
+- Consumes: `routeForWrittenFile` (Task 2), `designAppServers.snapshot` and `readCanvasConfig`, `removedAppRoutes` (Task 7), and `deviceBucket` (Task 6).
 - Produces: `WrittenAppRoute` and `placeWrittenAppRoutes`. `placeWrittenPagesOnCanvas` gains `routes?` and `added`; `pagesWrittenInChat` gains `{isRouteFile?}`.
 
 - [ ] **Step 1: Write the failing tests** (`written-pages.test.ts`, with a store, fake pages and a fake broadcast, as today):
@@ -868,11 +909,13 @@ export type DesignCanvasPlaceAppRouteResult =
 - [ ] **Step 3: Implement** S83 in llm-client.
   - The post-write hook awaits the turn's single `{snapshot, config}` promise, builds `writtenAppRoute(path)`, and notes route files in `recentWrittenPages`.
   - It calls `placeWrittenPagesOnCanvas({…, paths: [], routes: [route]})` with the room left under the turn's cap, and skips the inspector for routes.
+  - That call has no paths, so the early return at `written-pages.ts:561` (`showable.length === 0 && !rules`) must also require `(input.routes?.length ?? 0) === 0`. Otherwise a route-only call returns `{frameIds: []}` before placing; Task 8's first test case catches this.
+  - `placeWrittenAppRoutes` gets the turn's `DesignChatView` (`renderer/shared/design-canvas/view.ts:13`), so `placeFrame` puts the frame beside what is in view, as v1 pages land.
   - It reports `added` (S88 call site 2).
 - [ ] **Step 4:** Rerun, plus `npm run test:design-mode`. Expected: PASS.
 - [ ] **Step 5:** Commit `feat(design): a route file Aiden writes lands as a live frame`.
 
-### Task 8: Entry placement
+### Task 9: Entry placement
 
 **Files:**
 - Modify: `main/services/design-canvas/entry.ts`. Its tests live in `written-pages.test.ts`, where `createDesignEntry` is tested today.
@@ -891,30 +934,12 @@ export type DesignCanvasPlaceAppRouteResult =
   - **Forgetting** (M4.4): after `recentWrittenPages.forget(chatId)` (the existing `releaseChatContext`/`invalidateChatWorkspaceContext` path), entry places no route files from this run, only from history.
   - **flag off:** entry places exactly today's frames. The existing tests stay unedited.
 - [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement** S83's entry rule in `createDesignEntry`.
+- [ ] **Step 3: Implement** S83's entry rule.
+  - `createDesignEntry` passes the timeline's route files as `routes`, plus `entry.fallbackRoute` when it wrote nothing and the target is `single`.
+  - `placeWrittenPagesOnCanvas` evaluates the fallback inside `store.update`, after `entryPlacement` and the v1 placement, against `framesOnPage(doc, view.pageId)` and `removedAppRoutes`.
+  - Add a test row: a target page holding only a note gets no `/`.
 - [ ] **Step 4:** Rerun. Expected: PASS.
 - [ ] **Step 5:** Commit `feat(design): entering design mode shows the chat's routes, or the app's home`.
-
-### Task 9: `design_app_frame_added`
-
-**Files:**
-- Modify: `main/services/analytics/analytics-events.ts`, `analytics-feature-reports.test.ts`, `docs/analytics.md`
-
-The four call sites are wired in Tasks 5, 7, 8 and 11. This task adds the event they report.
-
-- [ ] **Step 1: Write the failing tests** in `analytics-feature-reports.test.ts`, following its pattern (`captureAnalyticsEvents(t)`, `reportAnalyticsEvent`, `await analyticsSettled()`, `deepEqual`):
-  - `{source: "person", device_bucket: "phone"}` is sent as given;
-  - `{source: "bot", device_bucket: "watch"}` sends the event with both props `undefined`;
-  - an extra `route: "/x"` prop is dropped.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-  - Add the registry entry after `design_app_started`, with a comment naming 3b.
-  - Add the docs row in `docs/analytics.md`'s design section: "`design_app_frame_added` · a live app frame was placed (by the person's Add, or by Aiden) · `source`, `device_bucket` · never the route, app or framework".
-  - Settings' "What's sent" sheet renders from the registry, so it needs no change.
-- [ ] **Step 4:** Rerun, plus `npm run test:analytics`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(analytics): design_app_frame_added`.
-
-**Build order:** do this task right after Task 4. It depends on nothing, and `reportAnalyticsEvent` is typed on the registry's names (`main/services/analytics/analytics-report.ts:26`), so Tasks 5, 7, 8 and 11 need its entry to compile.
 
 ### Task 10: The live prompt and skill
 
@@ -922,7 +947,7 @@ The four call sites are wired in Tasks 5, 7, 8 and 11. This task adds the event 
 - Modify: `main/services/design-canvas/canvas-tools.ts:233-260`, `main/services/design-canvas/skill.ts`, `skill.test.ts`
 - Modify: `main/services/skill-registry-main.ts:21-23` (calls `designCanvasSkills`)
 - Modify: `main/services/design-canvas/design-md/turn.ts:184-186`, `design-md/turn.test.ts`
-- Modify: `main/services/llm-client.ts:3212`, `:3377` (pass `designMdOn` and `liveAppsOn`, the `design_app` condition at `:3154`)
+- Modify: `main/services/llm-client.ts:3212`, `:3377` (pass `designMdOn` and `liveAppsOn`, the `design_app` condition at `:3154`; `withDesignModeSection`'s option becomes `{live: designMdOn || liveAppsOn}`)
 
 - [ ] **Step 1: Write the failing tests.**
   - **`skill.test.ts`:**
@@ -1064,7 +1089,7 @@ The four call sites are wired in Tasks 5, 7, 8 and 11. This task adds the event 
   - "Where Aiden's work lands";
   - written routes landing by themselves, and removed routes staying removed.
 - Modify: `PRODUCT.md:71`: one sentence on pages by route behind the experimental flag.
-- Modify: `docs/analytics.md` (Task 9 adds the row; recheck it).
+- Modify: `docs/analytics.md` (Task 5 adds the row; recheck it).
 - Modify: `docs/plans/README.md:70`: 3b built, with the PR link once opened.
 - Modify: the spec:
   - the status line;
@@ -1120,7 +1145,7 @@ Then run `npm run test` once before the PR. CI must be green on the exact head. 
 | 2 | **Parsing `routes.ts`** misreads a clever config. | An O(n) tokenizer that understands comments and strings, with a depth-16 reader of literal calls only. Anything else returns `null`, which means fallback. A wrong list is visible in the picker and fixed by canvas.json. No code runs, and there are no regular expressions over file text (M8.4). |
 | 3 | **A written file named by a config the flat rule disagrees with** (React Router with a custom `routes.ts` mapping `pages/x.tsx` to `/y`). | `routeForWrittenFile` uses the flat rule only, so it may place nothing for such a file, which is safe. The list from `design_app routes` is still right, and the skill says to place the route with the tool when nothing lands. |
 | 4 | **Placement races detection.** The turn's snapshot is taken once, so an app made this turn isn't seen until the next turn. | Accepted (S83). The tool can place the frame. |
-| 5 | **Too many frames.** A turn that scaffolds 30 routes would place 30 live frames, while only six can be live (3a). | A turn counter (`appFramesPlacedThisTurn`) caps written-route placement at 12 new app frames, the same as entry (`EARLIER_PAGES_LIMIT`). Later route files place nothing, and Aiden can place them with the tool (Task 7's 13-file case). Frames past the six-live limit show snapshots, as 3a built. |
+| 5 | **Too many frames.** A turn that scaffolds 30 routes would place 30 live frames, while only six can be live (3a). | A turn counter (`appFramesPlacedThisTurn`) caps written-route placement at 12 new app frames, the same as entry (`EARLIER_PAGES_LIMIT`). Later route files place nothing, and Aiden can place them with the tool (Task 8's 13-file case). Frames past the six-live limit show snapshots, as 3a built. |
 | 6 | **`removedAppRoutes` grows without bound.** | Capped at 200, newest kept, as `removedPagePaths` is. |
 | 7 | **Route strings as prompt injection.** A file named `ignore-all.tsx` becomes `/ignore-all`. | Routes reach the model only as JSON string values in tool results, and `isAppRoute` bounds length and characters. That matches how the model already sees workspace file names. |
 | 8 | **Big monorepo walks** slow the picker. | Caps of 2 000 entries and depth 10, a 5 s cache of the walk only, and `truncated` shown as "N more". The walk runs on main's event loop with `readdir` batches, never a sync walk. Placement never walks (S83). |
@@ -1145,16 +1170,16 @@ All 14 findings were checked against `20e263fe1` and accepted. One part of M5.3 
 
 | Finding | Verified at | Applied in |
 |---|---|---|
-| **B1** The `undone` save option rejects app route keys | `main/handlers/design-canvas.ts:248-265` (`isDesignRelativePath` on every entry); `use-design-canvas.ts:365`, `:384`, `:450` use `shownPagePaths` only | S83 "The person's undo": a separate `undoneRoutes` with `isAppRouteKey`, and `shownAppRoutes`. Task 6 handler and hook tests; Task 13 case A's ⌘Z-then-save oracle; risk 13 |
+| **B1** The `undone` save option rejects app route keys | `main/handlers/design-canvas.ts:248-265` (`isDesignRelativePath` on every entry); `use-design-canvas.ts:365`, `:384`, `:450` use `shownPagePaths` only | S83 "The person's undo": a separate `undoneRoutes` with `isAppRouteKey`, and `shownAppRoutes`. Task 7 handler and hook tests; Task 13 case A's ⌘Z-then-save oracle; risk 13 |
 | **B2** Symlink reading contradicts `O_NOFOLLOW`, and the root isn't confined | `app-detect.ts:56` opens with `O_NOFOLLOW \| O_NONBLOCK` | S78 is now strictly no-follow, with the root and convention folders confined by `lstat` and realpath. Task 2's spy-recorded confinement cases; risk 12 |
-| **M1** The viewport range and the kept-width scale overflow | `app-frame.ts:50-58` (200–4 000, scale 0.05–2); `fitAppScale` only shrinks (`:117-128`) | S85: `isAppViewportSide`, keep the current scale and refit, refuse box plus viewport in one call. Task 6's 1440@1 → phone oracle |
-| **M2** `label` and `variantOf` aren't shown, `variantOf` is underspecified, and AppNode keeps stale state | `canvas-summary.ts:369-377`; `app-node.tsx:475-482`, `:718-740`; `placement.ts:18` (`DESIGN_FRAME_GAP = 64`); `fitGroupToMembers` at `canvas-tools.ts:2664-2677` | S85: summary fields, the label in AppNode's header, `variantOf` by id only at a 64 gap, the container rules, locked and full refusals, and AppNode resetting on a route change. Tasks 5 and 6 |
-| **M3** Two of the three `aiden` call sites aren't wired, and retracted placements are reported | `llm-client.ts:3268-3298`; `chat-application-service-main.ts:61`; `written-pages.ts:625-630` | S88's four call sites, each after commit; `added` filled only after the post-write `shouldSave()`. Tasks 5, 7, 8 and 11; Task 9's build order |
-| **M4.1** `params` isn't in the snapshot, and the snapshot races | `renderer/shared/design-app.ts:121-130` | S83: one in-flight `{snapshot, config}` promise per turn, and no walk. Task 7's counting case |
-| **M4.2** `limit` can't cap across calls | `llm-client.ts:3275` calls once per file | S83: `appFramesPlacedThisTurn`. Task 7's 13-file case |
-| **M4.3** Route files reach the inspector | `llm-client.ts:3293-3294` | S83 "Not inspected". Task 7 case |
-| **M4.4** Remembered routes leak across delete and move | `chat-application-service-main.ts:80`, `:87` | S83: the same `recentWrittenPages` instance, so the existing `forget` calls cover it. Task 8 case. This is simpler than the reviewer's second store and has the same effect |
-| **M4.5** The entry order is ambiguous, and `/` is deduped across the canvas | `written-pages.ts:425-470` (`entryPlacement` looks for file frames canvas-wide) | S83 "Entry": one timeline, the newest 12 across both kinds, routes deduped on the target page only. Task 8's hand-named 12 and its two-chat `/` case |
+| **M1** The viewport range and the kept-width scale overflow | `app-frame.ts:50-58` (200–4 000, scale 0.05–2); `fitAppScale` only shrinks (`:117-128`) | S85: `isAppViewportSide`, keep the current scale and refit, refuse box plus viewport in one call. Task 7's 1440@1 → phone oracle |
+| **M2** `label` and `variantOf` aren't shown, `variantOf` is underspecified, and AppNode keeps stale state | `canvas-summary.ts:369-377`; `app-node.tsx:475-482`, `:718-740`; `placement.ts:18` (`DESIGN_FRAME_GAP = 64`); `fitGroupToMembers` at `canvas-tools.ts:2664-2677` | S85: summary fields, the label in AppNode's header, `variantOf` by id only at a 64 gap, the container rules, locked and full refusals, and AppNode resetting on a route change. Tasks 6 and 7 |
+| **M3** Two of the three `aiden` call sites aren't wired, and retracted placements are reported | `llm-client.ts:3268-3298`; `chat-application-service-main.ts:61`; `written-pages.ts:625-630` | S88's four call sites, each after commit; `added` filled only after the post-write `shouldSave()`. Tasks 6, 8, 9 and 11, with the event registered first in Task 5 |
+| **M4.1** `params` isn't in the snapshot, and the snapshot races | `renderer/shared/design-app.ts:121-130` | S83: one in-flight `{snapshot, config}` promise per turn, and no walk. Task 8's counting case |
+| **M4.2** `limit` can't cap across calls | `llm-client.ts:3275` calls once per file | S83: `appFramesPlacedThisTurn`. Task 8's 13-file case |
+| **M4.3** Route files reach the inspector | `llm-client.ts:3293-3294` | S83 "Not inspected". Task 8 case |
+| **M4.4** Remembered routes leak across delete and move | `chat-application-service-main.ts:80`, `:87` | S83: the same `recentWrittenPages` instance, so the existing `forget` calls cover it. Task 9 case. This is simpler than the reviewer's second store and has the same effect |
+| **M4.5** The entry order is ambiguous, and `/` is deduped across the canvas | `written-pages.ts:425-470` (`entryPlacement` looks for file frames canvas-wide) | S83 "Entry": one timeline, the newest 12 across both kinds, routes deduped on the target page only. Task 9's hand-named 12 and its two-chat `/` case |
 | **M5.1** The live prompt names `design_app` on turns without it | `llm-client.ts:3154` vs `:3212`, `:3377` | S86: `designModePromptSection(designMd, liveApps)`. Task 10 cases |
 | **M5.2** `withDesignModeSection` misses the live text | `design-md/turn.ts:184` | S86: `LIVE_APP_PROMPT_MARKER`, with the DM bullet kept verbatim. Task 10's `turn.test.ts` case |
 | **M5.3** The registry test doesn't reach `skill-registry-main.ts` | `skill-registry.test.ts:68-80` builds its own registry | S86: a pure `designCanvasSkills` **in `skill.ts`**, not `skill-registry-main.ts`, because that module builds the singleton registry when imported. Tested in `skill.test.ts` |
@@ -1162,7 +1187,7 @@ All 14 findings were checked against `20e263fe1` and accepted. One part of M5.3 
 | **M6.2** There is no `full` error | `design-canvas.ts:479`, `:510` (`placeArtifact` has one) | S87, and Tasks 11 and 12 |
 | **M6.3** The view and save debounces race | `use-design-view.ts` (250 ms), `use-design-canvas.ts:50` (800 ms) | S87: `await flush()` first, and `pageId` sent and checked. Task 12's call-order case; Task 11's fallback case |
 | **M6.4** The item is disabled for attached apps | `app-server-main.ts:1574` (target `none` without detection) | S87's enable rule. Task 12 case |
-| **M7** `blockedForFrame` counts dead mounts | `app-frame-registry.ts:84-95` (prune only at the cap) | S85: live members only. Task 6's `liveIds` cases |
+| **M7** `blockedForFrame` counts dead mounts | `app-frame-registry.ts:84-95` (prune only at the cap) | S85: live members only. Task 7's `liveIds` cases |
 | **M8.1** `fillRoute` lets `.` and `..` through | `encodeURIComponent("..") === ".."` | S81's segment rules and `isParamValue`. Task 1 and Task 3 rows |
 | **M8.2** Multi-parameter patterns can't be filled | — | S81: `params` fills single-parameter patterns only; the picker has per-parameter fields. Task 1, 3 and 12 rows |
 | **M8.3** A single file can't see its siblings | — | S80: `routeFromFile` versus `routesFromFiles`. Task 1 rows |
@@ -1171,8 +1196,14 @@ All 14 findings were checked against `20e263fe1` and accepted. One part of M5.3 
 | **M9.2** The flag-off case sits under `LIVE_ON` | `design-live-frames.spec.ts:62` (`live.use`) | Task 13 case G in its own `describe` |
 | **M9.3** The spec map has no lanes | `scripts/ci-e2e-spec-map.json` `"specs"` maps names to prefixes | Task 13's exact prefixes |
 | **m1** Cache staleness, the issues claim, `framework` and the `root` check | `canvas-config.ts:71-87` (silent); `app-tool.ts:224` | S81 "Freshness", silent drops, `AppRouteList.framework?`, `routes` exempt from the root check. Tasks 3 and 4 |
-| **m2** `retractPlacedFrames` isn't undo | `written-pages.ts:625-630` | S83 "Retraction" separated from "The person's undo". Task 7's retraction case |
-| **m3** Reuse behaviour and the required `title` | `canvas-tools.ts:1160-1172`, `:1310` | S85: `title` stays required; `device` and `label` merge on reuse. Task 5 cases |
+| **m2** `retractPlacedFrames` isn't undo | `written-pages.ts:625-630` | S83 "Retraction" separated from "The person's undo". Task 8's retraction case |
+| **M2-1** (review 2) The analytics task came after the tasks that report it | `analytics-report.ts:26`: `reportAnalyticsEvent` is typed on registry names | It is moved to Task 5, right after Task 4, with old Tasks 5–8 renumbered 6–9 and every cross-reference updated |
+| **M2-2** (review 2) Missing `fallbackRoute`, viewport and early-return details | `written-pages.ts:274` (takes `DesignChatView`), `:561` (early return); `entry.ts:39-55` runs before `store.update` | Interfaces: `entry.fallbackRoute`, `view: DesignChatView`, and the guard condition. S83 "Entry", plus Task 8 Step 3 and Task 9 Step 3 with its note-only-page case |
+| **m2-1** (review 2) The skills return type | `skill-registry-core.ts:11` `SkillRegistryCandidate` | Interfaces |
+| **m2-2** (review 2) The `withDesignModeSection` live flag | `llm-client.ts:3377` passes `{live: designMdOn}` | S86, Task 10 |
+| **m2-3** (review 2) The analytics test's wording | `pickValidProps` returns `undefined` for the whole payload (`analytics-events.ts:216-234`) | Task 5: two separate cases, each asserting `props: undefined` |
+| **m2-4** (review 2) Convention-folder consistency | — | S78, Interfaces and Task 2 now agree: the root path gives `null`; a convention folder that is missing, a link or not a folder is skipped. Task 2 adds the `ENOENT` and file-as-folder cases |
+| **m3** Reuse behaviour and the required `title` | `canvas-tools.ts:1160-1172`, `:1310` | S85: `title` stays required; `device` and `label` merge on reuse. Task 6 cases |
 
 ## As built
 
