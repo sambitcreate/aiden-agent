@@ -4,7 +4,7 @@
 // workspace page's.
 
 // Installs happy-dom and the fake IPC bridge; must stay the first import.
-import { installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
+import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
@@ -254,4 +254,24 @@ test("an app frame entered while presenting is left when the presentation steps 
   assert.ok(pane, "the canvas pane");
   fireEvent.click(pane);
   await waitFor(() => assert.equal(appIframe()?.hasAttribute("inert"), true), WAIT);
+});
+
+test("when the app restarts under an entered frame, the frame is left without taking focus from where the person is typing", async () => {
+  setup({ ...emptyDesignCanvas(), revision: 1, frames: [appFrame] });
+  await mount();
+  const first = await liveAppIframe();
+  fireEvent.doubleClick(screen.getByRole("group", { name: "Pricing app" }));
+  await waitFor(() => assert.equal(appIframe()!.hasAttribute("inert"), false), WAIT);
+  const composer = document.createElement("textarea");
+  document.body.append(composer);
+  try {
+    composer.focus();
+    const moved = { ...running, apps: running.apps.map((app) => ({ ...app, origin: "http://127.0.0.1:5174", port: 5174, revision: 9 })) };
+    act(() => emitBotTestNotification("designApp:status", moved));
+    await waitFor(() => assert.equal(appIframe() !== null && appIframe() !== first, true), WAIT);
+    await waitFor(() => assert.equal(appIframe()!.hasAttribute("inert"), true), WAIT);
+    assert.equal(document.activeElement === composer, true, "the composer keeps focus");
+  } finally {
+    composer.remove();
+  }
 });

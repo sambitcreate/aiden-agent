@@ -28,6 +28,7 @@ import {
   type DesignNode,
   type PlaceFrameInput,
 } from "./canvas-adapter-core";
+import { APP_FRAME_ID_ATTRIBUTE } from "./app-frame-focus-guard";
 import { readDesignArtifactTheme } from "./artifact-theme";
 import { resolveDesignCanvasKey } from "./canvas-keymap-core";
 import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
@@ -1197,9 +1198,15 @@ function LoadedDesignCanvas({
       autoFocusId,
       enter: setEntered,
       leave: (id) => {
+        // Only when focus was in that frame (its page's Esc, or the page went while
+        // focused) does the next key go to the canvas; focus elsewhere stays put.
+        const active = document.activeElement;
+        const wasInFrame =
+          active === null ||
+          active === document.body ||
+          (active.tagName === "IFRAME" && active.getAttribute(APP_FRAME_ID_ATTRIBUTE) === id);
         setEntered((current) => (current === id ? null : current));
-        // The page's Esc left the frame; the next key is the canvas's.
-        wrapper.current?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
+        if (wasInFrame) wrapper.current?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
       },
       openInBrowser: (url) => {
         void browserApi.command(workspaceId, { action: "open_link", url }).catch(() => {
