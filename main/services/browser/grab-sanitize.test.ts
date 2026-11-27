@@ -120,6 +120,16 @@ test("inspectFrameworkElement detects Vue 3, Svelte, Astro, and Preact elements"
   assert.equal(vue?.componentName, "PricingCard");
   assert.equal(vue?.source?.fileName, "src/PricingCard.vue");
 
+  // A minified inner component with a file under a named parent without one still points at a source.
+  const minifiedVue = inspectFrameworkElement({
+    __vueParentComponent: {
+      type: { name: "a", __file: "src/components/Badge.vue" },
+      parent: { type: { name: "PricingPage" }, parent: null },
+    },
+  } as unknown as Element);
+  assert.equal(minifiedVue?.componentName, "PricingPage");
+  assert.equal(minifiedVue?.source?.fileName, "src/components/Badge.vue");
+
   const svelteEl = {
     __svelte_meta: { loc: { file: "src/routes/Nav.svelte", line: 9, char: 4 } },
     parentElement: null,

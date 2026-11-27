@@ -46,8 +46,10 @@ function frameworkResult(
 }
 
 function inspectVue(element: unknown): FrameworkInspectionResult | null {
+  // The named component's file, else the innermost frame's (a minified inner
+  // component often still carries `__file` when its named parent does not).
   const vueResult = (frames: RawGrabComponentFrame[]) =>
-    frameworkResult("vue", frames, (frames.find((frame) => !frame.minified) ?? frames[0])?.source);
+    frameworkResult("vue", frames, frames.find((frame) => !frame.minified)?.source ?? frames[0]?.source);
 
   // Vue 3: __vueParentComponent or __vnode.component
   let comp: unknown =
