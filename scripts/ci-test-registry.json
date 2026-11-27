@@ -480,7 +480,8 @@
         "main/windows/main-window-navigation.test.ts",
         "main/services/design-canvas/app-frames/app-network-main.test.ts",
         "main/windows/main-window-console.test.ts",
-        "main/services/design-canvas/app-frames/app-sw-origins.test.ts"
+        "main/services/design-canvas/app-frames/app-sw-origins.test.ts",
+        "renderer/shared/design-canvas/app-bridge-messages.test.ts"
       ],
       "preserved": [
         "browser"
@@ -1305,6 +1306,7 @@
         "renderer/shared/design-canvas/tweaks.test.ts",
         "renderer/shared/design-canvas/text-edit.test.ts",
         "main/services/design-canvas/bridge-source.test.ts",
+        "main/services/design-canvas/app-frames/app-bridge-source.test.ts",
         "renderer/design/comment-geometry.test.ts",
         "renderer/design/design-mode-consent.test.tsx",
         "renderer/design/design-app-consent.test.tsx",

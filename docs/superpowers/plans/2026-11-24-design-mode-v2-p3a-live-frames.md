@@ -1306,6 +1306,13 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
 8. **Allowlisted listeners.** `loopback-listen-registered` allowlists `rfb-fake-server.ts`, `mcp-oauth-test-server.ts`, `openrouter-recording-test-support.ts` and `peer-pairing-test-host.ts` (test-only), `app-server/app-ports.ts` (2b's free-port probe) and `gemini-live/display-capture-acceptance.ts` (its own launch mode). `devices/ssh-device-script.ts`' `listen` is inside a script string, so the AST rule never sees it and it needs no entry; `local-device-host.ts`' `reservePort` probe passes because the module registers the hub port (Task 5).
 9. **`frame-src` without `[::1]`.** Probe 6 showed Chromium rejects `http://[::1]:*` as an invalid `frame-src` source and ignores it, so Task 8 adds only `http://localhost:*` and `http://127.0.0.1:*`, and the release check accepts exactly those two. `[::1]` app origins get the S74 refusal sentence instead (Task 8, Task 11).
 10. **`assertFrameSrc`, fail-closed.** The release check reads a page's effective frame sources (`frame-src`, else `child-src`, else `default-src`), and every page may list only `'self'`, `'none'`, `aiden-*:` schemes and `http://localhost` or `http://127.0.0.1` sources. This is stricter than D11's "no `http:`, `https:`, `*` or non-loopback host": `data:`, `blob:` and `https://*.example.com` are rejected too. `main-window.html`'s `frame-src`, when declared, must be exactly the five sources in any order. A main window with no `frame-src` is accepted, because `default-src` then decides and it is narrower; that also keeps the existing `renderer-csp.test.ts` cases unedited (Task 8).
+11. **Bridge messages, fail-closed (Task 9).**
+   - `postToAppPage(target, origin, command)` takes the frame's app origin and posts to it rather than to `"*"`. If the iframe has navigated to another origin, nothing is delivered. It refuses an origin that isn't a loopback `http:` app origin.
+   - `parseAppBridgeMessage(data, origin)` takes the message event's origin and drops anything that isn't a loopback `http:` origin with a port.
+   - A `source` line without a path is dropped, and a bad path drops both. A path without a line is kept, because the walk legitimately gives one when the source map can't be read.
+   - A bad `error.at` is dropped, and the error itself is kept.
+   - `route` paths must start with `/`.
+   - The shared core is a script fragment: the embedding bridge declares `host`, `doc`, `PREFIX` and `send`, then calls `handleCore(type, data)`.
 
 ### Task 2 probe outcomes (Linux Space, Electron 43.8.4)
 
