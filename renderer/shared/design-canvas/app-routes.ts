@@ -43,12 +43,15 @@ function segmentParam(segment: string): RouteParam | null | undefined {
   return PARAM_NAME.test(inner) ? { name: inner, catchAll, optional } : null;
 }
 
+/** `.` or `..`, also spelled `%2e` in either case: the URL parser resolves each spelling the same way. */
+const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/iu;
+
 function patternSegments(value: string): string[] | null {
   if (typeof value !== "string" || !value.startsWith("/") || value.includes("?") || value.includes("#")) return null;
   if (value === "/") return [];
   const segments = value.slice(1).split("/");
   for (const segment of segments) {
-    if (segment === "" || segment === "." || segment === "..") return null;
+    if (segment === "" || DOT_SEGMENT.test(segment)) return null;
   }
   return segments;
 }
@@ -75,14 +78,14 @@ export function isRoutePattern(value: string): boolean {
 
 /**
  * A route an app frame can show: a valid app route with no unfilled bracket,
- * and no `.`, `..` or empty segment in its path (the browser would resolve
- * those to another route's URL). A trailing `/` is the page's own.
+ * and no `.`, `..` (or `%2e` spellings) or empty segment in its path (the
+ * browser would resolve those to another route's URL). A trailing `/` is the page's own.
  */
 export function isConcreteRoute(value: string): boolean {
   if (!isAppRoute(value) || value.includes("[") || value.includes("]")) return false;
   const query = value.search(/[?#]/u);
   const segments = (query < 0 ? value : value.slice(0, query)).slice(1).split("/");
-  return segments.every((segment, index) => (segment === "" ? index === segments.length - 1 : segment !== "." && segment !== ".."));
+  return segments.every((segment, index) => (segment === "" ? index === segments.length - 1 : !DOT_SEGMENT.test(segment)));
 }
 
 /** The parameters of a pattern, in order; `[]` for a concrete route or a non-pattern. */
