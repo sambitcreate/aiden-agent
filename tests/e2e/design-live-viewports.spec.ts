@@ -142,8 +142,11 @@ live.describe("with live apps on", () => {
     await expect(device).toHaveAccessibleName("Viewport, iPad, 768 by 1024");
     await expect(device).toBeFocused();
 
+    // Each key waits for the menu to hold focus, or it lands on the button.
     await page.keyboard.press("Enter");
+    await expect(page.getByRole("menuitemradio", { name: /iPhone/u })).toBeFocused();
     await page.keyboard.press("End");
+    await expect(page.getByRole("menuitem", { name: "Custom…" })).toBeFocused();
     await page.keyboard.press("Enter");
     const custom = page.getByRole("dialog", { name: "Custom viewport" });
     await expect(custom.getByRole("textbox", { name: "Width" })).toBeFocused();
