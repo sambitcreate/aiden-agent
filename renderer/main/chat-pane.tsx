@@ -404,6 +404,23 @@ const NO_VISUAL_DRAFTS: VisualDrafts = new Map();
 // AGENTS.md size notices are shown once per chat until the file changes.
 const agentsInstructionNotices = createAgentsInstructionNoticeLog();
 
+const defaultGoogleThinkingLevels = () => googleThinkingLevelsForModel({ reasoning: true });
+
+function useDeclaredThinkingLevels<T extends string>(
+  allLevels: readonly T[],
+  declared: readonly string[] | undefined,
+  fallback?: () => T[],
+  ensureLevel?: T,
+): T[] {
+  return React.useMemo(() => {
+    if (!declared?.length) return fallback ? fallback() : [];
+    const supported = allLevels.filter((level) => declared.includes(level));
+    return ensureLevel !== undefined && !supported.includes(ensureLevel)
+      ? [ensureLevel, ...supported]
+      : supported;
+  }, [allLevels, declared, fallback, ensureLevel]);
+}
+
 export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -821,12 +838,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     Boolean(model) &&
     modelInfo.data?.[model]?.reasoning === true;
   const thinkingMetadata = model ? selectedProvider?.modelMetadata?.[model] : undefined;
-  const googleThinkingLevels = React.useMemo<GoogleThinkingLevel[]>(() => {
-    const declared = thinkingMetadata?.thinkingLevels;
-    if (!declared?.length) return googleThinkingLevelsForModel({ reasoning: true });
-    const supported = GOOGLE_THINKING_LEVELS.filter((level) => declared.includes(level));
-    return supported.includes("off") ? supported : ["off", ...supported];
-  }, [thinkingMetadata?.thinkingLevels]);
+  const googleThinkingLevels = useDeclaredThinkingLevels(
+    GOOGLE_THINKING_LEVELS,
+    thinkingMetadata?.thinkingLevels,
+    defaultGoogleThinkingLevels,
+    "off",
+  );
   const storedGoogleThinkingLevel = model
     ? settings.data?.googleThinkingByModel?.[model]
     : undefined;
@@ -834,11 +851,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     googleThinkingLevels,
     storedGoogleThinkingLevel,
   );
-  const codexThinkingLevels = React.useMemo<CodexThinkingLevel[]>(() => {
-    const declared = thinkingMetadata?.thinkingLevels;
-    if (!declared?.length) return [];
-    return CODEX_THINKING_LEVELS.filter((level) => declared.includes(level));
-  }, [thinkingMetadata?.thinkingLevels]);
+  const codexThinkingLevels = useDeclaredThinkingLevels(
+    CODEX_THINKING_LEVELS,
+    thinkingMetadata?.thinkingLevels,
+  );
   const codexThinkingSupported =
     providerId === OPENAI_CODEX_PROVIDER_ID &&
     Boolean(model) &&
@@ -849,11 +865,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     codexThinkingLevels,
     storedCodexThinkingLevel,
   );
-  const anthropicThinkingLevels = React.useMemo<AnthropicThinkingLevel[]>(() => {
-    const declared = thinkingMetadata?.thinkingLevels;
-    if (!declared?.length) return [];
-    return ANTHROPIC_THINKING_LEVELS.filter((level) => declared.includes(level));
-  }, [thinkingMetadata?.thinkingLevels]);
+  const anthropicThinkingLevels = useDeclaredThinkingLevels(
+    ANTHROPIC_THINKING_LEVELS,
+    thinkingMetadata?.thinkingLevels,
+  );
   const anthropicThinkingSupported =
     providerId === ANTHROPIC_PROVIDER_ID &&
     Boolean(model) &&
