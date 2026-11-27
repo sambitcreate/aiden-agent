@@ -15,6 +15,7 @@ import {
   DeviceHostError,
   DeviceHostUnavailableError,
   DeviceToolsMissingError,
+  runCapturedChild,
   type AgentDeviceEndpoint,
   type DeviceCommandOptions,
   type DeviceCommandResult,
@@ -760,8 +761,6 @@ export function defaultLocalDeviceHostDeps(
   };
 }
 
-const OUTPUT_LIMIT = 4 * 1024 * 1024;
-
 /** Commands still running, so quit can end them when its deadline arrives before their own timeouts. */
 const runningCommands = new Set<ReturnType<typeof nodeSpawn>>();
 /** Set once quit's Devices deadline has passed: no helper command starts after that. */
@@ -797,37 +796,15 @@ export function runChildCommand(
   if (commandsCancelledForQuit) {
     return Promise.resolve({ stdout: "", stderr: "Aiden is quitting, so the device helper command did not start.", code: 124 });
   }
-  return new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const finish = (code: number) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      runningCommands.delete(child);
-      resolve({ stdout, stderr, code });
-    };
-    const child = nodeSpawn(command, [...args], {
-      env: options.env,
-      stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-    });
-    runningCommands.add(child);
-    const timer = setTimeout(() => child.kill("SIGTERM"), options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS);
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => {
-      stdout = (stdout + chunk).slice(-OUTPUT_LIMIT);
-    });
-    child.stderr?.on("data", (chunk: string) => {
-      stderr = (stderr + chunk).slice(-OUTPUT_LIMIT);
-    });
-    child.once("error", (error) => {
-      stderr = error.message;
-      finish(127);
-    });
-    child.once("close", (code, signal) => finish(code ?? (signal ? 124 : 1)));
-    if (options.stdin !== undefined) child.stdin?.end(options.stdin);
+  const child = nodeSpawn(command, [...args], {
+    env: options.env,
+    stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+  });
+  runningCommands.add(child);
+  return runCapturedChild(child, {
+    timeoutMs: options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
+    stdin: options.stdin,
+    onSettle: () => runningCommands.delete(child),
   });
 }
 
