@@ -1245,13 +1245,14 @@ test("3c: a Trash that lands after the person moved on leaves their focus where 
   await openMore();
   fireEvent.click(screen.getByRole("menuitem", { name: "Move page file to Trash…" }));
   fireEvent.click(await screen.findByRole("button", { name: "Move to Trash" }));
-  await waitFor(() => assert.equal(document.activeElement, region), SAVE_WAIT);
+  // Booleans, so a miss doesn't diff two DOM trees on every mutation.
+  await waitFor(() => assert.ok(document.activeElement === region, "the canvas has focus"), SAVE_WAIT);
   // While main trashes the file, the person starts writing a message.
   act(() => message.focus());
   await act(async () => answer({ trashed: "src/routes/pricing.tsx", route: "/pricing", removed: ["app-1"], revision: 3 }));
   await nextTask();
   await nextTask();
-  assert.equal(document.activeElement, message);
+  assert.ok(document.activeElement === message, "focus stays in the message");
 });
 
 test("3c: the Trash toast's Undo waits for the canvas to show the Trash, then undoes that step; focus is on the canvas", async () => {

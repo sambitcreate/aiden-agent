@@ -10,7 +10,6 @@ import { EmptyState, toast } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { noteDesignCanvasView } from "../lib/design-mode";
-import { returnFocus } from "../lib/focus-return";
 import { browserApi, designCanvasApi } from "../lib/ipc";
 import { addPage, deletePage, duplicatePage, movePage, renamePage } from "../shared/design-canvas/pages";
 import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
@@ -484,7 +483,8 @@ function LoadedDesignCanvas({
         const lost = !active || active === document.body || !active.isConnected || host?.contains(active) === true;
         if (!lost) return;
       }
-      returnFocus([host?.querySelector<HTMLElement>(".studio-canvas")], { preventScroll: true, region: null });
+      // A plain focus, not `returnFocus`: the modal confirmation that just closed may still hide the canvas (aria-hidden) this frame.
+      host?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
     });
   }, []);
   const pageActions = useAppPageActions({ chatId, doc, latestDoc, flush, undo, queueOnFrame: comments.queueOnFrame, focusCanvas });

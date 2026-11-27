@@ -1098,3 +1098,18 @@ Built 2026-11-27 on `t3/design-mode-v2-p3c`, merged up from `origin/t3/design-mo
 - `npm run cli:build` builds `dist/app`; `packages/cli` `npm test`: 376 passed, 0 failed.
 - E2E in the Space: `design-live-viewports.spec.ts` 4/4, with no retries on the final run; `design-live-frames.spec.ts` and `design-live-routes.spec.ts` pass with it (12 passed, and the viewports C case flaked once on a key pressed before the menu held focus, fixed in the spec); `design-canvas.spec.ts`, `design-mode.spec.ts` and `design-containment.spec.ts` 16/16.
 - Open: an app frame's last picture can show a menu or popover that covered it when the picture was taken (seen dimmed under "This frame can't show the app." before the save-before-mount fix). The picture is a capture of the main window, from 3a.
+
+**Code review round 1** (2026-11-27, two reviewers on `9e1bd10ed`; `origin/t3/design-mode-v2-p3b` at `7b9ffe0a1` merged first). All 13 findings were real and fixed, each with a test that failed before its fix:
+- The ledger's records carry the canvas revision of the save that set their state (the action's commit, then each undo or redo followed). Only a newer save acts on a record. `apply` re-reads the list after every action, and `locked` drops a record replaced while it waited, so a reconcile queued from before an action can't put a trashed file back or drop or trash a new copy.
+- The page copy re-checks `stillFraming` and `writableWorkspace` (same real path) inside the file's lock, as the Trash does.
+- Add view at width on a page copy shows the copy's own route and scale, in the root's set.
+- In create mode, `confinedTarget` answers `exists` for a new page's folder taken by a file or, on a case-insensitive volume, by a folder in another case (native `realpath` names it `Pricing-v2`), so the copy moves on to the next number.
+- `parseReactRouterConfig` marks `flatRoutes()` beside or inside other calls `mixed`, which `routeFiles` treats as a config router. Discovery still walks the flat files for display.
+- A TanStack copy whose rewrite passes `DESIGN_SOURCE_MAX_BYTES` is refused as `too-large`.
+- The Trash refits its frames' groups.
+- `gestureEdit` (in `canvas-adapter-core.ts`) starts a drag's undo step on its first change that alters the canvas, so an edge drag whose first move rounds to the same viewport is still one step. It is tested through the real reducer, since happy-dom can't lay out xyflow's resizer.
+- `--shadow-popover` and `--shadow-control` are `@theme inline` names that Tailwind never emits as variables, so the readout and the resize handles (the latter already on main) now use `--elevation-popover` and `--elevation-control`.
+- The Trash toast offers Undo only at exactly the Trash's revision, and the Undo undoes only while the canvas is still the one it was shown with; otherwise it says to press ⌘Z.
+- Duplicate's `aria-keyshortcuts` comes from `ariaKeyShortcut("Command+D")`.
+- After the Trash's reply, focus moves to the canvas only if it was lost or is still in the canvas. It stays a plain `focus()`, not `returnFocus`: the closing modal confirmation can still leave the canvas `aria-hidden` that frame, and `returnFocus` then refuses it.
+- Results after the fixes: `test:design-mode` 1,961 passed, 1 skipped, and 1 failed. The failure was a handler test that read the ledger's outcome a moment before its notify; it now waits for it, and the touched files pass 175/175. tsc, the e2e typecheck, lint, `check:aiden-rules` and ci-policy (132/132) pass. `design-live-viewports.spec.ts` passes 4/4 with no retries in the Cua Space `aiden-p3c-2`. An earlier run needed one retry each, both from host load: A's Electron teardown timed out after its assertions passed, and E's refusal toast expired during its screenshots.

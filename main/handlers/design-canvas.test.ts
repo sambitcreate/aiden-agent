@@ -2372,6 +2372,8 @@ test("3c: an undo of the Trash restores the file after the save's reply; one aft
   const reply = (await invoke("designCanvas:save", "chat-1", before, gone.revision)) as { ok: boolean };
   assert.equal(reply.ok, true);
   await eventually(() => exists(path.join(workspace, "src/routes/pricing.tsx")), "the page restored");
+  // The ledger tells the chat just after the write lands.
+  await eventually(async () => outcomes.length > 0, "the restore reported");
   assert.deepEqual(outcomes, [{ chatId: "chat-1", file: "src/routes/pricing.tsx", done: "restore" }]);
 
   const chats: Record<string, DesignCanvasChat> = { "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true } };
