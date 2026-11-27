@@ -2140,24 +2140,6 @@ function WorkspaceChatSidebar({
     />
   );
 
-  const renameDialog = renaming
-    ? {
-        busy: false,
-        description: "Choose the name shown for this conversation in the sidebar.",
-        onClose: () => setRenaming(null),
-        onConfirm: commitRename,
-      }
-    : remoteRenaming
-      ? {
-          busy: remoteRenameBusy,
-          description: `Choose the name shown for this conversation on ${remoteRenaming.hostLabel}.`,
-          onClose: () => {
-            if (!remoteRenameBusy) setRemoteRenaming(null);
-          },
-          onConfirm: commitRemoteRename,
-        }
-      : null;
-
   return (
     <>
       <Sidebar
@@ -2604,14 +2586,35 @@ function WorkspaceChatSidebar({
       </Sidebar>
 
       <Dialog
-        open={renameDialog !== null}
-        onOpenChange={(open) => !open && renameDialog?.onClose()}
+        open={renaming !== null}
+        onOpenChange={(open) => !open && setRenaming(null)}
         title="Rename chat"
-        description={renameDialog?.description}
+        description="Choose the name shown for this conversation in the sidebar."
         confirmLabel="Save"
-        confirmDisabled={!renameValue.trim() || Boolean(renameDialog?.busy)}
-        busy={renameDialog?.busy}
-        onConfirm={renameDialog?.onConfirm}
+        confirmDisabled={!renameValue.trim()}
+        onConfirm={commitRename}
+      >
+        <Input
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          placeholder="Chat name"
+          autoFocus
+        />
+      </Dialog>
+
+      <Dialog
+        open={remoteRenaming !== null}
+        onOpenChange={(open) => !open && !remoteRenameBusy && setRemoteRenaming(null)}
+        title="Rename chat"
+        description={
+          remoteRenaming
+            ? `Choose the name shown for this conversation on ${remoteRenaming.hostLabel}.`
+            : undefined
+        }
+        confirmLabel="Save"
+        confirmDisabled={!renameValue.trim() || remoteRenameBusy}
+        busy={remoteRenameBusy}
+        onConfirm={commitRemoteRename}
       >
         <Input
           value={renameValue}
