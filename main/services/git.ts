@@ -819,6 +819,21 @@ function compareReviewFilePath(left: GitReviewFile, right: GitReviewFile): numbe
   return left.path.localeCompare(right.path, undefined, { numeric: true });
 }
 
+function reviewSummary(
+  files: readonly GitReviewFile[],
+  counts: Pick<GitReviewSummary, "stagedFiles" | "unstagedFiles" | "conflictedFiles">,
+): GitReviewSummary {
+  return {
+    fileCount: files.length,
+    additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
+    deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+    unavailableStats: files.filter(
+      (file) => file.additions === undefined || file.deletions === undefined,
+    ).length,
+    ...counts,
+  };
+}
+
 /** Parse workspace-relative `git status --porcelain=v2 -z` entries for Review. */
 export function parseGitReviewStatus(raw: string): GitReviewFile[] {
   const records = raw.split("\u0000");
@@ -2889,24 +2904,11 @@ export class GitService {
         await handle?.close();
       }
     }
-    const summary: GitReviewSummary = {
-      fileCount: files.length,
-      additions: files.reduce(
-        (total, file) => total + (file.additions ?? 0),
-        0,
-      ),
-      deletions: files.reduce(
-        (total, file) => total + (file.deletions ?? 0),
-        0,
-      ),
-      unavailableStats: files.filter(
-        (file) => file.additions === undefined || file.deletions === undefined,
-      ).length,
+    const summary = reviewSummary(files, {
       stagedFiles: files.filter((file) => file.staged).length,
       unstagedFiles: files.filter((file) => file.unstaged).length,
-      conflictedFiles: files.filter((file) => file.status === "conflicted")
-        .length,
-    };
+      conflictedFiles: files.filter((file) => file.status === "conflicted").length,
+    });
     const repositoryRoot =
       path.resolve(repo.cwd) === path.resolve(repo.topLevel);
     let reason: string | undefined;
@@ -4499,17 +4501,11 @@ export class GitService {
         file.binary = stat.binary;
       });
       const [behindText = "0", aheadText = "0"] = counts.stdout.trim().split(/\s+/);
-      const summary: GitReviewSummary = {
-        fileCount: files.length,
-        additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
-        deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
-        unavailableStats: files.filter(
-          (file) => file.additions === undefined || file.deletions === undefined,
-        ).length,
+      const summary = reviewSummary(files, {
         stagedFiles: 0,
         unstagedFiles: 0,
         conflictedFiles: 0,
-      };
+      });
       const targetLabel = targetRef.replace(/^refs\/heads\//, "").replace(/^refs\/remotes\//, "");
       const snapshot = createHash("sha256")
         .update(
