@@ -9,11 +9,22 @@
 // hosts reach the observer only through the test-only --host-resolver-rules
 // switch, which a control request on a separate session proves works.
 
-import { cp, readFile, symlink } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ElectronApplication, FrameLocator, Locator, Page, TestInfo } from "@playwright/test";
-import type { DesignAppsSnapshot, DesignAppStatus } from "../../renderer/shared/design-app";
+import type { ElectronApplication, Page } from "@playwright/test";
+import {
+  appIframe,
+  frameGroup,
+  inside,
+  LIVE_ON,
+  openLiveChat,
+  placeFrames,
+  press,
+  runCard,
+  seedFixture,
+  shoot,
+} from "./design-live-helpers";
 import {
   hostResolverRules,
   nonLoopbackAddress,
@@ -22,25 +33,10 @@ import {
   startUdpObserver,
   type HttpObserver,
 } from "./design-live-observer";
-import {
-  chooseWorkspace,
-  designCanvas,
-  previewAppearance,
-  sendFirstMessage,
-  setDisplayWidth,
-  setWindowWidth,
-  typeSlashCommand,
-  WORKSPACE_NAME,
-} from "./design-mode-helpers";
-import { expect, finishLmStudioOnboarding, test, waitForToastsToClear, type AidenE2e } from "./fixtures";
+import { designCanvas, setDisplayWidth, setWindowWidth } from "./design-mode-helpers";
+import { expect, test, waitForToastsToClear } from "./fixtures";
 
 const FIXTURE = fileURLToPath(new URL("../fixtures/design-live-app/", import.meta.url));
-const REPOSITORY_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const DESIGN_CHAT = "Design the pricing app";
-
-type Ipc = { aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } } };
-type Aiden = AidenE2e;
-const LIVE_ON = { AIDEN_EXPERIMENTAL_DESIGN_LIVE: "1" };
 
 const live = test.extend<{ external: HttpObserver }>({
   // External hosts resolve to this observer for the whole launch.
@@ -61,90 +57,7 @@ const live = test.extend<{ external: HttpObserver }>({
 
 live.use({ workspaceSeed: true, appEnvironment: LIVE_ON });
 
-async function seedFixture(workspaceDir: string): Promise<void> {
-  await cp(FIXTURE, workspaceDir, { recursive: true });
-  // The person's install: design mode finds Vite in devDependencies and starts `npm run dev` without installing.
-  await symlink(path.join(REPOSITORY_ROOT, "node_modules"), path.join(workspaceDir, "node_modules"), "dir");
-}
-
-async function chatIdFor(page: Page, title: string): Promise<string> {
-  const id = await page.evaluate(async (wanted) => {
-    const chats = await (window as unknown as Ipc).aidenAPI.ipc.invoke<Array<{ id: string; title?: string }>>("chats:list");
-    return chats.find((chat) => chat.title === wanted)?.id ?? null;
-  }, title);
-  expect(id, `the chat titled ${title}`).not.toBeNull();
-  return id!;
-}
-
-async function rootApp(page: Page, chatId: string): Promise<DesignAppStatus | undefined> {
-  const snapshot = await page.evaluate(
-    (id) => (window as unknown as Ipc).aidenAPI.ipc.invoke<DesignAppsSnapshot>("designApp:status:get", id),
-    chatId,
-  );
-  return snapshot.apps.find((app) => app.appRoot === ".");
-}
-
-const runCard = (page: Page) => page.getByRole("group", { name: /^Run .* app\?$/u });
 const chip = (page: Page) => page.getByRole("button", { name: /^Live app:/u });
-const frameGroup = (page: Page, title: string) => designCanvas(page).getByRole("group", { name: title, exact: true });
-const appIframe = (page: Page, title: string): Locator => frameGroup(page, title).locator("iframe[data-app-frame-id]");
-const inside = (page: Page, title: string): FrameLocator => frameGroup(page, title).frameLocator("iframe[data-app-frame-id]");
-
-/** Opens a design chat in the fixture workspace and lets design mode start the app. */
-async function openLiveChat(aiden: Aiden): Promise<{ chatId: string; app: DesignAppStatus }> {
-  const { app, page } = aiden;
-  await finishLmStudioOnboarding(page);
-  await waitForToastsToClear(page);
-  await setDisplayWidth(app, 1440);
-  await setWindowWidth(app, page, 1440);
-  await chooseWorkspace(page, new RegExp(`^${WORKSPACE_NAME}`, "u"));
-  await sendFirstMessage(page, DESIGN_CHAT);
-  const chatId = await chatIdFor(page, DESIGN_CHAT);
-  await typeSlashCommand(page, "/design");
-  await expect(designCanvas(page)).toBeVisible();
-  await expect(runCard(page)).toBeVisible({ timeout: 30_000 });
-  await runCard(page).getByRole("button", { name: "Allow" }).click();
-  await expect.poll(async () => (await rootApp(page, chatId))?.phase, { timeout: 90_000 }).toBe("running");
-  return { chatId, app: (await rootApp(page, chatId))! };
-}
-
-/** Aiden places app frames for these routes, in order. */
-async function placeFrames(aiden: Aiden, frames: Array<{ title: string; route: string }>, prompt: string): Promise<void> {
-  const composer = aiden.page.locator("textarea").first();
-  const scenario = aiden.lmStudio.enqueueToolScenario!({
-    prompt,
-    // A quarter scale keeps four frames above the live zoom floor (25%) once fitted.
-    calls: frames.map((frame) => ({ name: "canvas_place_frame", arguments: { kind: "app", title: frame.title, route: frame.route, scale: 0.25 } })),
-    finalText: "The app is on the canvas.",
-  });
-  await composer.fill(prompt);
-  await composer.press("Enter");
-  await expect.poll(() => scenario.completed, { timeout: 30_000 }).toBe(true);
-  expect(scenario.error).toBeUndefined();
-  for (const frame of frames) await expect(frameGroup(aiden.page, frame.title)).toBeVisible();
-  // Only frames in view go live, so the page is fitted to the window.
-  await designCanvas(aiden.page).getByRole("button", { name: "Fit to screen" }).click();
-}
-
-/**
- * Presses a control inside a scaled app page from the keyboard: focus moves
- * into the entered frame and Enter activates it, as a person tabbing would.
- * (Pointer clicks into a CSS-scaled iframe land at unscaled coordinates.)
- */
-async function press(control: Locator): Promise<void> {
-  await control.focus();
-  await control.page().keyboard.press("Enter");
-}
-
-/** Light and dark screenshots of the window at 1440 into the test's output folder. */
-async function shoot(page: Page, testInfo: TestInfo, name: string): Promise<void> {
-  for (const scheme of ["light", "dark"] as const) {
-    await previewAppearance(page, scheme);
-    await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", scheme);
-    await page.screenshot({ path: testInfo.outputPath(`1440-${name}-${scheme}.png`), animations: "disabled" });
-  }
-  await previewAppearance(page, null);
-}
 
 async function answerNextSave(app: ElectronApplication, file: string): Promise<void> {
   await app.evaluate(({ dialog }, chosen) => {
@@ -174,7 +87,7 @@ async function enter(page: Page, title: string): Promise<void> {
 
 live("two routes run live, take keys only when entered, and keep the app's own redirects inside", async ({ aiden }, testInfo) => {
   const { app, page, workspaceDir } = aiden;
-  await seedFixture(workspaceDir);
+  await seedFixture(workspaceDir, FIXTURE);
   await openLiveChat(aiden);
   await placeFrames(
     aiden,
@@ -267,7 +180,7 @@ live("two routes run live, take keys only when entered, and keep the app's own r
 // frame put back on its last in-app path.
 live("S1: a redirect out of the app leaves the frame where it was, with Open in browser", async ({ aiden }, testInfo) => {
   const { app, page, workspaceDir } = aiden;
-  await seedFixture(workspaceDir);
+  await seedFixture(workspaceDir, FIXTURE);
   await openLiveChat(aiden);
   await placeFrames(aiden, [{ title: "Home", route: "/" }], "Live frames test: put the home route on the canvas.");
   await expect(inside(page, "Home").locator("#home-title")).toHaveText("Fixture home", { timeout: 30_000 });
@@ -299,7 +212,7 @@ live("S1: a redirect out of the app leaves the frame where it was, with Open in 
 // loop. This is also the canary: if a Chromium upgrade drops the feature, it fails.
 live("K1: a page looping input.focus() in a frame that isn't entered never takes the composer's keys", async ({ aiden }) => {
   const { page, workspaceDir } = aiden;
-  await seedFixture(workspaceDir);
+  await seedFixture(workspaceDir, FIXTURE);
   await openLiveChat(aiden);
   await placeFrames(aiden, [{ title: "Thief", route: "/probe?thief=1" }], "Live frames test: put the probe on the canvas.");
   await expect(inside(page, "Thief").getByRole("heading", { name: "Probe" })).toBeVisible({ timeout: 30_000 });
@@ -330,7 +243,7 @@ live("a probe in an app frame reaches nothing outside localhost: each try fails 
     await expect.poll(() => external.paths.includes("/control")).toBe(true);
     const before = { ...external.counts };
 
-    await seedFixture(workspaceDir);
+    await seedFixture(workspaceDir, FIXTURE);
     const { app: running } = await openLiveChat(aiden);
     const own = 9222;
     const query = `target=127.0.0.1:${tcp.port}&alt=127.0.0.2:${alt.port}&udp=${udp.port}&own=${own}`;

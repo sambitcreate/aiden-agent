@@ -291,7 +291,24 @@
       "main/services/loopback-ports.ts",
       "main-window.html",
       "tests/fixtures/design-live-app/",
-      "tests/e2e/design-live-observer.ts"
+      "tests/e2e/design-live-observer.ts",
+      "tests/e2e/design-live-helpers.ts"
+    ],
+    "design-live-routes.spec.ts": [
+      "main/services/design-canvas/app-server/app-routes",
+      "main/services/design-canvas/app-server/app-tool",
+      "main/services/design-canvas/canvas-config",
+      "main/services/design-canvas/written-pages",
+      "main/services/design-canvas/entry",
+      "main/services/design-canvas/canvas-tools",
+      "main/handlers/design-canvas",
+      "renderer/design/app-route-picker",
+      "renderer/design/design-toolbar",
+      "renderer/design/use-design-canvas",
+      "renderer/design/nodes/app-node",
+      "renderer/shared/design-canvas/app-",
+      "tests/fixtures/design-live-routes/",
+      "tests/e2e/design-live-helpers.ts"
     ],
     "design-mode.spec.ts": [
       "renderer/components/design-mode-banner",
