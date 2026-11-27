@@ -2928,8 +2928,9 @@ export function createAidenRemoteRequestHandler(
         for (const capability of input.accepts) {
           if (capability.startsWith("app-controls:") && !await dependencies.appControls?.enabled()) throw new AidenRemoteServiceError("capability_denied", "Allow paired-device chat controls in Aiden Agent on your computer first.", 403);
           if ((AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
-            // An opt-in to two session entry types, not an authority: any
-            // device may hold it while the host serves Bot sessions.
+            // An opt-in to two session entry types, not an authority. It
+            // needs Bot sessions here; the advertised check after this
+            // chain also requires a device paired with Bot capabilities.
             if (!dependencies.botSessions) {
               throw new AidenRemoteServiceError("not_found", "Bot sessions are unavailable on this Aiden installation.", 404);
             }

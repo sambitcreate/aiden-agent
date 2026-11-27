@@ -1,7 +1,5 @@
 package sbtbiswas.AidenOnTheGo
 
-import androidx.compose.ui.res.stringResource
-
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -23,6 +21,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.res.stringResource
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenPairDesktopScreen
 import sbtbiswas.AidenOnTheGo.features.remote.AidenProductShellScreen
@@ -52,7 +51,8 @@ fun ContentView(
     onNavigateToWorkspaceGit: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenInstallations: () -> Unit,
-    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
+    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile,
+    onPairDesktop: () -> Unit
 ) {
     val connectionState by coordinator.connectionState.collectAsStateWithLifecycle()
     val errorMessage by coordinator.errorMessage.collectAsStateWithLifecycle()
@@ -84,7 +84,7 @@ fun ContentView(
                         }
                         Text(issue.message, style = MaterialTheme.typography.bodySmall)
                         if (issue.canRetry) TextButton(onClick = { coordinator.refreshClient() }) { Text("Retry connection") }
-                        if (issue.pairAgain) TextButton(onClick = onOpenInstallations) { Text(stringResource(R.string.connection_pair_again)) }
+                        if (issue.pairAgain) TextButton(onClick = onPairDesktop) { Text(stringResource(R.string.connection_pair_again)) }
                     }
                 }
             }

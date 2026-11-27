@@ -145,9 +145,13 @@ data class AidenServer(
     val supportsBotProactive: Boolean
         get() = features.contains(AidenRemoteProtocol.BOT_PROACTIVE_FEATURE)
 
-    /** Only a Mac that can send memory or proposal cards is asked for `bot:cards`. */
+    /**
+     * The Mac offers `bot:cards` in its capability list, so this phone asks for it (as on iOS).
+     * The memory and proactive features alone are not an offer: a host refuses a `bot:*` opt-in
+     * it doesn't list, and that refusal would fail the whole progress-grant call.
+     */
     val offersBotCards: Boolean
-        get() = supportsBotMemory || supportsBotProactive
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_CARDS) == true
 
     /**
      * The Mac offers `bot:activity` (revision 30) in its capability list, so this phone asks for

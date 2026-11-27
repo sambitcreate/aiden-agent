@@ -2247,30 +2247,6 @@ class AidenBotSessionControllerTest {
 
     // F15: a refusal of this Bot chat, while the pairing stands, keeps what's unsent. Only a revoked
     // credential (above) discards it.
-    // An unreadable 403 on a send may hide a request the Mac took: the message keeps its key
-    // (CACHED_REJECTION_LEDGER), and nothing is discarded.
-    @Test
-    fun anUnreadable403OnASendKeepsTheMessageAndItsKey() = runTest {
-        val unreadable = AidenRemoteClientException.Server(
-            403, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.INTERNAL_ERROR, "Aiden Agent returned HTTP status 403.", "", false),
-            isDecodedEnvelope = false
-        )
-        val transport = FakeTransport(runningSession)
-        transport.sendFailures += unreadable
-        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = store(tempFolder.newFolder(), { started }), nowMs = { started })
-        controller.refetch()
-        runCurrent()
-        assertTrue(controller.send("Plan lunch"))
-        runCurrent()
-
-        val kept = controller.state.value.outbox.single()
-        assertEquals(1, transport.sends.size)
-        assertEquals("Plan lunch", kept.text)
-        assertTrue("its key stays for the retry", kept.keepsKey)
-        assertFalse(controller.state.value.accessLost)
-        assertNotEquals(AidenBotSessionNotice.ACCESS_LOST, controller.state.value.notice)
-    }
-
     @Test
     fun aCapabilityDeniedRefusalKeepsTheUnsentMessageAsFailed() = runTest {
         val denied = serverError(403, AidenRemoteErrorCode.CAPABILITY_DENIED)
@@ -2304,6 +2280,56 @@ class AidenBotSessionControllerTest {
         reopened.refetch()
         runCurrent()
         assertEquals(listOf("Plan lunch"), reopened.state.value.outbox.map { it.text })
+    }
+
+    // An unreadable 403 on a send may hide a request the Mac took: the message keeps its key
+    // (CACHED_REJECTION_LEDGER), and nothing is discarded.
+    @Test
+    fun anUnreadable403OnASendKeepsTheMessageAndItsKey() = runTest {
+        val unreadable = AidenRemoteClientException.Server(
+            403, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.INTERNAL_ERROR, "Aiden Agent returned HTTP status 403.", "", false),
+            isDecodedEnvelope = false
+        )
+        val transport = FakeTransport(runningSession)
+        transport.sendFailures += unreadable
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = store(tempFolder.newFolder(), { started }), nowMs = { started })
+        controller.refetch()
+        runCurrent()
+        assertTrue(controller.send("Plan lunch"))
+        runCurrent()
+
+        val kept = controller.state.value.outbox.single()
+        assertEquals(1, transport.sends.size)
+        assertEquals("Plan lunch", kept.text)
+        assertTrue("its key stays for the retry", kept.keepsKey)
+        assertFalse(controller.state.value.accessLost)
+        assertNotEquals(AidenBotSessionNotice.ACCESS_LOST, controller.state.value.notice)
+    }
+
+    // An unreadable 403 on the feed may not be the Mac's answer, so it isn't shown as no access;
+    // the feed reopens on the reconnect delay rather than at once.
+    @Test
+    fun anUnreadable403OnTheFeedReconnectsOnlyOnTheReconnectDelay() = runTest {
+        val unreadable = AidenRemoteClientException.Server(
+            403, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.INTERNAL_ERROR, "Aiden Agent returned HTTP status 403.", "", false),
+            isDecodedEnvelope = false
+        )
+        var opens = 0
+        val transport = object : AidenBotSessionTransport by FakeTransport(runningSession) {
+            override fun events(botId: String): Flow<AidenBotSessionEvent> = flow { opens += 1; throw unreadable }
+        }
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, reconnectDelayMillis = 1_000)
+        controller.start()
+        runCurrent()
+        assertEquals("no reopen before the delay", 1, opens)
+        assertFalse(controller.state.value.accessLost)
+        assertTrue("the line says it's reconnecting", controller.state.value.streamDown)
+
+        advanceTimeBy(3_000)
+        runCurrent()
+        assertEquals("one reopen per delay", 4, opens)
+        assertFalse(controller.state.value.accessLost)
+        controller.stopFollowing()
     }
 
     // PR #479 review: a disk restore whose result lands after an access-loss purge must not bring the purged text back.

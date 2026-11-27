@@ -10,12 +10,13 @@ import XCTest
 
 final class AidenNativeIntegrationTests: XCTestCase {
     @MainActor
-    func testOfflineRecoveryKeepsSwitchingAvailableWhenRetryIsUnsafe() throws {
-        for error in [URLError(.cannotConnectToHost) as Error, AidenServerTrustError.publicKeyPinMismatch] {
+    func testOfflineRecoveryOffersSwitchingOrPairAgainWhenRetryIsUnsafe() throws {
+        let forgotten = try alertServerError(401, code: "authentication_required")
+        for error in [URLError(.cannotConnectToHost) as Error, AidenServerTrustError.publicKeyPinMismatch, forgotten] {
             let coordinator = AidenRemoteCoordinator(installationStore: AidenInstallationStore(keychain: AidenRecoveryMemoryKeychain()))
             let issue = AidenConnectionIssue.classify(error)
             let host = UIHostingController(rootView:
-                AidenConnectionRecoveryView(coordinator: coordinator, issue: issue, switchConnection: {})
+                AidenConnectionRecoveryView(coordinator: coordinator, issue: issue, switchConnection: {}, pairAgain: {})
                     .environment(AidenHapticCenter())
                     .environment(\.colorScheme, .light)
             )
@@ -39,8 +40,12 @@ final class AidenNativeIntegrationTests: XCTestCase {
             let recognition = VNRecognizeTextRequest()
             recognition.recognitionLevel = .accurate
             try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([recognition])
-            let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ").lowercased()
-            XCTAssertTrue(text.contains("switch connection"), "\(issue.title): \(text)")
+            let raw = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+            let text = raw.lowercased()
+            // A forgotten device offers one way back, Pair again, so VoiceOver hears no duplicate.
+            XCTAssertEqual(text.contains("switch connection"), !issue.pairAgain, "\(issue.title): \(text)")
+            // The button's capital P: the trust message also says "pair again".
+            XCTAssertEqual(raw.contains("Pair again"), issue.pairAgain, "\(issue.title): \(raw)")
             XCTAssertEqual(text.contains("retry connection"), issue.canRetry, text)
         }
     }
