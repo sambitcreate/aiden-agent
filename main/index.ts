@@ -1638,6 +1638,11 @@ async function createMainWindow(
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  const windowGone = (): boolean =>
+    cleanupStarted ||
+    shutdownStarted ||
+    createdWindow.isDestroyed() ||
+    mainWindow !== createdWindow;
   // Aiden never uses WebRTC, but a live design canvas frame or a chat's
   // generated UI runs its own script here, and Electron ignores the guest CSP's
   // `webrtc 'block'`, so such a page could send STUN or TURN over UDP to a host
@@ -1688,13 +1693,7 @@ async function createMainWindow(
     rendererReadiness.reset();
     terminalService.closeForWebContents(createdWebContentsId);
     browserService.closeForWebContents(createdWebContentsId);
-    if (
-      cleanupStarted ||
-      shutdownStarted ||
-      createdWindow.isDestroyed() ||
-      mainWindow !== createdWindow
-    )
-      return;
+    if (windowGone()) return;
     const recoveryDecision = decideRendererRecovery(rendererCrashTimes, Date.now());
     rendererCrashTimes = recoveryDecision.recentCrashTimes;
     if (!recoveryDecision.retry) {
@@ -1713,12 +1712,7 @@ async function createMainWindow(
       new Promise<void>((resolve) => {
         setTimeout(resolve, recoveryDecision.backoffMs);
       }).then(async () => {
-        if (
-          cleanupStarted ||
-          shutdownStarted ||
-          createdWindow.isDestroyed() ||
-          mainWindow !== createdWindow
-        ) return;
+        if (windowGone()) return;
         await createdWindow.loadURL(mainWindowUrl);
       }),
     );
@@ -1734,12 +1728,7 @@ async function createMainWindow(
     });
     void recovery.promise.then(() => {
       if (!mainWindowLoads.isCurrent(recovery)) return;
-      if (
-        cleanupStarted ||
-        shutdownStarted ||
-        createdWindow.isDestroyed() ||
-        mainWindow !== createdWindow
-      ) return;
+      if (windowGone()) return;
       writeDiagnosticEvent({
         level: "info",
         area: "renderer",
@@ -1959,6 +1948,12 @@ function waitForRendererReady(): Promise<boolean> {
   return sharedRendererReadyWait;
 }
 
+function showAndFocus(window: BrowserWindow): void {
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
 async function deliverMainWindowNotification(
   channel: NotificationChannel,
   payload: Record<string, unknown>,
@@ -1968,9 +1963,7 @@ async function deliverMainWindowNotification(
     throw new Error("The main window did not become ready in time.");
   }
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  showAndFocus(mainWindow);
   switch (channel) {
     case "app:command":
       ipcMain.broadcast("app:command", payload);
@@ -1994,9 +1987,7 @@ async function navigateMainWindowAndWait(path: string): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) {
     throw new Error("The main window is not available.");
   }
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  showAndFocus(mainWindow);
   const owner = windowDocumentOwner(mainWindow.webContents);
   const status = await aidenAppNavigation.openPath(path, owner);
   if (status === "blocked") {
@@ -2845,9 +2836,7 @@ if (!ownsSingleInstanceLock) {
             if (!(await waitForRendererReady())) return null;
             const window = mainWindow;
             if (!window || window.isDestroyed()) return null;
-            if (window.isMinimized()) window.restore();
-            window.show();
-            window.focus();
+            showAndFocus(window);
             return window;
           },
           openExternal: openExternalUrl,
