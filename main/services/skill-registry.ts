@@ -6,6 +6,8 @@ import {
 } from "../../renderer/shared/slash-commands.js";
 import {
   canonicalSkillIdentity,
+  configuredSkillCandidate,
+  discoveredSkillCandidate,
   mintSkillInvocationId,
   projectSkillCatalogEntry,
   resolveSkillCandidates,
@@ -86,37 +88,6 @@ function applyWorkspaceSkillChoices(
       ? { ...candidate, modelInvocable: false, workspaceOff: true }
       : candidate,
   );
-}
-
-function configuredCandidate(skill: Skill): SkillRegistryCandidate {
-  return {
-    stableId: `configured:${skill.id}`,
-    name: skill.name,
-    description: skill.description,
-    instructions: skill.instructions,
-    source: "configured",
-    enabled: skill.enabled,
-  };
-}
-
-function discoveredCandidate(
-  skill: DiscoveredSkill,
-  permission: Workspace["permission"],
-): SkillRegistryCandidate {
-  return {
-    stableId: skill.id,
-    name: skill.name,
-    description: skill.description,
-    instructions: skill.instructions,
-    modelInvocable: skill.modelInvocable ?? true,
-    userInvocable: skill.userInvocable ?? true,
-    source: skill.source,
-    enabled: true,
-    path: skill.path,
-    ...(skill.source === "workspace" && permission === "none"
-      ? { blockedReason: "Workspace skills require workspace access." }
-      : {}),
-  };
 }
 
 function skillRegistryFingerprint(
@@ -294,8 +265,8 @@ export class SkillRegistry {
     if (!(await this.#dependencies.isEnabled())) return this.#project(workspace, []);
     const resolved = resolveSkillCandidates([
       ...builtin,
-      ...configured.map(configuredCandidate),
-      ...discovered.map((skill) => discoveredCandidate(skill, workspace.permission)),
+      ...configured.map(configuredSkillCandidate),
+      ...discovered.map((skill) => discoveredSkillCandidate(skill, workspace.permission)),
     ]);
     return this.#project(workspace, applyWorkspaceSkillChoices(workspace, resolved));
   }
