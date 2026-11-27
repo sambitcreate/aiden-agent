@@ -1584,15 +1584,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     func updateDeviceCapabilities(
         accepts: [AidenRemoteCapability]
     ) async throws -> [AidenRemoteCapability] {
-        let allowed = Set([
-            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
-            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
-            .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
-            .botMessaging, .botAccessRequests, .botPlans, .botAllowed,
-            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
-            .chatContinueInNewChat, .streamSnapshotReasons, .botNeedsYou, .approvalPlainWords, .chatAgentSlider,
-        ]).union(AidenRemoteCapability.botUX)
+        let allowed = AidenRemoteCapability.phoneProgressVocabulary
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
               Set(accepts).isSubset(of: allowed) else {

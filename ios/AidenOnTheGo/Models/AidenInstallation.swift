@@ -345,15 +345,7 @@ final class AidenInstallationStore {
               !capabilities.contains(.botWrite) || capabilities.contains(.botRead) else {
             throw AidenRemoteClientError.invalidResponse
         }
-        let progress = Set([
-            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
-            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
-            .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
-            .botMessaging, .botAccessRequests, .botPlans, .botAllowed,
-            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
-            .chatContinueInNewChat, .streamSnapshotReasons, .botNeedsYou, .approvalPlainWords, .chatAgentSlider,
-        ]).union(AidenRemoteCapability.botUX)
+        let progress = AidenRemoteCapability.phoneProgressVocabulary
         let existingNonProgress = Set(installations[index].deviceCapabilities).subtracting(progress)
         guard existingNonProgress == Set(capabilities).subtracting(progress) else {
             throw AidenRemoteClientError.invalidResponse
