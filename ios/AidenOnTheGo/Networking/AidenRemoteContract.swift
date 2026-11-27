@@ -4315,4 +4315,13 @@ extension AidenRemoteProtocol {
         guard (1...32).contains(bytes.count), (97...122).contains(bytes[0]) else { return false }
         return bytes.allSatisfy { (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }
     }
+
+    /// ASCII letters, digits, `-`, `.`, `:` or `_`.
+    static func isSafeIdentifierScalar(_ scalar: Unicode.Scalar) -> Bool {
+        let code = scalar.value
+        return (48...57).contains(code) ||
+            (65...90).contains(code) ||
+            (97...122).contains(code) ||
+            code == 45 || code == 46 || code == 58 || code == 95
+    }
 }

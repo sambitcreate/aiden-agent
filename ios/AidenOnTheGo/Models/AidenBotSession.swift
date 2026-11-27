@@ -38,16 +38,7 @@ enum AidenBotSessionWire {
 
     /// Submission ids: 1–64 ASCII letters, digits, `.`, `_`, `:` or `-`.
     static func validateSubmissionID(_ value: String, field: String) throws {
-        let scalars = Array(value.unicodeScalars)
-        guard (1...maxSubmissionIDLength).contains(scalars.count),
-              scalars.allSatisfy({ scalar in
-                  switch scalar.value {
-                  case 48...57, 65...90, 97...122, 46, 95, 58, 45: true
-                  default: false
-                  }
-              }) else {
-            throw AidenBotContractError.invalidField(field)
-        }
+        try AidenBotWire.validateIdentifier(value, field: field, maxLength: maxSubmissionIDLength)
     }
 
     static func validateEpoch(_ value: String) throws {
@@ -1103,16 +1094,7 @@ enum AidenRemoteIssueWire {
 
     /// The card and routine ids: the host's issue id grammar.
     static func validateID(_ value: String, field: String) throws {
-        let scalars = Array(value.unicodeScalars)
-        guard (1...maxIDLength).contains(scalars.count),
-              scalars.allSatisfy({ scalar in
-                  switch scalar.value {
-                  case 48...57, 65...90, 97...122, 46, 95, 58, 45: true
-                  default: false
-                  }
-              }) else {
-            throw AidenBotContractError.invalidField(field)
-        }
+        try AidenBotWire.validateIdentifier(value, field: field, maxLength: maxIDLength)
     }
 }
 

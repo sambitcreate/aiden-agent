@@ -128,11 +128,7 @@ enum AidenBotWire {
     }
 
     static func isSafeIdentifierScalar(_ scalar: Unicode.Scalar) -> Bool {
-        let code = scalar.value
-        return (48...57).contains(code) ||
-            (65...90).contains(code) ||
-            (97...122).contains(code) ||
-            code == 45 || code == 46 || code == 58 || code == 95
+        AidenRemoteProtocol.isSafeIdentifierScalar(scalar)
     }
 
     static func validateIdentifier(_ value: String, field: String, maxLength: Int) throws {

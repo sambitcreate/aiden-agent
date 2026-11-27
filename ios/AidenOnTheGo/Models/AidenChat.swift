@@ -2844,7 +2844,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     ) throws {
         guard !value.isEmpty,
               value.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength,
-              value.unicodeScalars.allSatisfy(Self.isSafeIdentifierScalar) else {
+              value.unicodeScalars.allSatisfy(AidenRemoteProtocol.isSafeIdentifierScalar) else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: values,
@@ -2854,7 +2854,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     }
 
     static func isValidIdentifier(_ value: String) -> Bool {
-        !value.isEmpty && value.utf8.count <= AidenRemoteProtocol.maxIdentifierLength && value.unicodeScalars.allSatisfy(isSafeIdentifierScalar)
+        !value.isEmpty && value.utf8.count <= AidenRemoteProtocol.maxIdentifierLength && value.unicodeScalars.allSatisfy(AidenRemoteProtocol.isSafeIdentifierScalar)
     }
 
     private static func isValidRevision(_ value: String) -> Bool {
@@ -2867,25 +2867,16 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     static func isValidCachedProjection(_ summary: AidenChatSummary) -> Bool {
         !summary.id.isEmpty
             && summary.id.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
-            && summary.id.unicodeScalars.allSatisfy(isSafeIdentifierScalar)
+            && summary.id.unicodeScalars.allSatisfy(AidenRemoteProtocol.isSafeIdentifierScalar)
             && !summary.workspaceId.isEmpty
             && summary.workspaceId.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
-            && summary.workspaceId.unicodeScalars.allSatisfy(isSafeIdentifierScalar)
+            && summary.workspaceId.unicodeScalars.allSatisfy(AidenRemoteProtocol.isSafeIdentifierScalar)
             && summary.title.unicodeScalars.count <= 1_024
             && !summary.revision.isEmpty
             && summary.revision.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
             && summary.createdAt.timeIntervalSinceReferenceDate.isFinite
             && summary.updatedAt.timeIntervalSinceReferenceDate.isFinite
             && summary.updatedAt >= summary.createdAt
-    }
-
-    private static func isSafeIdentifierScalar(_ scalar: UnicodeScalar) -> Bool {
-        switch scalar.value {
-        case 45...46, 48...58, 65...90, 95, 97...122:
-            return true
-        default:
-            return false
-        }
     }
 
     private static func isBase64URLScalar(_ scalar: UnicodeScalar) -> Bool {

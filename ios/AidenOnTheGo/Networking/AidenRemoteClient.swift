@@ -4264,14 +4264,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     private func validateSafeIdentifier(_ value: String, maximumScalars: Int) throws {
         guard !value.isEmpty,
               value.unicodeScalars.count <= maximumScalars,
-              value.unicodeScalars.allSatisfy({ scalar in
-                  switch scalar.value {
-                  case 48...57, 65...90, 97...122, 45, 46, 58, 95:
-                      return true
-                  default:
-                      return false
-                  }
-              }) else {
+              value.unicodeScalars.allSatisfy(AidenRemoteProtocol.isSafeIdentifierScalar) else {
             throw AidenRemoteClientError.invalidResponse
         }
     }
