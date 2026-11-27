@@ -3,14 +3,8 @@ import { isLocalProviderDeployment } from "../../renderer/shared/provider-deploy
 import {
   catalogProviderSlug,
   modelIdLeaf,
-  openRouterAuthor,
 } from "../../renderer/shared/model-catalog-provider.js";
 import type { ModelCost, ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
-import {
-  openRouterBenchmarkForModel,
-  openRouterBenchmarkForModelsDevIdentity,
-  type OpenRouterBenchmarkCache,
-} from "./openrouter-benchmark-catalog-core.js";
 
 interface RawModel {
   id?: string;
@@ -216,8 +210,6 @@ export function parseModelCatalog(value: unknown): ModelCatalog {
   return value as ModelCatalog;
 }
 
-const TRUSTED_GATEWAYS_WITHOUT_MODELS_DEV_PROVIDER = new Set(["concentrate"]);
-
 export { catalogProviderSlug };
 
 interface ModelIdIndex {
@@ -372,37 +364,6 @@ function modelsDevInfo(catalog: ModelCatalog, providerId: string, modelId: strin
     metadataSource: "models-dev",
     matched: true,
   };
-}
-
-function modelsDevBenchmark(
-  catalog: ModelCatalog,
-  cache: OpenRouterBenchmarkCache,
-  provider: ModelCatalogProvider,
-  modelId: string,
-): ModelInfo["benchmark"] {
-  const directAuthor = openRouterAuthor(provider.id);
-  const providerCatalog = catalog[provider.id] ?? catalog[catalogProviderSlug(provider.id) ?? ""];
-  if (
-    directAuthor === undefined &&
-    providerCatalog === undefined &&
-    !TRUSTED_GATEWAYS_WITHOUT_MODELS_DEV_PROVIDER.has(provider.id)
-  ) {
-    return undefined;
-  }
-
-  const raw =
-    findRawInProvider(providerCatalog, modelId) ??
-    (TRUSTED_GATEWAYS_WITHOUT_MODELS_DEV_PROVIDER.has(provider.id)
-      ? findRaw(catalog, provider.id, modelId)
-      : null);
-  if (!raw?.name) return undefined;
-
-  return openRouterBenchmarkForModelsDevIdentity(cache, {
-    ...(directAuthor === undefined ? {} : { author: directAuthor }),
-    modelId,
-    name: raw.name,
-    ...(typeof raw.reasoning === "boolean" ? { reasoning: raw.reasoning } : {}),
-  });
 }
 
 /** models.dev-only capability lookup; production uses it for bundled request admission (`modelsCatalog.bundledInfo`). */
@@ -573,21 +534,16 @@ function localInfo(
   };
 }
 
-/** Local metadata wins for local providers; hosted models use models.dev plus benchmark evidence. */
+/** Local metadata wins for local providers; hosted models use models.dev. */
 export function resolveModelInfo(
   catalog: ModelCatalog,
   provider: ModelCatalogProvider,
   modelId: string,
-  openRouterBenchmarks?: OpenRouterBenchmarkCache | null,
 ): ModelInfo {
   const info = modelsDevInfo(catalog, provider.id, modelId);
   if (isLocalProvider(provider)) {
     const metadata = provider.modelMetadata?.[modelId];
     return metadata ? localInfo(modelId, metadata, info) : info;
   }
-  const benchmark = openRouterBenchmarks
-    ? (openRouterBenchmarkForModel(openRouterBenchmarks, provider.id, modelId) ??
-      modelsDevBenchmark(catalog, openRouterBenchmarks, provider, modelId))
-    : undefined;
-  return benchmark ? { ...info, benchmark } : info;
+  return info;
 }

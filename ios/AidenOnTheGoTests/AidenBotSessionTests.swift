@@ -1775,6 +1775,38 @@ final class AidenBotSessionQuestionTests: XCTestCase {
         XCTAssertNil(model.question)
     }
 
+    func testReplayed409InternalErrorAfterLostQuestionAnswerReleasesSettledKeyForFreshAttempt() async throws {
+        func serverError(_ status: Int, _ code: String) throws -> AidenRemoteClientError {
+            let body = try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorEnvelope.Body.self,
+                from: Data(#"{"code":"\#(code)","message":"This Bot request cannot be safely repeated.","requestId":"req_question_replay","retryable":false}"#.utf8)
+            )
+            return .server(statusCode: status, body: body)
+        }
+
+        let transport = QuestionTransport(snapshot: try session(question: questionJSON))
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
+        await model.load()
+        let blue = AidenQuestionRespondRequest(cancelled: false, answers: [.option(questionIndex: 0, answer: "Blue")])
+
+        transport.nextAnswerError = URLError(.networkConnectionLost)
+        await model.answerQuestion(blue)
+        transport.nextAnswerError = try serverError(409, "idempotency_in_flight")
+        await model.answerQuestion(blue)
+        transport.nextAnswerError = AidenRemoteClientError.unexpectedStatus(409)
+        await model.answerQuestion(blue)
+        transport.nextAnswerError = try serverError(409, "internal_error")
+        await model.answerQuestion(blue)
+        await model.answerQuestion(blue)
+
+        XCTAssertEqual(transport.answers.count, 5)
+        XCTAssertEqual(transport.answers[0].key, transport.answers[1].key, "Lost response retains key")
+        XCTAssertEqual(transport.answers[1].key, transport.answers[2].key, "409 idempotency_in_flight retains key")
+        XCTAssertEqual(transport.answers[2].key, transport.answers[3].key, "Undecodable 409 retains key")
+        XCTAssertNotEqual(transport.answers[3].key, transport.answers[4].key, "Decoded replayed 409 internal_error releases settled key so fresh attempt mints a new key")
+        XCTAssertNil(model.question)
+    }
+
     func testQuestionEventsShowAndSettleTheWaitingQuestion() async throws {
         let transport = QuestionTransport(snapshot: try session(question: "null"))
         let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
@@ -2376,6 +2408,23 @@ final class AidenBotSessionActivityTests: XCTestCase {
             guard Date() < deadline else { return XCTFail("Timed out waiting for \(what)") }
             try await Task.sleep(for: .milliseconds(20))
         }
+    }
+
+    /// A step that waits on the person before its card loads still reads as
+    /// waiting in the chat title: amber, with no typing dots.
+    func testAWaitingStepWithNoCardWarnsInTheChatTitle() async throws {
+        let model = await loaded(FakeBotSessionTransport(), try running(AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        XCTAssertEqual(
+            model.titleStatus(nowMs: started + 1_000, purpose: "Finds the signal", machine: nil),
+            AidenChatTitleStatus("Reading", tone: .accent, isActive: true)
+        )
+        _ = await model.apply(event(seq: 5, .activity(AidenBotSessionActivity(phase: "waiting", startedAt: started))))
+        XCTAssertNil(model.question)
+        XCTAssertNil(model.approval)
+        XCTAssertEqual(
+            model.titleStatus(nowMs: started + 1_000, purpose: "Finds the signal", machine: nil),
+            AidenChatTitleStatus("Waiting for you", tone: .warning)
+        )
     }
 
     // Test 1
@@ -3341,6 +3390,55 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Getting ready", "the next turn never starts at Stopping")
     }
 
+    /// The avatar sees a Stop even when the Stop and the turn's end land in one
+    /// update, so the header settles quietly instead of playing done.
+    func testAStoppedTurnsAvatarSettlesQuietlyEvenWhenTheEndLandsWithTheStop() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        var settler = AidenBotAvatarStateSettler(signal: AidenBotAvatarSignal(model: model), at: 0)
+        XCTAssertEqual(settler.shown, .reading)
+        transport.queueStop(.success(try AidenBotSessionStateView(state: .running)))
+        await model.stop()
+        _ = await model.apply(event(seq: 5, .state(try AidenBotSessionStateView(state: .idle))))
+        _ = await model.apply(event(seq: 6, .activity(nil)))
+        // The settler hears of it only now, with the turn already over.
+        settler.receive(AidenBotAvatarSignal(model: model), at: 2)
+        XCTAssertEqual(settler.shown, .idle, "a stopped turn shows no done")
+        XCTAssertNil(settler.nextWake)
+
+        // The next turn is not stopped: it ends with done.
+        _ = await model.apply(event(seq: 7, .state(try AidenBotSessionStateView(state: .running))))
+        _ = await model.apply(event(seq: 8, .activity(AidenBotSessionActivity(phase: "reading", startedAt: started + 9_000))))
+        settler.receive(AidenBotAvatarSignal(model: model), at: 3)
+        settler.advance(to: 3.25)
+        XCTAssertEqual(settler.shown, .reading)
+        _ = await model.apply(event(seq: 9, .state(try AidenBotSessionStateView(state: .idle))))
+        _ = await model.apply(event(seq: 10, .activity(nil)))
+        settler.receive(AidenBotAvatarSignal(model: model), at: 5)
+        XCTAssertEqual(settler.shown, .done)
+    }
+
+    /// A queued turn that starts straight after a stopped one, with no idle
+    /// between them, is not stopped: it still ends with done.
+    func testAQueuedTurnAfterAStoppedOneWithNoIdleGapStillEndsWithDone() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        var settler = AidenBotAvatarStateSettler(signal: AidenBotAvatarSignal(model: model), at: 0)
+        transport.queueStop(.success(try AidenBotSessionStateView(state: .running)))
+        await model.stop()
+        settler.receive(AidenBotAvatarSignal(model: model), at: 1)
+        // The queued follow-up replaces the run while the state stays running.
+        _ = await model.apply(event(seq: 5, .activity(AidenBotSessionActivity(phase: "editing", startedAt: started + 9_000))))
+        XCTAssertFalse(model.stopRequestedThisTurn)
+        settler.receive(AidenBotAvatarSignal(model: model), at: 2)
+        settler.advance(to: 2.25)
+        XCTAssertEqual(settler.shown, .editing)
+        _ = await model.apply(event(seq: 6, .state(try AidenBotSessionStateView(state: .idle))))
+        _ = await model.apply(event(seq: 7, .activity(nil)))
+        settler.receive(AidenBotAvatarSignal(model: model), at: 4)
+        XCTAssertEqual(settler.shown, .done, "the queued turn was never stopped")
+    }
+
     func testAStopPressedAsANewRunStartsLeavesTheNewRunAlone() async throws {
         let transport = FakeBotSessionTransport()
         let model = await loaded(transport, try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started)))
@@ -4152,34 +4250,6 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertFalse(model.hasLoaded)
         XCTAssertNotNil(model.errorMessage)
         transport.sessionGate.releaseAll()
-    }
-}
-
-/// A working Bot's face follows the shared `glance` keyframes (docs/activity-marks.md).
-final class AidenBotFaceGlanceTests: XCTestCase {
-    /// R19: a working Bot always keeps a visible cue, and only a face that may move glances.
-    func testAWorkingBotAlwaysShowsACueAndOnlyAMovingFaceGlances() {
-        XCTAssertEqual(aidenBotWorkingCue(working: true, hasPhoto: false, motionAllowed: true), AidenBotWorkingCue(glances: true, badge: false))
-        XCTAssertEqual(
-            aidenBotWorkingCue(working: true, hasPhoto: false, motionAllowed: false),
-            AidenBotWorkingCue(glances: false, badge: true),
-            "under Reduce Motion or Low Power a face wears the still badge"
-        )
-        XCTAssertEqual(aidenBotWorkingCue(working: true, hasPhoto: true, motionAllowed: true), AidenBotWorkingCue(glances: false, badge: true))
-        XCTAssertEqual(aidenBotWorkingCue(working: true, hasPhoto: true, motionAllowed: false), AidenBotWorkingCue(glances: false, badge: true))
-        XCTAssertEqual(aidenBotWorkingCue(working: false, hasPhoto: false, motionAllowed: true), .none)
-        XCTAssertEqual(aidenBotWorkingCue(working: false, hasPhoto: true, motionAllowed: false), .none)
-    }
-
-    func testTheEyesLookLeftThenRightAndBlinkOnTheGlanceTimeline() {
-        XCTAssertEqual(aidenBotFaceGlancePose(at: 0), .still, "t = 0 is the still pose Reduce Motion shows")
-        // 1.28 s is 32% of the 4 s period: held at translateX −2.6 of 24.
-        XCTAssertEqual(aidenBotFaceGlancePose(at: 1.28).dx, -2.6 / 24, accuracy: 0.0005)
-        // 2.4 s is 60%: held at +2.6.
-        XCTAssertEqual(aidenBotFaceGlancePose(at: 2.4).dx, 2.6 / 24, accuracy: 0.0005)
-        // 3.6 s is 90%: the blink's lowest point.
-        XCTAssertEqual(aidenBotFaceGlancePose(at: 3.6).blink, 0.1, accuracy: 0.0005)
-        XCTAssertEqual(aidenBotFaceGlancePose(at: 4).dx, 0, accuracy: 0.0005, "the timeline loops")
     }
 }
 
@@ -5895,7 +5965,7 @@ final class AidenBotAccessRequestsTests: XCTestCase {
     private func section() throws -> [String: Any] {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 65)
+        XCTAssertEqual(root["contractRevision"] as? Int, 70)
         return try XCTUnwrap(root["botAccessRequests"] as? [String: Any])
     }
     private func decode<T: Decodable>(_ type: T.Type, _ object: Any) throws -> T {

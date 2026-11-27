@@ -28,6 +28,7 @@ import { cn } from "../lib/ui-utils";
 import { githubRepositoryUrl } from "../lib/workspace-chip";
 import type { EnvironmentPanelTab } from "../lib/environment-panel-state";
 import { useEnvironmentPanel } from "./environment-panel";
+import { ToolbarPresence, ToolbarPresenceScopeContext } from "./toolbar-presence";
 import { useLinkOpener } from "../lib/link-opener";
 import {
   Button,
@@ -453,6 +454,11 @@ export interface FoldableToolbarAction {
   onSelect(): void;
   disabled?: boolean;
   active?: boolean;
+  /**
+   * False while this chat can't use the action (Terminal with no folder or with
+   * workspace access off). It is then left out of the header and the menu.
+   */
+  available?: boolean;
   /** Shown with the `leading` controls rather than with the tools. */
   placement?: "leading" | "tools";
 }
@@ -461,9 +467,14 @@ export interface FoldableToolbarAction {
  * One quiet button per workspace tool. Each opens the Environment panel on its
  * tab and shows as pressed while that tab is visible; pressing it again hides
  * the panel. Tools a workspace cannot use are left out rather than disabled:
- * Changes needs a Git repository, Files needs a folder, and a chat with no
- * workspace gets none. `leading` sits before the tools and `end` after the
- * overflow menu; both stay visible when the tools fold into that menu.
+ * Changes needs a Git repository, Files a folder with workspace access, and a
+ * chat with no workspace gets none. A tool that becomes usable while the chat
+ * is open slides in, and one that stops being usable slides out
+ * (`ToolbarPresence`). A Git operation keeps the buttons and dims them only once
+ * it has run for `GIT_BUSY_DIM_DELAY_MS`. `leading` sits before the tools and
+ * `end` after the overflow menu; both stay visible when the tools fold into that
+ * menu. `trailing` sits between the tools and the menu and brings its own
+ * divider, so a trailing control that renders nothing leaves none behind.
  * `foldable` actions (Quick View, Terminal) sit at the start of the tools and
  * fold into the menu as well once the header is tight in design mode.
  */
@@ -501,23 +512,26 @@ export function WorkspaceToolButtons({
   const tight = density === "tight" && designOn;
   const available = (id: EnvironmentPanelTab): boolean => {
     if (!hasWorkspace) return false;
-    if (id === "review") return hasFolder && isRepo;
-    if (id === "files") return hasFolder;
+    if (id === "review") return hasFolder && hasFolderAccess && isRepo;
+    if (id === "files") return hasFolder && hasFolderAccess;
     if (id === "devices") return panel.devicesEnabled;
     if (id === "subagents") return panel.subagentsEnabled;
     return true;
   };
-  const blockedReason = (id: EnvironmentPanelTab): string | undefined =>
-    id === "files" && !hasFolderAccess ? "Workspace access is off for this folder" : undefined;
   const showing = (id: EnvironmentPanelTab) => panel.toolsPresented && panel.tab === id;
+  // The buttons dim only after GIT_BUSY_DIM_DELAY_MS, but a running Git operation
+  // refuses them from its first moment, as the ⌘K commands below do.
   const activate = (id: EnvironmentPanelTab) => {
+    if (panel.gitOperationBusy) return;
     if (showing(id)) panel.closeTools();
     else panel.showTools(id);
   };
+  const openFromMenu = (id: EnvironmentPanelTab) => {
+    if (!panel.gitOperationBusy) panel.showTools(id);
+  };
   const buttons = TOOL_BUTTON_ORDER.filter(available);
   // ⌘K "Open Files" and friends open the same tabs the buttons do, while those tools exist here.
-  const commandReady = (id: EnvironmentPanelTab) =>
-    available(id) && !blockedReason(id) && !panel.gitOperationBusy;
+  const commandReady = (id: EnvironmentPanelTab) => available(id) && !panel.gitOperationBusy;
   useCommandHandler("tools.review", () => panel.showTools("review"), commandReady("review"));
   useCommandHandler("tools.files", () => panel.showTools("files"), commandReady("files"));
   useCommandHandler("tools.browser", () => panel.showTools("browser"), commandReady("browser"));
@@ -532,114 +546,117 @@ export function WorkspaceToolButtons({
   const menuTools: EnvironmentPanelTab[] = hasWorkspace
     ? [...(compact ? buttons : []), "context", ...(available("subagents") ? (["subagents"] as const) : [])]
     : [];
-  const menuActions = tight ? foldable : [];
+  const menuActions = tight ? foldable.filter((action) => action.available !== false) : [];
   const shownActions = (placement: "leading" | "tools") =>
     tight
       ? null
       : foldable
           .filter((action) => (action.placement ?? "tools") === placement)
-          .map((action) => <React.Fragment key={action.key}>{action.button}</React.Fragment>);
+          .map((action) => (
+            <ToolbarPresence key={action.key} present={action.available !== false}>
+              {action.button}
+            </ToolbarPresence>
+          ));
 
   return (
-    <div ref={anchorRef} className="flex items-center gap-0.5" data-workspace-tool-buttons>
-      {leading || foldable.some((action) => action.placement === "leading") ? (
-        <>
-          {/* The separator goes when everything leading has folded away or renders nothing. */}
-          <span className="peer/leading flex items-center gap-0.5 empty:hidden">
-            {leading}
-            {shownActions("leading")}
-          </span>
-          <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-separator peer-empty/leading:hidden" />
-        </>
-      ) : null}
-      {shownActions("tools")}
-      {terminalButton}
-      {compact
-        ? null
-        : buttons.map((id) => {
-            const tool = toolDefinition(id);
-            if (!tool) return null;
-            const ToolIcon = tool.icon;
-            const reason = blockedReason(id);
-            const pressed = showing(id);
-            return (
-              <Button
-                key={id}
-                iconOnly
-                size="small"
-                variant="bar"
-                data-workspace-tool={id}
-                aria-label={pressed ? `Hide ${tool.label}` : `Show ${tool.label}`}
-                aria-pressed={pressed}
-                aria-controls="environment-panel"
-                title={reason ?? tool.label}
-                disabled={Boolean(reason) || panel.gitOperationBusy}
-                onClick={() => activate(id)}
-              >
-                <ToolIcon />
-              </Button>
-            );
-          })}
-      {trailing ? (
-        <>
-          <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-separator" />
-          {trailing}
-        </>
-      ) : null}
-      {menuTools.length > 0 || menuActions.length > 0 ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              iconOnly
-              size="small"
-              variant="bar"
-              aria-label="More workspace tools"
-              title="More workspace tools"
-              data-workspace-tools-menu
-              disabled={panel.gitOperationBusy}
-            >
-              <Ellipsis />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-48">
-            {menuActions.map((action) => {
-              const ActionIcon = action.icon;
-              return (
-                <DropdownMenuItem
-                  key={action.key}
-                  disabled={action.disabled}
-                  className={cn(action.active && "text-primary")}
-                  data-folded-toolbar-action={action.key}
-                  onSelect={action.onSelect}
-                >
-                  <ActionIcon aria-hidden="true" className="size-4" />
-                  <span className="min-w-0 flex-1">{action.label}</span>
-                </DropdownMenuItem>
-              );
-            })}
-            {menuActions.length > 0 && menuTools.length > 0 ? <DropdownMenuSeparator /> : null}
-            {menuTools.map((id) => {
+    <ToolbarPresenceScopeContext.Provider value={chatId}>
+      <div
+        ref={anchorRef}
+        className="flex items-center gap-0.5"
+        data-workspace-tool-buttons
+        data-toolbar-presence-bar
+      >
+        {leading || foldable.some((action) => action.placement === "leading") ? (
+          <>
+            {/* The separator goes when everything leading has folded away or renders nothing. */}
+            <span className="peer/leading flex items-center gap-0.5 empty:hidden">
+              {leading}
+              {shownActions("leading")}
+            </span>
+            <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-separator peer-empty/leading:hidden" />
+          </>
+        ) : null}
+        {shownActions("tools")}
+        {terminalButton}
+        {compact
+          ? null
+          : TOOL_BUTTON_ORDER.map((id) => {
               const tool = toolDefinition(id);
               if (!tool) return null;
               const ToolIcon = tool.icon;
-              const reason = blockedReason(id);
+              const pressed = showing(id);
               return (
-                <DropdownMenuItem
-                  key={id}
-                  disabled={Boolean(reason)}
-                  title={reason}
-                  className={cn(showing(id) && "text-primary")}
-                  onSelect={() => panel.showTools(id)}
-                >
-                  <ToolIcon aria-hidden="true" className="size-4" />
-                  <span className="min-w-0 flex-1">{tool.label}</span>
-                </DropdownMenuItem>
+                <ToolbarPresence key={id} present={available(id)}>
+                  <Button
+                    iconOnly
+                    size="small"
+                    variant="bar"
+                    data-workspace-tool={id}
+                    aria-label={pressed ? `Hide ${tool.label}` : `Show ${tool.label}`}
+                    aria-pressed={pressed}
+                    aria-controls="environment-panel"
+                    title={tool.label}
+                    disabled={panel.gitOperationDimmed}
+                    onClick={() => activate(id)}
+                  >
+                    <ToolIcon />
+                  </Button>
+                </ToolbarPresence>
               );
             })}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
-      {end}
-    </div>
+        {trailing}
+        {menuTools.length > 0 || menuActions.length > 0 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                iconOnly
+                size="small"
+                variant="bar"
+                aria-label="More workspace tools"
+                title="More workspace tools"
+                data-workspace-tools-menu
+                disabled={panel.gitOperationDimmed}
+              >
+                <Ellipsis />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-48">
+              {menuActions.map((action) => {
+                const ActionIcon = action.icon;
+                return (
+                  <DropdownMenuItem
+                    key={action.key}
+                    disabled={action.disabled}
+                    className={cn(action.active && "text-primary")}
+                    data-folded-toolbar-action={action.key}
+                    onSelect={action.onSelect}
+                  >
+                    <ActionIcon aria-hidden="true" className="size-4" />
+                    <span className="min-w-0 flex-1">{action.label}</span>
+                  </DropdownMenuItem>
+                );
+              })}
+              {menuActions.length > 0 && menuTools.length > 0 ? <DropdownMenuSeparator /> : null}
+              {menuTools.map((id) => {
+                const tool = toolDefinition(id);
+                if (!tool) return null;
+                const ToolIcon = tool.icon;
+                return (
+                  <DropdownMenuItem
+                    key={id}
+                    className={cn(showing(id) && "text-primary")}
+                    onSelect={() => openFromMenu(id)}
+                  >
+                    <ToolIcon aria-hidden="true" className="size-4" />
+                    <span className="min-w-0 flex-1">{tool.label}</span>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+        {end}
+      </div>
+    </ToolbarPresenceScopeContext.Provider>
   );
 }

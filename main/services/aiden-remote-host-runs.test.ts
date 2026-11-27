@@ -767,3 +767,24 @@ test("revision 61: a phone holding approval:cards gets the typed card and may al
   await service.respondApproval("device-cards", "run-1", "approval-1", { decision: "allow", scope: "chat" }, "key-controller-c-0001", access, { phoneScoped: true, capabilities: carded.capabilities });
   assert.deepEqual(effects.approvals, ["approval-1:allow"]);
 });
+
+test("revision 69: only a phone holding approval:plain-words gets the command's plain words, and no reader sees the raw reading", () => {
+  const { registry, service } = harness();
+  const reading = { explanation: "Runs the project's tests", tags: [{ label: "Uses the internet", tone: "risk" }] };
+  registry.publish("run-1", "chat:approval", approval("approval-1", { summary: "Run command: npm test", details: undefined, reading }));
+  const prompt = (device: Parameters<typeof open>[1]) =>
+    open(service, device, "run-1").frames().find((frame) => frame.event === "approval_required")!.data.payload as Record<string, any>;
+
+  const words = prompt({ ...phone("device-words"), capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "approval:cards", "approval:plain-words"]) });
+  assert.equal(words.card.explanation, "Runs the project's tests");
+  assert.deepEqual(words.card.tags, reading.tags);
+  assert.deepEqual(words.card.body, { format: "command", text: "npm test" });
+
+  const cards = prompt({ ...phone("device-cards"), capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "approval:cards"]) });
+  assert.equal("explanation" in cards.card, false);
+  assert.equal("tags" in cards.card, false);
+
+  for (const reader of [words, cards, prompt(phone("device-plain")), prompt(controller("device-a")), prompt(observer("device-o"))]) {
+    assert.equal("reading" in reader, false);
+  }
+});

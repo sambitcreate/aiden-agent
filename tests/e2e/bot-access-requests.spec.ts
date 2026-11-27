@@ -182,7 +182,7 @@ test("a card's Always becomes a row in Settings → Approvals, and Remove takes 
     });
   }, bot);
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  const card = page.getByRole("region", { name: "Review before Calendar create", exact: true });
+  const card = page.getByRole("region", { name: "Request from Ada: Review before Calendar create", exact: true });
   await expect(card).toContainText("You’ve allowed this 3 times in the last 2 weeks.");
   const draft = page.locator("textarea");
   await draft.fill("Keep this unsent draft");

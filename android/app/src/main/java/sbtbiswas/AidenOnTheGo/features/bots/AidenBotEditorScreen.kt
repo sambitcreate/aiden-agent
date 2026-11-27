@@ -31,11 +31,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import sbtbiswas.AidenOnTheGo.R
-import sbtbiswas.AidenOnTheGo.features.scheduled.aidenScheduledRunFailureIsAmbiguous
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.shared.AidenModelPickerField
 import sbtbiswas.AidenOnTheGo.features.shared.AidenModelRoute
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailureClassification
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
@@ -171,7 +172,7 @@ class AidenBotCreateAttempts(
      */
     fun failed(attempt: AidenBotCreateAttempt, error: Throwable) {
         if (error is AidenBotChatActivityUnreachable) return
-        uncertain = if (aidenScheduledRunFailureIsAmbiguous(error)) attempt else null
+        uncertain = if (AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER)) attempt else null
     }
 
     /** The Mac made [attempt]'s Bot: another Create with the same answers is another Bot. */

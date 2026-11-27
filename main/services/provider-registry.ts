@@ -43,6 +43,7 @@ import {
   withAidenPiCompatibility,
 } from "./pi-provider-compatibility.js";
 import { piModelMetadataFor } from "./pi-model-metadata.js";
+import { piDefaultModelFor } from "./pi-default-models.js";
 import { withBotProviderInventoryMutation } from "./bot-runtime-inventory-publication.js";
 import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
 import { app } from "../platform.js";
@@ -91,7 +92,7 @@ function builtinProviderRecord(
     modelMetadata: Object.fromEntries(
       models.map((model) => [model.id, piModelMetadataFor(provider.id, model)]),
     ),
-    defaultModel: modelIds[0],
+    defaultModel: piDefaultModelFor(provider.id, modelIds),
     // Pi owns the exact auth semantics (including ambient credentials and
     // OAuth). The legacy boolean only controls old renderer availability code.
     needsKey: true,
@@ -163,7 +164,10 @@ export class ProviderRegistry {
             },
           ]),
         ),
-        defaultModel: snapshot.models[0]?.id,
+        defaultModel: piDefaultModelFor(
+          OPENAI_CODEX_PROVIDER_ID,
+          snapshot.models.map((model) => model.id),
+        ),
         needsKey: true,
         deployment: "hosted",
         isBuiltin: true,

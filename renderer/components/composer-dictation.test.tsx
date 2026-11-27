@@ -220,5 +220,7 @@ test("↑ cannot abandon capture before any live words arrive, and works again a
   await act(async () => finishTranscription(""));
   await waitFor(() => assert.equal((screen.getByRole("button", { name: "Start voice input" }) as HTMLButtonElement).disabled, false));
   fireEvent.keyDown(textbox, { key: "ArrowUp" });
-  assert.deepEqual(forks, ["u1"], "a settled empty box can edit the last prompt again");
+  assert.equal(textbox.value, "Plan the release", "a settled empty box can open message history again");
+  assert.ok(screen.getByRole("listbox", { name: "Message history" }), "history popover opens after decode settles");
+  assert.deepEqual(forks, [], "browsing history does not fork until requested");
 });

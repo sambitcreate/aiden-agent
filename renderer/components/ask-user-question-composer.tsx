@@ -167,6 +167,9 @@ export function AskUserQuestionComposer({
   return (
     <div
       data-browser-composer-inset="true"
+      // While a question waits, it stands in for the message box, so F6 and
+      // anything that brings focus back to the message box land on it.
+      data-focus-region="composer"
       className="aiden-dock-inset chat-content-column min-w-0 pb-4 pt-3 sm:pb-5"
     >
       <section
@@ -233,6 +236,9 @@ export function AskUserQuestionComposer({
                 ref={(element) => {
                   optionRefs.current[optionIndex] = element;
                 }}
+                data-focus-region-entry={
+                  !customOpen && optionIndex === focusRow.current ? "true" : undefined
+                }
                 type="button"
                 aria-pressed={!question.multiSelect ? selected : undefined}
                 role={question.multiSelect ? "checkbox" : undefined}
@@ -295,6 +301,7 @@ export function AskUserQuestionComposer({
                 <Pencil className="mb-2 size-4 shrink-0 text-secondary" />
                 <textarea
                   ref={customRef}
+                  data-focus-region-entry="true"
                   value={customDraft}
                   rows={1}
                   maxLength={4_000}

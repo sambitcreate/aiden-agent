@@ -4,6 +4,9 @@
 // render no longer waits for them serially after module evaluation.
 
 import "../styles.css";
+// Bot heads can also live inside this window (window-host.tsx); their styles load
+// here so the component module stays importable by node tests.
+import "../bot-bubbles/bot-bubbles.css";
 import { invoke } from "../lib/ipc-bridge";
 import { applyCachedAppearance } from "../lib/appearance-runtime";
 import { installInputModality } from "../lib/input-modality";

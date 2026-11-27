@@ -19,8 +19,6 @@ import {
   gitApi,
   localVoiceApi,
   mcpApi,
-  modelInsightsApi,
-  modelPaceApi,
   modelsApi,
   profileApi,
   providersApi,
@@ -45,7 +43,6 @@ import type {
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
   ModelInfo,
-  ModelInsightsStatus,
   Provider,
   Chat,
   GitHubPullRequestStatus,
@@ -87,8 +84,6 @@ export const queryKeys = {
   keepAwakeStatus: ["keepAwakeStatus"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
   formFillStatus: ["formFillStatus"] as const,
-  modelInsightsStatus: ["modelInsightsStatus"] as const,
-  modelPaceSummaries: ["modelPaceSummaries"] as const,
   modelCatalogStatus: ["modelCatalogStatus"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   profile: ["profile"] as const,
@@ -184,37 +179,6 @@ export function upsertCreatedWorkspaceInCache(
     return;
   }
   void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces });
-}
-
-async function cancelModelInsightsReads(queryClient: QueryClient): Promise<void> {
-  await Promise.all([
-    queryClient.cancelQueries({ queryKey: queryKeys.modelInsightsStatus }),
-    queryClient.cancelQueries({ queryKey: ["modelInfo"] }),
-  ]);
-}
-
-export async function beginModelInsightsAction(queryClient: QueryClient): Promise<void> {
-  await cancelModelInsightsReads(queryClient);
-}
-
-export async function commitModelInsightsState(
-  queryClient: QueryClient,
-  status: ModelInsightsStatus,
-): Promise<void> {
-  await cancelModelInsightsReads(queryClient);
-  queryClient.removeQueries({ queryKey: ["modelInfo"], type: "inactive" });
-  queryClient.setQueryData(queryKeys.modelInsightsStatus, status);
-  await queryClient.resetQueries({ queryKey: ["modelInfo"], type: "active" });
-}
-
-export async function refreshModelInsightsState(
-  queryClient: QueryClient,
-  readStatus: () => Promise<ModelInsightsStatus> = modelInsightsApi.status,
-): Promise<ModelInsightsStatus> {
-  await cancelModelInsightsReads(queryClient);
-  const status = await readStatus();
-  await commitModelInsightsState(queryClient, status);
-  return status;
 }
 
 export function useProviders() {
@@ -827,44 +791,6 @@ export function useKeepAwakeStatus() {
     };
   }, [queryClient]);
   return useQuery({ queryKey: queryKeys.keepAwakeStatus, queryFn: () => scheduleApi.keepAwakeStatus() });
-}
-
-/** Reads device-local Model Pad credential/cache state; never fetches benchmark data. */
-export function useModelInsightsStatus() {
-  return useQuery({
-    queryKey: queryKeys.modelInsightsStatus,
-    queryFn: modelInsightsApi.status,
-    retry: false,
-    staleTime: Number.POSITIVE_INFINITY,
-    refetchOnWindowFocus: false,
-  });
-}
-
-/**
- * Device-local measured pace per `${providerId}::${modelId}`; re-read whenever a
- * Pad surface mounts. A surface that stays mounted can pass `enabled` (only read
- * while visible) and `staleTime: 0` to read again each time it is shown.
- */
-export function useModelPaceSummaries(options: { enabled?: boolean; staleTime?: number } = {}) {
-  return useQuery({
-    queryKey: queryKeys.modelPaceSummaries,
-    queryFn: modelPaceApi.summaries,
-    enabled: options.enabled ?? true,
-    retry: false,
-    staleTime: options.staleTime ?? 30_000,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: false,
-  });
-}
-
-/** Forget every measured speed, then drop the cached summaries so every Pad re-reads. */
-export async function clearModelPaceSummaries(
-  queryClient: QueryClient,
-  clear: () => Promise<void> = modelPaceApi.clear,
-): Promise<void> {
-  await queryClient.cancelQueries({ queryKey: queryKeys.modelPaceSummaries });
-  await clear();
-  await queryClient.invalidateQueries({ queryKey: queryKeys.modelPaceSummaries });
 }
 
 /** How often a surface waiting on macOS permissions forces a fresh Computer Use probe. */

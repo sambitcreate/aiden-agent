@@ -62,6 +62,8 @@ import {
   botFailedTurnId,
   botQuestionAnswerText,
   botLastReplyAt,
+  botRecentReplyTimes,
+  botLastTurnEnd,
   botTranscriptPreview,
   type BotLiveActivity,
   type BotLiveEvent,
@@ -1079,8 +1081,6 @@ export interface BotLiveProjection {
   refreshActivity(botId: string): Promise<void>;
   /** Preview, time and state for a list row. */
   summary(botId: string): Promise<BotLiveSummary>;
-  /** Host-feed signals from runtime state and an already-open feed only. */
-  inboxSignals(botId: string): Promise<Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt">>;
   /**
    * The summary's `needsYou` alone, without reading the transcript: an open
    * question, hand-off, access request, pending plan, approval or issue, and never for an unavailable Bot
@@ -1130,6 +1130,11 @@ interface Feed {
    */
   projectedFrom: readonly EntryRecord[] | undefined;
   runActive: boolean;
+  /**
+   * Whether the current run's end was already reported (`onRunSettled`), so a
+   * frame and the opening reconciliation don't both report it. A new run clears it.
+   */
+  settled: boolean;
   /** Identity of the current run; a follow-up turn replaces the run without a gap. */
   runKey: string | null;
   watch: ActiveConversationWatch;
@@ -1162,7 +1167,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   // edit) appends an entry, so one newest-entry read tells a list refresh (the
   // Remote host feed asks on every chat or Bot change) whether the transcript
   // needs reading again.
-  type BotTranscriptSummary = Pick<BotLiveSummary, "preview" | "updatedAt" | "lastReplyAt">;
+  type BotTranscriptSummary = Pick<BotLiveSummary, "preview" | "updatedAt" | "lastReplyAt" | "recentReplyAt" | "lastTurnEnd">;
   const transcriptSummaries = new Map<string, { key: string } & BotTranscriptSummary>();
 
   async function transcriptSummary(botId: string, conversation: Conversation): Promise<BotTranscriptSummary> {
@@ -1176,10 +1181,13 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     const view = await conversation.context(BACKGROUND_CONTEXT);
     const entries = projectBotTranscript(view.entries);
     const preview = botTranscriptPreview(entries);
+    const lastTurnEnd = botLastTurnEnd(entries);
     const summary: BotTranscriptSummary = {
       preview: preview?.text ?? null,
       updatedAt: preview?.at ?? null,
       lastReplyAt: botLastReplyAt(entries),
+      recentReplyAt: botRecentReplyTimes(entries),
+      ...(lastTurnEnd ? { lastTurnEnd } : {}),
     };
     transcriptSummaries.set(botId, { key, ...summary });
     return summary;
@@ -1190,6 +1198,12 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   const lastSeq = new Map<string, number>();
 
   const report = (botId: string, error: unknown) => deps.onError?.(botId, error);
+  /**
+   * Feed openings that failed, by their error (every notice that joined one sees
+   * the same error): reported once, and the run settled once for whichever
+   * joined notice was a running one, whatever order the notices came in.
+   */
+  const failedOpenings = new WeakMap<object, { settling: boolean }>();
   const classifyRetryMs = deps.classifyRetryMs ?? 1_000;
 
   function snapshotOf(feed: Feed): BotLiveSnapshot {
@@ -1385,6 +1399,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       return;
     }
     feed.runActive = runActive;
+    if (runActive) feed.settled = false;
     // The run's end is reported with its new state, so the line never flashes a phase after the reply.
     const state = await deps.state(feed.botId).catch(() => feed.state);
     setState(feed, state);
@@ -1393,7 +1408,10 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       feed.stopping = false;
       feed.resuming = false;
       resumingBots.delete(feed.botId);
-      deps.onRunSettled?.(feed.botId, state);
+      if (!feed.settled) {
+        feed.settled = true;
+        deps.onRunSettled?.(feed.botId, state);
+      }
       void closeIfUnwatched(feed);
     }
   }
@@ -1402,7 +1420,10 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     if (JSON.stringify(state) === JSON.stringify(feed.state)) return;
     const wasRunning = feed.state.kind === "running";
     feed.state = state;
-    if (state.kind === "running" && !wasRunning) startRun(feed);
+    if (state.kind === "running" && !wasRunning) {
+      feed.settled = false;
+      startRun(feed);
+    }
     if (state.kind !== "running") {
       feed.stopping = false;
       feed.resuming = false;
@@ -1462,6 +1483,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         frame: { entries: initial.entries, docs: initial.docs },
         projectedFrom: projected.stable ? initial.entries : undefined,
         runActive: liveRunActive(initial.docs),
+        settled: false,
         runKey: liveRunKey(initial.docs),
         watch,
         cancel: () => cancel(new Error("Bot live feed closed.")),
@@ -1473,12 +1495,21 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       else runStarts.ended(botId);
       feed.activity = computeActivity(feed);
       feed.queued = await queuedFor(feed, initial.docs);
-      feeds.set(botId, feed);
-      watch.start((value) => enqueueWork(feed, () => onFrame(feed, value.entries, value.docs)));
-      void watch.closed.then(() => {
+      const end = () => {
         feed.ended = true;
         if (feeds.get(botId) === feed) feeds.delete(botId);
-      });
+      };
+      feeds.set(botId, feed);
+      void watch.closed.then(end);
+      try {
+        watch.start((value) => enqueueWork(feed, () => onFrame(feed, value.entries, value.docs)));
+      } catch (error) {
+        // The conversation closed while the feed opened (a pause can): this feed
+        // never follows it, so it isn't kept with the state it read.
+        end();
+        feed.cancel();
+        throw error;
+      }
       return feed;
     })();
     opening.set(botId, promise);
@@ -1618,8 +1649,43 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const wanted = state.kind === "running" || (subscribers.get(botId)?.size ?? 0) > 0;
       if (!wanted || state.kind === "unavailable") return;
       void openFeed(botId).then(
-        (opened) => enqueueWork(opened, async () => setState(opened, state)),
-        (error) => report(botId, error),
+        (opened) =>
+          enqueueWork(opened, async () => {
+            // A notice that arrived while the feed opened may be older or newer
+            // than the state it read, so neither is trusted: the state is read
+            // again now, after every notice so far. A run that ended (or paused,
+            // or was interrupted) while it opened is reported settled.
+            const latest = await deps.state(botId).catch(() => opened.state);
+            setState(opened, latest);
+            // A run whose last frame is still to come is reported by that frame
+            // or here, whichever is first; a paused run's frame may never come.
+            if (state.kind === "running" && latest.kind !== "running" && !opened.settled) {
+              opened.settled = true;
+              deps.onRunSettled?.(opened.botId, latest);
+              void closeIfUnwatched(opened);
+            }
+          }),
+        (error) => {
+          // Every notice that joined the same opening sees the same error: the
+          // failure is reported once, and a run is settled once if any of them
+          // was a running notice, even one that joined behind an idle or paused one.
+          let failed = typeof error === "object" && error !== null ? failedOpenings.get(error) : undefined;
+          if (!failed) {
+            failed = { settling: false };
+            if (typeof error === "object" && error !== null) failedOpenings.set(error, failed);
+            report(botId, error);
+          }
+          // A pause can stop the conversation's watch while the feed opens, so
+          // the feed never opens; a run that ended meanwhile is still reported.
+          if (state.kind !== "running" || failed.settling) return;
+          failed.settling = true;
+          void deps.state(botId).then(
+            (latest) => {
+              if (latest.kind !== "running") deps.onRunSettled?.(botId, latest);
+            },
+            (stateError) => report(botId, stateError),
+          );
+        },
       );
     },
 
@@ -1690,16 +1756,6 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       return needsYouNow(botId);
     },
 
-    async inboxSignals(botId) {
-      const feed = feeds.get(botId);
-      const state = feed && !feed.ended ? feed.state : await deps.state(botId);
-      return {
-        state,
-        needsYou: state.kind !== "unavailable" && await needsYouNow(botId),
-        lastReplyAt: feed && !feed.ended ? botLastReplyAt(feed.entries) : null,
-      };
-    },
-
     async summary(botId) {
       // Read right before each return, so a slow summary never reports a stale wait. It uses the
       // same sources as the chat, so a row agrees with it whether or not a chat is open.
@@ -1707,6 +1763,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       if (feed && !feed.ended) {
         await feed.queue;
         const preview = botTranscriptPreview(feed.entries);
+        const lastTurnEnd = botLastTurnEnd(feed.entries);
         return {
           botId,
           preview: preview?.text ?? null,
@@ -1714,6 +1771,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
           state: feed.state,
           needsYou: await needsYouNow(botId),
           lastReplyAt: botLastReplyAt(feed.entries),
+          recentReplyAt: botRecentReplyTimes(feed.entries),
+          ...(lastTurnEnd ? { lastTurnEnd } : {}),
         };
       }
       const state = await deps.state(botId);

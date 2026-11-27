@@ -31,11 +31,17 @@ import {
 import type { SubagentEffectActivityV1, SubagentRunSnapshot } from "../shared/subagent-runs";
 import { SubagentMark, subagentStateLabel } from "./subagent-chips";
 import { SubagentDetail } from "./subagent-detail";
+import { SubagentHelperChat, type SubagentHelperChatApproval } from "./subagent-helper-chat";
+import type { MergedSubagentTranscript } from "../shared/subagent-transcript";
 import {
   SubagentOwnerFocusBoundary,
   useSubagentSelectionRestoreRunRepair,
 } from "./subagent-owner-focus-boundary";
 import { SubagentRoster } from "./subagent-roster";
+import {
+  SUBAGENT_TRANSCRIPT_REFRESH_ERROR,
+  subagentHelperTranscriptRefetchReason,
+} from "../lib/subagent-helper-chat-state";
 import { Button, Callout, Text } from "./ui";
 
 export function resolveSubagentSelection(
@@ -43,6 +49,35 @@ export function resolveSubagentSelection(
   requestedRunId: string | null | undefined,
 ): string | null {
   return resolveRunViewSelection(requestedRunId ?? undefined, runs) ?? null;
+}
+
+/** What the panel needs to show a helper's own conversation. */
+export interface SubagentsPanelHelperChat {
+  /** The saved conversation merged with what has streamed since. */
+  transcriptFor: (runId: string) => MergedSubagentTranscript;
+  approvalFor?: (run: SubagentRunSnapshot) => SubagentHelperChatApproval | null;
+  onAskRetry?: (text: string) => void;
+  onExpand?: (runId: string, opener: HTMLElement) => void;
+  /** Close the side panel. */
+  onClose?: () => void;
+  /** The helper whose chat fills the main pane; the panel shows a placeholder for it. */
+  expandedRunId?: string | null;
+  /** Return the expanded helper chat to this panel. */
+  onCollapse?: () => void;
+  /** Whether this window receives the helper's streamed updates. */
+  streamingHere?: (runId: string) => boolean;
+  /**
+   * Read the helper's saved conversation again, once per reason (see
+   * `subagentHelperTranscriptRefetchReason`).
+   */
+  onTranscriptIncomplete?: (runId: string, reason: string) => void;
+  /** The helper's last saved-conversation read failed. */
+  transcriptRefreshFailed?: (runId: string) => boolean;
+  onRetryTranscript?: (runId: string) => void;
+  /** Bring focus to the main chat's approval card without leaving this panel. */
+  onFocusMainApproval?: () => void;
+  /** Whether a helper this one started is still active. */
+  hasActiveHelpers?: (runId: string) => boolean;
 }
 
 export interface SubagentsPanelProps {
@@ -71,6 +106,8 @@ export interface SubagentsPanelProps {
    */
   contextUsageByRunId?: SubagentContextUsageByRunId;
   ownerReplacementFallbackFocusTarget?: () => HTMLElement | null;
+  /** Show a helper's conversation when one is saved or streaming; otherwise the summary. */
+  helperChat?: SubagentsPanelHelperChat;
   className?: string;
 }
 
@@ -171,6 +208,7 @@ function OwnedSubagentsPanel({
   active = true,
   compact = false,
   contextUsageByRunId,
+  helperChat,
   className,
 }: SubagentsPanelProps) {
   const ownerKey = subagentPanelOwnerKey(chatId, workspaceId);
@@ -372,6 +410,40 @@ function OwnedSubagentsPanel({
     });
   };
 
+  const helperTranscript =
+    helperChat && detailSnapshot ? helperChat.transcriptFor(detailSnapshot.runId) : null;
+  // A gap in the streamed updates, a running helper opened before anything
+  // reached this window, or a run that moved while its updates stream to
+  // another window, is read once per reason.
+  const helperRefetchReason =
+    helperTranscript && detailSnapshot
+      ? subagentHelperTranscriptRefetchReason(
+          detailSnapshot,
+          helperTranscript,
+          helperChat?.streamingHere?.(detailSnapshot.runId) ?? true,
+        )
+      : null;
+  const transcriptRefreshFailed = Boolean(
+    detailSnapshot && helperChat?.transcriptRefreshFailed?.(detailSnapshot.runId),
+  );
+  const helperRefreshError =
+    savedDetailRefreshError ?? (transcriptRefreshFailed ? SUBAGENT_TRANSCRIPT_REFRESH_ERROR : null);
+  const retryHelperRefresh = (runId: string) => {
+    if (savedDetailRefreshError) onRetryDetail?.(runId);
+    else helperChat?.onRetryTranscript?.(runId);
+  };
+  const canRetryHelperRefresh = savedDetailRefreshError
+    ? Boolean(onRetryDetail)
+    : Boolean(helperChat?.onRetryTranscript);
+  const helperExpandedHere =
+    Boolean(helperChat?.expandedRunId) && helperChat?.expandedRunId === detailSnapshot?.runId;
+  const onTranscriptIncomplete = helperChat?.onTranscriptIncomplete;
+  const helperRefetchRunId = helperRefetchReason ? detailSnapshot?.runId : undefined;
+  React.useEffect(() => {
+    if (!active || !helperRefetchRunId || !helperRefetchReason) return;
+    onTranscriptIncomplete?.(helperRefetchRunId, helperRefetchReason);
+  }, [active, helperRefetchRunId, helperRefetchReason, onTranscriptIncomplete]);
+
   const detailRegion = selectedRun ? (
     <div
       className="min-h-0 min-w-0 flex-1"
@@ -385,7 +457,52 @@ function OwnedSubagentsPanel({
           nextTarget instanceof Node && event.currentTarget.contains(nextTarget);
       }}
     >
-      {detailSnapshot ? (
+      {detailSnapshot && helperExpandedHere ? (
+        <section
+          key={`${detailSnapshot.runId}:expanded`}
+          className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 py-10 text-center"
+          data-subagent-helper-expanded-placeholder="true"
+        >
+          <h2
+            ref={detailHeadingRef}
+            tabIndex={-1}
+            data-subagent-detail-heading="true"
+            className="rounded-sm text-strong font-medium text-primary outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          >
+            Showing in the main chat
+          </h2>
+          <Text as="p" variant="small" color="secondary" className="max-w-sm break-words">
+            {`\u201c${detailSnapshot.label}\u201d is open in the main chat.`}
+          </Text>
+        </section>
+      ) : detailSnapshot && helperChat && helperTranscript?.transcript ? (
+        <SubagentHelperChat
+          key={detailSnapshot.runId}
+          ref={detailHeadingRef}
+          run={detailSnapshot}
+          transcript={helperTranscript.transcript}
+          presentation={selectedPresentation}
+          approval={helperChat.approvalFor?.(detailSnapshot) ?? null}
+          onFocusMainApproval={helperChat.onFocusMainApproval}
+          hasActiveHelpers={helperChat.hasActiveHelpers?.(detailSnapshot.runId) ?? false}
+          onStop={onStopRun}
+          stopPending={selectedStopPending}
+          stopError={selectedStopError}
+          onAskRetry={helperChat.onAskRetry}
+          onExpand={
+            helperChat.onExpand
+              ? (opener) => helperChat.onExpand?.(detailSnapshot.runId, opener)
+              : undefined
+          }
+          onClose={helperChat.onClose}
+          refreshError={helperRefreshError}
+          onRetryRefresh={
+            canRetryHelperRefresh ? () => retryHelperRefresh(selectedRun.runId) : undefined
+          }
+          contextUsage={activeContextUsage.get(detailSnapshot.runId)}
+          now={now}
+        />
+      ) : detailSnapshot ? (
         <SubagentDetail
           key={detailSnapshot.runId}
           ref={detailHeadingRef}
@@ -396,8 +513,11 @@ function OwnedSubagentsPanel({
           stopError={selectedStopError}
           presentation={selectedPresentation}
           refreshing={savedDetailRefreshing}
-          refreshError={savedDetailRefreshError}
-          onRetryRefresh={onRetryDetail ? () => onRetryDetail(selectedRun.runId) : undefined}
+          refreshError={helperRefreshError}
+          refreshErrorKind={savedDetailRefreshError ? "detail" : "conversation"}
+          onRetryRefresh={
+            canRetryHelperRefresh ? () => retryHelperRefresh(selectedRun.runId) : undefined
+          }
           now={now}
           contextUsage={activeContextUsage.get(detailSnapshot.runId)}
         />

@@ -113,18 +113,18 @@ class AidenBotChatPresentationTest {
         fun motion(photo: Boolean = false, reduce: Boolean = false, saver: Boolean = false, resumed: Boolean = true, working: Boolean = true) =
             aidenBotFaceMotion(working = working, photo = photo, reduceMotion = reduce, powerSave = saver, resumed = resumed)
 
-        // A canonical face glances; nothing else is needed.
-        assertEquals(AidenBotFaceMotion(glances = true, badge = false, badgeAnimates = false), motion())
-        // R19: a face held still by Reduce Motion or battery saver wears the still glance badge.
-        assertEquals(AidenBotFaceMotion(glances = false, badge = true, badgeAnimates = false), motion(reduce = true))
-        assertEquals(AidenBotFaceMotion(glances = false, badge = true, badgeAnimates = false), motion(saver = true))
-        // A photo can't glance: its badge moves, unless motion is off.
-        assertEquals(AidenBotFaceMotion(glances = false, badge = true, badgeAnimates = true), motion(photo = true))
-        assertEquals(AidenBotFaceMotion(glances = false, badge = true, badgeAnimates = false), motion(photo = true, reduce = true))
+        // A sprite plays its state's motion; nothing else is needed.
+        assertEquals(AidenBotFaceMotion(animates = true, badge = false, badgeAnimates = false), motion())
+        // R19: Reduce Motion and battery saver hold the sprite on its still pose, which still shows the state.
+        assertEquals(AidenBotFaceMotion(animates = false, badge = false, badgeAnimates = false), motion(reduce = true))
+        assertEquals(AidenBotFaceMotion(animates = false, badge = false, badgeAnimates = false), motion(saver = true))
+        // A photo has no sprite to move: it wears the badge, which moves unless motion is off.
+        assertEquals(AidenBotFaceMotion(animates = false, badge = true, badgeAnimates = true), motion(photo = true))
+        assertEquals(AidenBotFaceMotion(animates = false, badge = true, badgeAnimates = false), motion(photo = true, reduce = true))
         // In the background nothing moves.
-        assertFalse(motion(resumed = false).glances)
+        assertFalse(motion(resumed = false).animates)
         assertFalse(motion(photo = true, resumed = false).badgeAnimates)
         // An idle Bot shows nothing.
-        assertEquals(AidenBotFaceMotion(glances = false, badge = false, badgeAnimates = false), motion(working = false, reduce = true))
+        assertEquals(AidenBotFaceMotion(animates = false, badge = false, badgeAnimates = false), motion(working = false, reduce = true))
     }
 }

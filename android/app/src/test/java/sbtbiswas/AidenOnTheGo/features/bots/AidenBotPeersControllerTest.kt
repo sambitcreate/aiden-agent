@@ -52,6 +52,13 @@ class AidenBotPeersControllerTest {
             val p=Phone();val c=p.controller();c.load();c.setDraft("Draft")
             p.host.write={if(failure is AidenPeerError)AidenPeerMutationResult(false,code=failure,error="Publication unconfirmed") else throw failure as Exception};c.saveDescription();assertNotNull(c.state.value.pending)
         }
+        // A first 409 revision_conflict proves the description was never written.
+        run {
+            val p=Phone();val c=p.controller();c.load();c.setDraft("Draft")
+            p.host.write={throw AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.REVISION_CONFLICT,"Changed","req",false))}
+            c.saveDescription();assertNull(c.state.value.pending);assertEquals(AidenRoutineControlProblem.FAILED,c.state.value.problem)
+            assertNull("a cleared attempt does not come back after restart",p.controller().state.value.pending)
+        }
         val p=Phone();val c=p.controller();c.load();c.setDraft("Draft");p.host.write={AidenPeerMutationResult(false,code=AidenPeerError.CONFLICT,error="Changed",snapshot=p.host.settings.copy(revision="next"))};c.saveDescription()
         assertNull(c.state.value.pending);assertTrue(c.state.value.needsReview);assertEquals("Draft",c.state.value.draft);assertFalse(c.saveAllowed())
         c.reviewKeepingDraft();assertEquals("next",c.state.value.baseline!!.revision);assertTrue(c.saveAllowed())
@@ -136,6 +143,32 @@ class AidenBotPeersControllerTest {
         val p=Phone();p.journal("bot_planner|stop|exchange_one").write("{malformed")
         val c=p.controller();c.openExchange("exchange_one");c.stop();c.retryStop();assertTrue(p.host.stops.isEmpty());assertEquals(0,p.nonces);assertEquals(AidenRoutineControlProblem.STORAGE,c.state.value.problem)
         assertEquals("{malformed",p.journal("bot_planner|stop|exchange_one").read())
+    }
+
+    @Test fun stopClearStorageFailurePreservesStorageProblemAndBlocksFurtherWrites()=runTest {
+        for(httpFailure in listOf(true,false)) {
+            val p=Phone();var failClear=false;var savedStop:String?=null
+            val flakyStopJournal=object:AidenBotWatchJournal {
+                override fun read():String?=savedStop
+                override fun write(record:String?) {
+                    if(failClear) throw IOException("stop journal locked")
+                    savedStop=record
+                }
+            }
+            val c=AidenBotPeersController("bot_planner",p.host,{true},{true},{true},p.journal(),{flakyStopJournal},{PEER_NONCE},{p.clock})
+            c.openExchange("exchange_one")
+            p.host.stopping={
+                failClear=true
+                if(httpFailure) throw denied()
+                else AidenPeerStopResult(false,code=AidenPeerError.NOT_FOUND,error="Gone")
+            }
+            c.stop()
+            assertNotNull(c.state.value.pendingStop)
+            assertEquals(AidenRoutineControlProblem.STORAGE,c.state.value.problem)
+            failClear=false
+            c.retryStop()
+            assertEquals("storage-blocked stop controller must not retransmit",1,p.host.stops.size)
+        }
     }
 
 }
