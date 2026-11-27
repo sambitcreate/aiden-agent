@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { recordOf as record } from "../../shared/guards.js";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -47,10 +48,6 @@ export interface RunStart {
 
 const FINGERPRINT = /^[0-9a-f]{32}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
 
 function parseContext(raw: unknown): ExceptionContext | undefined {
   const context = record(raw);

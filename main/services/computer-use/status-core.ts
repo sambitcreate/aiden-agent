@@ -1,4 +1,5 @@
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { settleWithin } from "../../shared/async-timeout.js";
 import type { ComputerUseStatus } from "../types.js";
 import {
   CUA_DRIVER_TCC_HOST_BUNDLE_ID,
@@ -214,18 +215,6 @@ function readinessStatus(
     driverVersion: CUA_DRIVER_VERSION,
     permissions: { accessibility, screenRecording },
   };
-}
-
-async function settleWithin(promise: Promise<unknown>, milliseconds: number): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([
-    promise.catch(() => undefined),
-    new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, milliseconds);
-      timer.unref();
-    }),
-  ]);
-  if (timer) clearTimeout(timer);
 }
 
 function requestCancelledError(signal?: AbortSignal): CuaDriverError {

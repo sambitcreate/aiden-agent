@@ -1,4 +1,5 @@
 import { randomUUID as nodeRandomUUID } from "node:crypto";
+import { settleWithin as within } from "../../shared/async-timeout.js";
 
 import type { PostHogTransport } from "./analytics-client.js";
 import {
@@ -111,17 +112,6 @@ export function localDay(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${date.getFullYear()}-${month}-${day}`;
-}
-
-function within(promise: Promise<unknown>, ms: number): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    promise.then(() => undefined, () => undefined),
-    new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, ms);
-      timer.unref?.();
-    }),
-  ]).finally(() => clearTimeout(timer));
 }
 
 // `AIDEN_ANALYTICS_DEBUG=1` in development: run every message through the same
