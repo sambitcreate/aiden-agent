@@ -31,6 +31,7 @@ import type {
   PeerRunFrameMessage,
 } from "../../renderer/shared/peer-host.js";
 import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
+import { FakeTimers } from "./peer-timers-test-support.js";
 
 const CAPABILITIES = ["chat:read", "chat:write", "host:events", "runs:observe", "runs:control"];
 const FEATURES = ["host-events-v1", "run-streams-v1", "run-control-v1"];
@@ -43,28 +44,6 @@ const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 function streamState(messages: readonly PeerRunFrameMessage[]): string | undefined {
   const states = messages.flatMap((message) => (message.kind === "state" ? [message.state] : []));
   return last(states);
-}
-
-class FakeTimers {
-  now = 1_000_000;
-  private next = 1;
-  private readonly pending = new Map<number, { at: number; callback: () => void }>();
-  set = (callback: () => void, ms: number): unknown => {
-    const id = this.next++;
-    this.pending.set(id, { at: this.now + ms, callback });
-    return id;
-  };
-  clear = (handle: unknown): void => {
-    this.pending.delete(handle as number);
-  };
-  advance(ms: number): void {
-    this.now += ms;
-    for (const [id, timer] of [...this.pending].sort((a, b) => a[1].at - b[1].at)) {
-      if (timer.at > this.now || !this.pending.has(id)) continue;
-      this.pending.delete(id);
-      timer.callback();
-    }
-  }
 }
 
 /** Lets promise chains and SSE pumps run to quiescence. */
@@ -334,7 +313,7 @@ function stored(id: string, enabled = true): StoredPeerHost {
 }
 
 function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id)), client?: (host: FakeHost, trust: PeerTrust) => PeerClient) {
-  const timers = new FakeTimers();
+  const timers = new FakeTimers(1_000_000);
   const byId = new Map(hosts.map((host) => [host.id, host]));
   let saved = records;
   const registry = new PeerHostRegistry({
@@ -1183,7 +1162,7 @@ test("unavailable alternate discovery stops after its two bounded collection rea
 });
 
 test("a registry change during a preferred-route check keeps one 30-second check per tick", async () => {
-  const timers = new FakeTimers();
+  const timers = new FakeTimers(1_000_000);
   const view: PeerHostView = {
     id: "host_route_check",
     name: "Route check",
@@ -1469,7 +1448,7 @@ test("a paired private-CA .local host retries TLS collisions via backoff, Reconn
 
   // 5. A standalone PeerManagerRegistry stub also distinguishes TLS-sourced LAN failures from instance mismatches.
   {
-    const timers = new FakeTimers();
+    const timers = new FakeTimers(1_000_000);
     const lanView: PeerHostView = {
       id: "host_stub_lan",
       name: "Stub LAN",
@@ -1530,7 +1509,7 @@ test("real-TLS key rotation on a paired .local LAN host keeps rejecting while re
   const { startPeerTestHost } = await import("./peer-pairing-test-host.js");
 
   const host = await startPeerTestHost({ lanHostname: "studio-real.local" });
-  const timers = new FakeTimers();
+  const timers = new FakeTimers(1_000_000);
   const lanAddresses = new PeerLanAddresses((hostname, options, callback) => {
     assert.equal(hostname, "studio-real.local");
     if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]);

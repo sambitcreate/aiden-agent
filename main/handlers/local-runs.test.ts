@@ -11,31 +11,7 @@ import {
   detachedLifecycleChatProjection,
   isDetachedLifecycleChatDraining,
 } from "../../renderer/lib/chat-terminal-sync.js";
-
-class FakeTimers {
-  private now = 0;
-  private next = 1;
-  private readonly pending = new Map<number, { at: number; callback: () => void }>();
-  set = (callback: () => void, ms: number): unknown => {
-    const id = this.next++;
-    this.pending.set(id, { at: this.now + ms, callback });
-    return id;
-  };
-  clear = (handle: unknown): void => {
-    this.pending.delete(handle as number);
-  };
-  get size(): number {
-    return this.pending.size;
-  }
-  advance(ms: number): void {
-    this.now += ms;
-    for (const [id, timer] of [...this.pending].sort((a, b) => a[1].at - b[1].at)) {
-      if (timer.at > this.now || !this.pending.has(id)) continue;
-      this.pending.delete(id);
-      timer.callback();
-    }
-  }
-}
+import { FakeTimers } from "../services/peer-timers-test-support.js";
 
 /** One renderer main-frame document; `navigate` invalidates it like a reload. */
 class FakeDocument implements LocalRunOwner {

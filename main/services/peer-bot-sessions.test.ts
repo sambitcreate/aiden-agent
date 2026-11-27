@@ -6,28 +6,7 @@ import { PEER_BOT_SESSION_CHANNEL } from "./peer-bot-sessions.js";
 import { PeerTransportError, type PeerRequest, type PeerStreamEnd } from "./peer-transport.js";
 import type { PeerHostView } from "../../renderer/shared/peer-host.js";
 import type { PeerBotSessionMessage } from "../../renderer/shared/peer-bot-session.js";
-
-class FakeTimers {
-  now = 1_000_000;
-  private next = 1;
-  private readonly pending = new Map<number, { at: number; callback: () => void }>();
-  set = (callback: () => void, ms: number): unknown => {
-    const id = this.next++;
-    this.pending.set(id, { at: this.now + ms, callback });
-    return id;
-  };
-  clear = (handle: unknown): void => {
-    this.pending.delete(handle as number);
-  };
-  advance(ms: number): void {
-    this.now += ms;
-    for (const [id, timer] of [...this.pending].sort((a, b) => a[1].at - b[1].at)) {
-      if (timer.at > this.now || !this.pending.has(id)) continue;
-      this.pending.delete(id);
-      timer.callback();
-    }
-  }
-}
+import { FakeTimers } from "./peer-timers-test-support.js";
 
 async function settle(): Promise<void> {
   for (let round = 0; round < 25; round += 1) await new Promise((resolve) => setImmediate(resolve));
@@ -85,7 +64,7 @@ interface OpenStream {
 }
 
 function harness(view: PeerHostView = VIEW) {
-  const timers = new FakeTimers();
+  const timers = new FakeTimers(1_000_000);
   const streams: OpenStream[] = [];
   const messages: PeerBotSessionMessage[] = [];
   const registry: PeerManagerRegistry = {
