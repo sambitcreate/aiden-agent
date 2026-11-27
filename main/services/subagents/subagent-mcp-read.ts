@@ -693,24 +693,39 @@ function drift(): never {
   );
 }
 
-async function withExactRemoteTool<T>(input: {
-  host: SubagentMcpReadHost;
-  scope: SubagentMcpScopeV2;
-  binding: SubagentMcpToolScopeV2;
-  signal: AbortSignal;
-  operation: (client: SubagentMcpClientPort, tool: NormalizedSubagentMcpRemoteTool) => Promise<T>;
-}): Promise<T> {
-  assertReadBinding(input.scope, input.binding);
-  const server = await input.host.resolveServer(input.scope.serverId, input.signal);
-  // A tool hidden after approval is refused before any remote dispatch.
-  if (!server?.enabled || server.transport === "stdio" || isMcpToolHidden(server, input.binding.toolName)) {
+function exactReadTool(
+  inventory: readonly NormalizedSubagentMcpRemoteTool[],
+  binding: SubagentMcpToolScopeV2,
+): NormalizedSubagentMcpRemoteTool {
+  const tool = inventory.find(({ toolName }) => toolName === binding.toolName);
+  if (
+    !tool ||
+    tool.schemaHash !== binding.schemaHash ||
+    tool.effect !== "read" ||
+    tool.effect !== binding.effect
+  ) {
     return drift();
   }
+  return tool;
+}
+
+async function inspectVerifiedReadScope<T>(
+  input: {
+    host: SubagentMcpReadHost;
+    server: McpServer;
+    scope: SubagentMcpScopeV2;
+    signal: AbortSignal;
+  },
+  use: (
+    client: SubagentMcpClientPort,
+    inventory: readonly NormalizedSubagentMcpRemoteTool[],
+  ) => Promise<T>,
+): Promise<T> {
   let connectionRevision: string | undefined;
-  const result = await input.host.withClient(server, input.signal, async (client) => {
+  const result = await input.host.withClient(input.server, input.signal, async (client) => {
     connectionRevision = client.credentialRevision;
     if (
-      subagentMcpConnectionFingerprint(server, client.credentialRevision) !==
+      subagentMcpConnectionFingerprint(input.server, client.credentialRevision) !==
         input.scope.connectionFingerprint ||
       !(await client.credentialRevisionIsCurrent(input.signal))
     ) {
@@ -719,33 +734,7 @@ async function withExactRemoteTool<T>(input: {
     const remoteInventory = await client.listTools(input.signal);
     if (!(await client.credentialRevisionIsCurrent(input.signal))) return drift();
     const inventory = normalizeSubagentMcpInventoryV2(remoteInventory, client.redactCredentialText);
-    const tool = inventory.find(({ toolName }) => toolName === input.binding.toolName);
-    if (
-      !tool ||
-      tool.schemaHash !== input.binding.schemaHash ||
-      tool.effect !== "read" ||
-      tool.effect !== input.binding.effect
-    ) {
-      return drift();
-    }
-    const operationResult = await input.operation(client, tool);
-    if (!(await client.credentialRevisionIsCurrent(input.signal))) return drift();
-    const remotePostInventory = await client.listTools(input.signal);
-    if (!(await client.credentialRevisionIsCurrent(input.signal))) return drift();
-    const postInventory = normalizeSubagentMcpInventoryV2(
-      remotePostInventory,
-      client.redactCredentialText,
-    );
-    const postTool = postInventory.find(({ toolName }) => toolName === input.binding.toolName);
-    if (
-      !postTool ||
-      postTool.schemaHash !== input.binding.schemaHash ||
-      postTool.effect !== "read" ||
-      postTool.effect !== input.binding.effect
-    ) {
-      return drift();
-    }
-    return operationResult;
+    return use(client, inventory);
   });
   const current = await input.host.resolveServer(input.scope.serverId, input.signal);
   if (
@@ -760,6 +749,37 @@ async function withExactRemoteTool<T>(input: {
   return result;
 }
 
+async function withExactRemoteTool<T>(input: {
+  host: SubagentMcpReadHost;
+  scope: SubagentMcpScopeV2;
+  binding: SubagentMcpToolScopeV2;
+  signal: AbortSignal;
+  operation: (client: SubagentMcpClientPort, tool: NormalizedSubagentMcpRemoteTool) => Promise<T>;
+}): Promise<T> {
+  assertReadBinding(input.scope, input.binding);
+  const server = await input.host.resolveServer(input.scope.serverId, input.signal);
+  // A tool hidden after approval is refused before any remote dispatch.
+  if (!server?.enabled || server.transport === "stdio" || isMcpToolHidden(server, input.binding.toolName)) {
+    return drift();
+  }
+  return inspectVerifiedReadScope(
+    { host: input.host, server, scope: input.scope, signal: input.signal },
+    async (client, inventory) => {
+      const tool = exactReadTool(inventory, input.binding);
+      const operationResult = await input.operation(client, tool);
+      if (!(await client.credentialRevisionIsCurrent(input.signal))) return drift();
+      const remotePostInventory = await client.listTools(input.signal);
+      if (!(await client.credentialRevisionIsCurrent(input.signal))) return drift();
+      const postInventory = normalizeSubagentMcpInventoryV2(
+        remotePostInventory,
+        client.redactCredentialText,
+      );
+      exactReadTool(postInventory, input.binding);
+      return operationResult;
+    },
+  );
+}
+
 async function inspectExactRemoteScope(input: {
   host: SubagentMcpReadHost;
   scope: SubagentMcpScopeV2;
@@ -768,45 +788,13 @@ async function inspectExactRemoteScope(input: {
   for (const binding of input.scope.tools) assertReadBinding(input.scope, binding);
   const server = await input.host.resolveServer(input.scope.serverId, input.signal);
   if (!server?.enabled || server.transport === "stdio") return drift();
-  let connectionRevision: string | undefined;
-  const tools = await input.host.withClient(server, input.signal, async (client) => {
-    connectionRevision = client.credentialRevision;
-    if (
-      subagentMcpConnectionFingerprint(server, client.credentialRevision) !==
-        input.scope.connectionFingerprint ||
-      !(await client.credentialRevisionIsCurrent(input.signal))
-    ) {
-      return drift();
-    }
-    const remoteInventory = await client.listTools(input.signal);
-    if (!(await client.credentialRevisionIsCurrent(input.signal))) return drift();
-    const inventory = normalizeSubagentMcpInventoryV2(remoteInventory, client.redactCredentialText);
-    const exact = new Map<string, NormalizedSubagentMcpRemoteTool>();
-    for (const binding of input.scope.tools) {
-      const tool = inventory.find(({ toolName }) => toolName === binding.toolName);
-      if (
-        !tool ||
-        tool.schemaHash !== binding.schemaHash ||
-        tool.effect !== "read" ||
-        tool.effect !== binding.effect
-      ) {
-        return drift();
-      }
-      exact.set(binding.toolName, tool);
-    }
-    return exact;
-  });
-  const current = await input.host.resolveServer(input.scope.serverId, input.signal);
-  if (
-    !current?.enabled ||
-    current.transport === "stdio" ||
-    connectionRevision === undefined ||
-    subagentMcpConnectionFingerprint(current, connectionRevision) !==
-      input.scope.connectionFingerprint
-  ) {
-    return drift();
-  }
-  return tools;
+  return inspectVerifiedReadScope(
+    { host: input.host, server, scope: input.scope, signal: input.signal },
+    async (_client, inventory) =>
+      new Map(
+        input.scope.tools.map((binding) => [binding.toolName, exactReadTool(inventory, binding)]),
+      ),
+  );
 }
 
 function boundedPolicy(policy: SubagentMcpReadPolicy | undefined): Required<SubagentMcpReadPolicy> {

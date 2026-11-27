@@ -11,13 +11,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp,rm,writeFile } from 'node:fs/promises'; import { tmpdir } from 'node:os'; import { join } from 'node:path';
 import { runToolCall } from '@earendil-works/pi-agent-core'; import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
 import { buildCodingTools } from '../../../main/services/coding-tools.js'; import { createPiCodemodeTool } from '../../../main/services/pi-codemode.js';
-import { withDurableToolOutputs } from '../../../main/services/tool-output-context.js';
+import { createDurableToolOutputs } from '../../../main/services/tool-output-context.js';
 import { ToolOutputStore,toolOutputScope } from '../../../main/services/tool-output-store.js';
 const root=await mkdtemp(join(tmpdir(),'aiden-codemode-provenance-'));
 try {
  await writeFile(join(root,'failing.cjs'), 'process.stdout.write("progress\\n".repeat(7000)+"FINAL_ASSERTION_FAILED\\n"); process.exitCode=7;');
  let current=true;
- const tools=withDurableToolOutputs({tools:buildCodingTools(root),store:new ToolOutputStore(()=>root),chatId:'research',scope:toolOutputScope('offline-fixture'),assertCurrent:async()=>{if(!current)throw new Error('revoked')},isCurrent:()=>current});
+ const tools=createDurableToolOutputs({tools:buildCodingTools(root),store:new ToolOutputStore(()=>root),chatId:'research',scope:toolOutputScope('offline-fixture'),assertCurrent:async()=>{if(!current)throw new Error('revoked')},isCurrent:()=>current}).tools;
  const command=tools.find(t=>t.name==='run_command')!;
  const assistantMessage=fauxAssistantMessage('research');
  let dispatches=0;

@@ -6,9 +6,9 @@ import { Type } from "typebox";
 import type {
   AgentTool,
   AgentToolResult,
-  BeforeToolCallContext,
   BeforeToolCallResult,
 } from "@earendil-works/pi-agent-core";
+import type { SubagentToolGateV2 } from "./contracts.js";
 import {
   SUBAGENT_WORKSPACE_WRITE_CHILD_LABEL_LIMIT,
   SUBAGENT_WORKSPACE_WRITE_DIFF_PREVIEW_LIMIT,
@@ -96,19 +96,9 @@ export interface SubagentFileLineChanges {
   deletions: number;
 }
 
-export interface SubagentWorkspaceWriteApprovalGateV2 {
-  beforeToolCall(
-    context: BeforeToolCallContext,
-    signal?: AbortSignal,
-  ): Promise<BeforeToolCallResult | undefined>;
-  execute(input: {
-    toolCallId: string;
-    toolName: string;
-    arguments: unknown;
-    signal?: AbortSignal;
-  }): Promise<AgentToolResult<SubagentFileLineChanges | null>>;
-  shutdown(): Promise<void>;
-}
+export type SubagentWorkspaceWriteApprovalGateV2 = SubagentToolGateV2<
+  AgentToolResult<SubagentFileLineChanges | null>
+>;
 
 export interface SubagentWorkspaceWriteApprovalBrokerV2Input {
   authority: SubagentAuthorityV2;

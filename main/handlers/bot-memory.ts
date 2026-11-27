@@ -26,12 +26,18 @@ export function botExistsIn(bots: { get(botId: string): Promise<unknown> }): (bo
   return async (botId) => (await bots.get(botId)) != null;
 }
 
-export function registerBotMemoryHandlers(dependencies: BotMemoryHandlerDependencies): void {
-  async function knownBot(raw: unknown): Promise<string> {
+export function requireBot(
+  botExists: (botId: string) => Promise<boolean>,
+): (raw: unknown) => Promise<string> {
+  return async (raw) => {
     const botId = parseBotId(raw);
-    if (!(await dependencies.botExists(botId))) throw new Error("This Bot no longer exists.");
+    if (!(await botExists(botId))) throw new Error("This Bot no longer exists.");
     return botId;
-  }
+  };
+}
+
+export function registerBotMemoryHandlers(dependencies: BotMemoryHandlerDependencies): void {
+  const knownBot = requireBot(dependencies.botExists);
 
   dependencies.handle(BOT_MEMORY_CHANNELS.get, async (_event, rawBotId): Promise<BotMemoryView> => {
     return dependencies.memory.view(await knownBot(rawBotId));

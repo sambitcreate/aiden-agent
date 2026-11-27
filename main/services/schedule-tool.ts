@@ -75,6 +75,36 @@ const SCHEDULE_TRIGGER_PARAMETER = Type.Unsafe<Record<string, unknown>>({
     "Create only, instead of cron: run when something happens. Watch: {kind:\"watch\", source:{type:\"url\", url} or {type:\"script\", script}, everyMinutes 5-1440}; the task runs only when the page changes or the script prints something. Link: {kind:\"webhook\", gapMinutes 1-60, optional filters [{path, equals}], dedupePath, includeFields, signatureHeader}; the person creates the private link later from the task's details and you never see it, so tell them to do that. A task that runs when a connected app (Mail, Calendar) has news is set up by the person in the task editor, not here. What happened reaches the run as data.",
 });
 
+function optionalScheduleText(description: string, maxLength?: number) {
+  return Type.Optional(
+    Type.String(maxLength === undefined ? { description } : { maxLength, description }),
+  );
+}
+
+function optionalScheduleBoolean(description: string) {
+  return Type.Optional(Type.Boolean({ description }));
+}
+
+function optionalSchedulePermission(description: string) {
+  return Type.Optional(
+    Type.Union([Type.Literal("read-only"), Type.Literal("full")], { description }),
+  );
+}
+
+function optionalScheduleMcpIds(
+  description: string,
+  item?: { description: string; maxLength: number },
+) {
+  return Type.Optional(
+    Type.Array(
+      item
+        ? Type.String({ maxLength: item.maxLength, description: item.description })
+        : Type.String(),
+      { maxItems: 16, description },
+    ),
+  );
+}
+
 interface ScheduleToolParams {
   action: ScheduleToolAction;
   id?: string;
@@ -939,6 +969,27 @@ export async function resolveAssistantScheduleProject(
   return { workspaceId: workspace.id, workspaceName };
 }
 
+async function selectedScheduleMcpServers(
+  ids: readonly string[],
+  listMcpServers: ScheduleToolDependencies["listMcpServers"],
+): Promise<Array<{ server: McpServer; name: string }>> {
+  const configured = await listMcpServers();
+  const byId = new Map(configured.map((server) => [server.id, server]));
+  return ids.map((id) => {
+    const server = byId.get(id);
+    if (!server) throw new Error(`MCP server ${id} was not found.`);
+    if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
+    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
+    const name = bounded(
+      required(server.name, "MCP server name"),
+      "MCP server name",
+      ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT,
+    );
+    assertSafeDisplayText(name, "MCP server name");
+    return { server, name };
+  });
+}
+
 export async function resolveAssistantScheduleMcpServers(
   proposal: AssistantScheduleProposal,
   listMcpServers: ScheduleToolDependencies["listMcpServers"] = defaultDependencies.listMcpServers,
@@ -952,21 +1003,7 @@ export async function resolveAssistantScheduleMcpServers(
   if (mcpServerIds.length === 0) {
     return { mcpServerIds: [], mcpServerNames: [], mcpServerBindings: [] };
   }
-  const configured = await listMcpServers();
-  const byId = new Map(configured.map((server) => [server.id, server]));
-  const servers = mcpServerIds.map((id) => {
-    const server = byId.get(id);
-    if (!server) throw new Error(`MCP server ${id} was not found.`);
-    if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
-    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
-    const name = bounded(
-      required(server.name, "MCP server name"),
-      "MCP server name",
-      ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT,
-    );
-    assertSafeDisplayText(name, "MCP server name");
-    return { server, name };
-  });
+  const servers = await selectedScheduleMcpServers(mcpServerIds, listMcpServers);
   const mcpServerBindings = servers.map(({ server }) => scheduledMcpServerBinding(server));
   if (expectedBindings) {
     assertScheduledMcpServerBindings(
@@ -990,10 +1027,6 @@ interface PreparedStandardScheduleApproval {
 }
 
 const preparedStandardByArguments = new WeakMap<object, PreparedStandardScheduleApproval>();
-
-function sameIds(left: readonly string[] | undefined, right: readonly string[]): boolean {
-  return (left?.length ?? 0) === right.length && right.every((id, index) => left?.[index] === id);
-}
 
 const NO_PROVIDER_SET = "No provider set";
 const APP_DEFAULT = "App default";
@@ -1102,21 +1135,7 @@ async function standardScope(
   if (ids.length === 0) {
     return { workspaceName, mcpServerNames: [], mcpServerBindings: [] };
   }
-  const configured = await dependencies.listMcpServers();
-  const byId = new Map(configured.map((server) => [server.id, server]));
-  const selected = ids.map((id) => {
-    const server = byId.get(id);
-    if (!server) throw new Error(`MCP server ${id} was not found.`);
-    if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
-    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
-    const name = bounded(
-      required(server.name, "MCP server name"),
-      "MCP server name",
-      ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT,
-    );
-    assertSafeDisplayText(name, "MCP server name");
-    return { server, name };
-  });
+  const selected = await selectedScheduleMcpServers(ids, () => dependencies.listMcpServers());
   return {
     workspaceName,
     mcpServerNames: selected.map(({ name }) => name),
@@ -1391,7 +1410,7 @@ async function resolveStandardScheduleApproval(
   }
 
   const scope = await standardScope(input, dependencies);
-  if (sameIds(existing?.mcpServerIds, input.mcpServerIds ?? [])) {
+  if (sameStringList(existing?.mcpServerIds, input.mcpServerIds ?? [])) {
     input.mcpServerBindings = existing?.mcpServerBindings;
   } else if ((input.mcpServerIds?.length ?? 0) > 0) {
     input.mcpServerBindings = scope.mcpServerBindings;
@@ -1527,49 +1546,29 @@ export function createAssistantEditAutomationTool(
           description:
             "Exact updatedAt revision from the same list_scheduled_tasks result. Prevents stale overwrites.",
         }),
-        name: Type.Optional(Type.String({ description: "Replacement task name." })),
-        cron: Type.Optional(
-          Type.String({
-            description:
-              'Replacement five- or six-part cron expression. For every day at 9 AM use "0 9 * * *".',
-          }),
+        name: optionalScheduleText("Replacement task name."),
+        cron: optionalScheduleText(
+          'Replacement five- or six-part cron expression. For every day at 9 AM use "0 9 * * *".',
         ),
-        timezone: Type.Optional(Type.String({ description: "Replacement IANA timezone." })),
-        prompt: Type.Optional(Type.String({ description: "Replacement automation instruction." })),
-        workspaceId: Type.Optional(
-          Type.String({
-            description:
-              "Replacement exact project ID from list_projects. Omit to preserve the current project.",
-          }),
+        timezone: optionalScheduleText("Replacement IANA timezone."),
+        prompt: optionalScheduleText("Replacement automation instruction."),
+        workspaceId: optionalScheduleText(
+          "Replacement exact project ID from list_projects. Omit to preserve the current project.",
         ),
-        clearWorkspace: Type.Optional(
-          Type.Boolean({
-            description: "Set true to remove the current project. Do not combine with workspaceId.",
-          }),
+        clearWorkspace: optionalScheduleBoolean(
+          "Set true to remove the current project. Do not combine with workspaceId.",
         ),
-        permission: Type.Optional(
-          Type.Union([Type.Literal("read-only"), Type.Literal("full")], {
-            description: "Replacement access level. Omit to preserve current access.",
-          }),
+        permission: optionalSchedulePermission(
+          "Replacement access level. Omit to preserve current access.",
         ),
-        mcpServerIds: Type.Optional(
-          Type.Array(
-            Type.String({
-              maxLength: ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT,
-              description: "Exact enabled MCP server ID from list_mcp_servers.",
-            }),
-            {
-              maxItems: 16,
-              description:
-                "Replacement exact MCP scope. Pass [] to remove MCP access; omit to preserve it.",
-            },
-          ),
+        mcpServerIds: optionalScheduleMcpIds(
+          "Replacement exact MCP scope. Pass [] to remove MCP access; omit to preserve it.",
+          {
+            maxLength: ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT,
+            description: "Exact enabled MCP server ID from list_mcp_servers.",
+          },
         ),
-        notify: Type.Optional(
-          Type.Boolean({
-            description: "Replacement desktop notification preference.",
-          }),
-        ),
+        notify: optionalScheduleBoolean("Replacement desktop notification preference."),
       },
       {
         additionalProperties: false,
@@ -1634,48 +1633,27 @@ export function createScheduleTaskTool(
         {
           action: Type.Literal("create"),
           name: Type.String({ description: "Required task name." }),
-          cron: Type.Optional(Type.String({
-            description:
-              'Five- or six-part cron expression, required unless trigger is set. For every day at 9 AM use "0 9 * * *". The field name is cron, not schedule.',
-          })),
+          cron: optionalScheduleText(
+            'Five- or six-part cron expression, required unless trigger is set. For every day at 9 AM use "0 9 * * *". The field name is cron, not schedule.',
+          ),
           prompt: Type.String({
             description: "Required automation instruction.",
           }),
-          timezone: Type.Optional(
-            Type.String({
-              description: "IANA timezone. Defaults to the device timezone.",
-            }),
+          timezone: optionalScheduleText("IANA timezone. Defaults to the device timezone."),
+          workspaceId: optionalScheduleText(
+            "Exact project ID from list_projects. Required for Full project access and optional for project-scoped read-only work.",
           ),
-          workspaceId: Type.Optional(
-            Type.String({
-              description:
-                "Exact project ID from list_projects. Required for Full project access and optional for project-scoped read-only work.",
-            }),
+          permission: optionalSchedulePermission(
+            "Defaults to read-only. Use Full only when the task must edit files, run commands, or call MCP tools.",
           ),
-          permission: Type.Optional(
-            Type.Union([Type.Literal("read-only"), Type.Literal("full")], {
-              description:
-                "Defaults to read-only. Use Full only when the task must edit files, run commands, or call MCP tools.",
-            }),
+          mcpServerIds: optionalScheduleMcpIds(
+            "Exact MCP servers this automation may call unattended. Any non-empty list requires Full access.",
+            {
+              maxLength: ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT,
+              description: "Exact enabled MCP server ID from list_mcp_servers.",
+            },
           ),
-          mcpServerIds: Type.Optional(
-            Type.Array(
-              Type.String({
-                maxLength: ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT,
-                description: "Exact enabled MCP server ID from list_mcp_servers.",
-              }),
-              {
-                maxItems: 16,
-                description:
-                  "Exact MCP servers this automation may call unattended. Any non-empty list requires Full access.",
-              },
-            ),
-          ),
-          notify: Type.Optional(
-            Type.Boolean({
-              description: "Show a desktop notification after non-silent runs.",
-            }),
-          ),
+          notify: optionalScheduleBoolean("Show a desktop notification after non-silent runs."),
           trigger: Type.Optional(SCHEDULE_TRIGGER_PARAMETER),
         },
         {
@@ -1740,17 +1718,10 @@ export function createScheduleTaskTool(
         Type.Literal("remove"),
         Type.Literal("run_now"),
       ]),
-      id: Type.Optional(
-        Type.String({
-          description: "Exact task ID for update, pause, resume, remove, or run_now.",
-        }),
-      ),
-      taskName: Type.Optional(
-        Type.String({
-          maxLength: ASSISTANT_AUTOMATION_NAME_LIMIT,
-          description:
-            "Exact task name returned by list. Required for update, pause, resume, remove, or run_now so the confirmation is understandable.",
-        }),
+      id: optionalScheduleText("Exact task ID for update, pause, resume, remove, or run_now."),
+      taskName: optionalScheduleText(
+        "Exact task name returned by list. Required for update, pause, resume, remove, or run_now so the confirmation is understandable.",
+        ASSISTANT_AUTOMATION_NAME_LIMIT,
       ),
       expectedUpdatedAt: Type.Optional(
         Type.Number({
@@ -1758,64 +1729,34 @@ export function createScheduleTaskTool(
             "Exact updatedAt revision returned by list. Required for update, pause, resume, remove, and run_now so stale changes fail closed.",
         }),
       ),
-      name: Type.Optional(Type.String({ description: "Task name. Required for create." })),
-      cron: Type.Optional(
-        Type.String({
-          description: "Five- or six-part cron expression. Required for create unless trigger is set.",
-        }),
+      name: optionalScheduleText("Task name. Required for create."),
+      cron: optionalScheduleText(
+        "Five- or six-part cron expression. Required for create unless trigger is set.",
       ),
-      timezone: Type.Optional(
-        Type.String({
-          description: "IANA timezone. Defaults to the device timezone.",
-        }),
-      ),
+      timezone: optionalScheduleText("IANA timezone. Defaults to the device timezone."),
       mode: Type.Optional(
         Type.Union([Type.Literal("llm"), Type.Literal("script")], {
           description: "Execution mode. Defaults to llm.",
         }),
       ),
-      prompt: Type.Optional(
-        Type.String({ description: "LLM instruction. Required for llm mode." }),
+      prompt: optionalScheduleText("LLM instruction. Required for llm mode."),
+      script: optionalScheduleText(
+        "File name from the workspace or global .aiden/scripts folder.",
       ),
-      script: Type.Optional(
-        Type.String({
-          description: "File name from the workspace or global .aiden/scripts folder.",
-        }),
+      workspaceId: optionalScheduleText(
+        "Workspace ID. Defaults to the current chat workspace on create and preserves the current workspace on update.",
       ),
-      workspaceId: Type.Optional(
-        Type.String({
-          description:
-            "Workspace ID. Defaults to the current chat workspace on create and preserves the current workspace on update.",
-        }),
+      clearWorkspace: optionalScheduleBoolean(
+        "Set true to use global scope instead of the current/default workspace. Do not combine with workspaceId.",
       ),
-      clearWorkspace: Type.Optional(
-        Type.Boolean({
-          description:
-            "Set true to use global scope instead of the current/default workspace. Do not combine with workspaceId.",
-        }),
+      permission: optionalSchedulePermission("LLM task permission. Defaults to read-only."),
+      mcpServerIds: optionalScheduleMcpIds(
+        "Exact configured MCP server IDs approved for unattended use.",
       ),
-      permission: Type.Optional(
-        Type.Union([Type.Literal("read-only"), Type.Literal("full")], {
-          description: "LLM task permission. Defaults to read-only.",
-        }),
-      ),
-      mcpServerIds: Type.Optional(
-        Type.Array(Type.String(), {
-          maxItems: 16,
-          description: "Exact configured MCP server IDs approved for unattended use.",
-        }),
-      ),
-      notify: Type.Optional(
-        Type.Boolean({
-          description: "Show a desktop notification after non-silent runs.",
-        }),
-      ),
+      notify: optionalScheduleBoolean("Show a desktop notification after non-silent runs."),
       trigger: Type.Optional(SCHEDULE_TRIGGER_PARAMETER),
-      post_in_chat: Type.Optional(
-        Type.Boolean({
-          description:
-            "Create only. Post each run into the chat you are in (the default when the task uses this chat's workspace); such a task can run at most every 15 minutes. Set false to run it in its own chat.",
-        }),
+      post_in_chat: optionalScheduleBoolean(
+        "Create only. Post each run into the chat you are in (the default when the task uses this chat's workspace); such a task can run at most every 15 minutes. Set false to run it in its own chat.",
       ),
     }),
     execute: async (_toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {

@@ -27,7 +27,10 @@ import {
   SUBAGENT_TIME_LIMIT_WARNING,
   type SubagentTimeLimit,
 } from "./subagent-child-policy.js";
-import type { RunSubagentChildInput } from "./subagent-child-runner.js";
+import type {
+  RunSubagentChildInput,
+  SubagentApprovalSeamsV2,
+} from "./subagent-child-runner.js";
 import type {
   SubagentTranscriptFinishStatus,
   SubagentTranscriptRecorder,
@@ -62,20 +65,6 @@ import {
   type SubagentTreeExecutionLeaseV2,
   type SubagentTreeNodeV2,
 } from "./subagent-nesting-core.js";
-import type { SubagentOutboundToolBindingV2 } from "./outbound-approval-v2.js";
-import type { SubagentOutboundApprovalGateV2 } from "./outbound-approval-v2.js";
-import type {
-  SubagentWorkspaceWriteApprovalGateV2,
-  SubagentWorkspaceWriteToolBindingV2,
-} from "./subagent-workspace-write.js";
-import type {
-  SubagentMcpMutationBindingV2,
-  SubagentMcpMutationGateV2,
-} from "./subagent-mcp-mutation.js";
-import type {
-  SubagentShellGateV2,
-  SubagentShellToolBindingV2,
-} from "./subagent-shell.js";
 
 /** The one tool result a Bot reply gets once its helpers' 60 minutes are spent. */
 export const BOT_SUBAGENT_LIMIT_REACHED_RESULT =
@@ -127,27 +116,11 @@ export interface SubagentSupervisorPolicy {
   launchBudget?: number;
 }
 
-export interface PreparedSubagentRun {
+export interface PreparedSubagentRun extends SubagentApprovalSeamsV2 {
   /** Exact main-owned V2 ceiling passed only to positive child tool assembly. */
   authority?: SubagentAuthorityV2;
   revalidateAuthority?: () => Promise<SubagentAuthorityV2>;
   currentAuthority?: () => SubagentAuthorityV2 | undefined;
-  consumeNetworkOperation?: (authority: SubagentAuthorityV2) => boolean;
-  prepareOutboundApproval?: (
-    bindings: readonly SubagentOutboundToolBindingV2[],
-  ) => SubagentOutboundApprovalGateV2;
-  prepareWorkspaceWriteApproval?: (
-    bindings: readonly SubagentWorkspaceWriteToolBindingV2[],
-    runSignal?: AbortSignal,
-  ) => SubagentWorkspaceWriteApprovalGateV2;
-  prepareMcpMutationApproval?: (
-    bindings: readonly SubagentMcpMutationBindingV2[],
-    runSignal?: AbortSignal,
-  ) => SubagentMcpMutationGateV2;
-  prepareShellApproval?: (
-    bindings: readonly SubagentShellToolBindingV2[],
-    runSignal?: AbortSignal,
-  ) => SubagentShellGateV2;
   /** Idempotently remove a run that never crossed the launch barrier. */
   abortPreparation(reason: Error): void | Promise<void>;
   /**
@@ -961,33 +934,15 @@ export class SubagentSupervisor {
                   v2Authority: authority,
                   currentV2Authority: preparedRun.currentAuthority,
                   consumeNetworkOperation: preparedRun.consumeNetworkOperation
-                    ? (currentAuthority) => {
-                        if (
-                          preparedRun.consumeNetworkOperation?.(
-                            currentAuthority,
-                          ) !== true
-                        ) {
-                          return false;
-                        }
-                        try {
-                          input.ledger.consumeUsage({
-                            tokens: 0,
-                            toolCalls: 0,
-                            outputChars: 0,
-                            turns: 0,
-                            networkOperations: 1,
-                          });
-                          return true;
-                        } catch (error) {
-                          this.treeBudgetExhausted = true;
-                          input.abortTree(
-                            error instanceof Error
-                              ? error
-                              : new Error("Subagent tree budget exhausted."),
-                          );
-                          return false;
-                        }
-                      }
+                    ? (currentAuthority) =>
+                        preparedRun.consumeNetworkOperation?.(
+                          currentAuthority,
+                        ) === true &&
+                        this.consumeTreeUsage(
+                          input.ledger,
+                          { networkOperations: 1 },
+                          (reason) => input.abortTree(reason),
+                        )
                     : undefined,
                   prepareOutboundApproval: preparedRun.prepareOutboundApproval,
                   prepareWorkspaceWriteApproval:
@@ -1017,136 +972,59 @@ export class SubagentSupervisor {
                     running: () =>
                       this.input.projector?.running(identity.runId),
                     turnStarted: () => {
-                      try {
-                        input.ledger.consumeUsage({
-                          tokens: 0,
-                          toolCalls: 0,
-                          outputChars: 0,
-                          turns: 1,
-                          networkOperations: 0,
-                        });
-                      } catch (error) {
-                        this.treeBudgetExhausted = true;
-                        input.abortTree(
-                          error instanceof Error
-                            ? error
-                            : new Error("Subagent tree budget exhausted."),
-                        );
-                      }
+                      this.consumeTreeUsage(
+                        input.ledger,
+                        { turns: 1 },
+                        (reason) => input.abortTree(reason),
+                      );
                       this.input.projector?.turnStarted(identity.runId);
                     },
                     toolStarted: (toolName) => {
-                      try {
-                        input.ledger.consumeUsage({
-                          tokens: 0,
-                          toolCalls: 1,
-                          outputChars: 0,
-                          turns: 0,
-                          networkOperations: 0,
-                        });
-                      } catch (error) {
-                        this.treeBudgetExhausted = true;
-                        input.abortTree(
-                          error instanceof Error
-                            ? error
-                            : new Error("Subagent tree budget exhausted."),
-                        );
-                      }
+                      this.consumeTreeUsage(
+                        input.ledger,
+                        { toolCalls: 1 },
+                        (reason) => input.abortTree(reason),
+                      );
                       this.input.projector?.toolStarted(
                         identity.runId,
                         toolName,
                       );
                     },
                     textDelta: (delta) => {
-                      try {
-                        input.ledger.consumeUsage({
-                          tokens: 0,
-                          toolCalls: 0,
-                          outputChars: delta.length,
-                          turns: 0,
-                          networkOperations: 0,
-                        });
-                      } catch (error) {
-                        this.treeBudgetExhausted = true;
-                        input.abortTree(
-                          error instanceof Error
-                            ? error
-                            : new Error("Subagent tree budget exhausted."),
-                        );
-                      }
+                      this.consumeTreeUsage(
+                        input.ledger,
+                        { outputChars: delta.length },
+                        (reason) => input.abortTree(reason),
+                      );
                       this.input.projector?.textDelta(identity.runId, delta);
                     },
                     textReconciled: (additionalChars) => {
-                      try {
-                        input.ledger.consumeUsage({
-                          tokens: 0,
-                          toolCalls: 0,
-                          outputChars: additionalChars,
-                          turns: 0,
-                          networkOperations: 0,
-                        });
-                      } catch (error) {
-                        this.treeBudgetExhausted = true;
-                        input.abortTree(
-                          error instanceof Error
-                            ? error
-                            : new Error("Subagent tree budget exhausted."),
-                        );
-                      }
+                      this.consumeTreeUsage(
+                        input.ledger,
+                        { outputChars: additionalChars },
+                        (reason) => input.abortTree(reason),
+                      );
                     },
                     protocolDelta: (additionalChars) => {
-                      try {
-                        input.ledger.consumeUsage({
-                          tokens: 0,
-                          toolCalls: 0,
-                          outputChars: additionalChars,
-                          turns: 0,
-                          networkOperations: 0,
-                        });
-                      } catch (error) {
-                        this.treeBudgetExhausted = true;
-                        input.abortTree(
-                          error instanceof Error
-                            ? error
-                            : new Error("Subagent tree budget exhausted."),
-                        );
-                      }
+                      this.consumeTreeUsage(
+                        input.ledger,
+                        { outputChars: additionalChars },
+                        (reason) => input.abortTree(reason),
+                      );
                     },
                     protocolReconciled: (additionalChars) => {
-                      try {
-                        input.ledger.consumeUsage({
-                          tokens: 0,
-                          toolCalls: 0,
-                          outputChars: additionalChars,
-                          turns: 0,
-                          networkOperations: 0,
-                        });
-                      } catch (error) {
-                        this.treeBudgetExhausted = true;
-                        input.abortTree(
-                          error instanceof Error
-                            ? error
-                            : new Error("Subagent tree budget exhausted."),
-                        );
-                      }
+                      this.consumeTreeUsage(
+                        input.ledger,
+                        { outputChars: additionalChars },
+                        (reason) => input.abortTree(reason),
+                      );
                     },
                     usage: (message: AssistantMessage) => {
-                      try {
-                        input.ledger.consumeUsage({
-                          tokens: reportedTokens(message.usage)?.total ?? 0,
-                          toolCalls: 0,
-                          outputChars: 0,
-                          turns: 0,
-                          networkOperations: 0,
-                        });
-                      } catch (error) {
-                        this.treeBudgetExhausted = true;
-                        input.abortTree(
-                          error instanceof Error
-                            ? error
-                            : new Error("Subagent tree budget exhausted."),
-                        );
-                      }
+                      this.consumeTreeUsage(
+                        input.ledger,
+                        { tokens: reportedTokens(message.usage)?.total ?? 0 },
+                        (reason) => input.abortTree(reason),
+                      );
                       this.input.projector?.usage(identity.runId, message);
                     },
                   },
@@ -1603,25 +1481,11 @@ export class SubagentSupervisor {
                     ) {
                       return false;
                     }
-                    try {
-                      tree?.ledger.consumeUsage({
-                        tokens: 0,
-                        toolCalls: 0,
-                        outputChars: 0,
-                        turns: 0,
-                        networkOperations: 1,
-                      });
-                      return true;
-                    } catch (error) {
-                      this.treeBudgetExhausted = true;
-                      abortExecution(
-                        "interrupted",
-                        error instanceof Error
-                          ? error
-                          : new Error("Subagent tree budget exhausted."),
-                      );
-                      return false;
-                    }
+                    return this.consumeTreeUsage(
+                      tree?.ledger,
+                      { networkOperations: 1 },
+                      (reason) => abortExecution("interrupted", reason),
+                    );
                   }
                 : undefined,
               prepareOutboundApproval: preparedRun?.prepareOutboundApproval,
@@ -1672,140 +1536,56 @@ export class SubagentSupervisor {
                 starting: () => this.input.projector?.starting(identity.runId),
                 running: () => this.input.projector?.running(identity.runId),
                 turnStarted: () => {
-                  try {
-                    tree?.ledger.consumeUsage({
-                      tokens: 0,
-                      toolCalls: 0,
-                      outputChars: 0,
-                      turns: 1,
-                      networkOperations: 0,
-                    });
-                  } catch (error) {
-                    this.treeBudgetExhausted = true;
-                    abortExecution(
-                      "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
-                    );
-                  }
+                  this.consumeTreeUsage(
+                    tree?.ledger,
+                    { turns: 1 },
+                    (reason) => abortExecution("interrupted", reason),
+                  );
                   this.input.projector?.turnStarted(identity.runId);
                 },
                 toolStarted: (toolName) => {
-                  try {
-                    tree?.ledger.consumeUsage({
-                      tokens: 0,
-                      toolCalls: 1,
-                      outputChars: 0,
-                      turns: 0,
-                      networkOperations: 0,
-                    });
-                  } catch (error) {
-                    this.treeBudgetExhausted = true;
-                    abortExecution(
-                      "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
-                    );
-                  }
+                  this.consumeTreeUsage(
+                    tree?.ledger,
+                    { toolCalls: 1 },
+                    (reason) => abortExecution("interrupted", reason),
+                  );
                   this.input.projector?.toolStarted(identity.runId, toolName);
                 },
                 textDelta: (delta) => {
-                  try {
-                    tree?.ledger.consumeUsage({
-                      tokens: 0,
-                      toolCalls: 0,
-                      outputChars: delta.length,
-                      turns: 0,
-                      networkOperations: 0,
-                    });
-                  } catch (error) {
-                    this.treeBudgetExhausted = true;
-                    abortExecution(
-                      "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
-                    );
-                  }
+                  this.consumeTreeUsage(
+                    tree?.ledger,
+                    { outputChars: delta.length },
+                    (reason) => abortExecution("interrupted", reason),
+                  );
                   this.input.projector?.textDelta(identity.runId, delta);
                 },
                 textReconciled: (additionalChars) => {
-                  try {
-                    tree?.ledger.consumeUsage({
-                      tokens: 0,
-                      toolCalls: 0,
-                      outputChars: additionalChars,
-                      turns: 0,
-                      networkOperations: 0,
-                    });
-                  } catch (error) {
-                    this.treeBudgetExhausted = true;
-                    abortExecution(
-                      "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
-                    );
-                  }
+                  this.consumeTreeUsage(
+                    tree?.ledger,
+                    { outputChars: additionalChars },
+                    (reason) => abortExecution("interrupted", reason),
+                  );
                 },
                 protocolDelta: (additionalChars) => {
-                  try {
-                    tree?.ledger.consumeUsage({
-                      tokens: 0,
-                      toolCalls: 0,
-                      outputChars: additionalChars,
-                      turns: 0,
-                      networkOperations: 0,
-                    });
-                  } catch (error) {
-                    this.treeBudgetExhausted = true;
-                    abortExecution(
-                      "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
-                    );
-                  }
+                  this.consumeTreeUsage(
+                    tree?.ledger,
+                    { outputChars: additionalChars },
+                    (reason) => abortExecution("interrupted", reason),
+                  );
                 },
                 protocolReconciled: (additionalChars) => {
-                  try {
-                    tree?.ledger.consumeUsage({
-                      tokens: 0,
-                      toolCalls: 0,
-                      outputChars: additionalChars,
-                      turns: 0,
-                      networkOperations: 0,
-                    });
-                  } catch (error) {
-                    this.treeBudgetExhausted = true;
-                    abortExecution(
-                      "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
-                    );
-                  }
+                  this.consumeTreeUsage(
+                    tree?.ledger,
+                    { outputChars: additionalChars },
+                    (reason) => abortExecution("interrupted", reason),
+                  );
                 },
                 usage: (message) => {
-                  try {
-                    tree?.ledger.consumeUsage({
-                      tokens: reportedTokens(message.usage)?.total ?? 0,
-                      toolCalls: 0,
-                      outputChars: 0,
-                      turns: 0,
-                      networkOperations: 0,
-                    });
-                  } catch (error) {
-                    this.treeBudgetExhausted = true;
-                    abortExecution(
-                      "interrupted",
-                      error instanceof Error
-                        ? error
-                        : new Error("Subagent tree budget exhausted."),
-                    );
-                  }
+                  this.consumeTreeUsage(
+                    tree?.ledger,
+                    { tokens: reportedTokens(message.usage)?.total ?? 0 },
+                    (reason) => abortExecution("interrupted", reason),
+                  );
                   this.input.projector?.usage(identity.runId, message);
                 },
               },
@@ -2092,5 +1872,37 @@ export class SubagentSupervisor {
         : new Error("Parent generation cancelled.");
     }
     return formatResults(results, childModels);
+  }
+
+  private consumeTreeUsage(
+    ledger: Pick<SubagentTreeBudgetLedgerV2, "consumeUsage"> | undefined,
+    usage: {
+      tokens?: number;
+      toolCalls?: number;
+      outputChars?: number;
+      turns?: number;
+      networkOperations?: number;
+    },
+    abort: (reason: Error) => void,
+  ): boolean {
+    if (!ledger) return true;
+    try {
+      ledger.consumeUsage({
+        tokens: usage.tokens ?? 0,
+        toolCalls: usage.toolCalls ?? 0,
+        outputChars: usage.outputChars ?? 0,
+        turns: usage.turns ?? 0,
+        networkOperations: usage.networkOperations ?? 0,
+      });
+      return true;
+    } catch (error) {
+      this.treeBudgetExhausted = true;
+      abort(
+        error instanceof Error
+          ? error
+          : new Error("Subagent tree budget exhausted."),
+      );
+      return false;
+    }
   }
 }

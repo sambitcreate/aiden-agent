@@ -3,10 +3,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   AgentEvent,
   AgentMessage,
-  AgentOptions,
   AgentTool,
-  BeforeToolCallContext,
-  BeforeToolCallResult,
   ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import { performance } from "node:perf_hooks";
@@ -31,6 +28,7 @@ import {
   subagentRuntimeRegistry,
   type SubagentRuntimeAuthority,
   type SubagentRuntimeChild,
+  type SubagentRuntimeChildSpecInput,
 } from "./child-agent-runtime.js";
 import { SUBAGENT_READ_TOOL_NAMES, type SubagentReadToolName } from "./capability-profile.js";
 import {
@@ -85,27 +83,7 @@ export interface SubagentChildRunnerPolicy {
 }
 
 export interface SubagentChildRunnerDependencies {
-  createChild?: (input: {
-    authority: SubagentRuntimeAuthority;
-    runId?: string;
-    groupId: string;
-    childId?: string;
-    runtime: ResolvedModelRuntime;
-    transformRuntime?: SubagentRuntimeTransform;
-    thinkingLevel: ThinkingLevel;
-    compactionEngine?: CompactionEngine;
-  compactionModelOverrides?: CompactionModelOverrides;
-    systemPrompt: string;
-    tools: AgentTool[];
-    initialMessages: AgentMessage[];
-    beforeToolCall?: (
-      context: BeforeToolCallContext,
-      signal?: AbortSignal,
-    ) => Promise<BeforeToolCallResult | undefined>;
-    prepareNextTurnWithContext?: AgentOptions["prepareNextTurnWithContext"];
-    finishTurn?: AgentOptions["finishTurn"];
-    onStarting?: () => void;
-  }) => SubagentRuntimeChild;
+  createChild?: (input: SubagentRuntimeChildSpecInput) => SubagentRuntimeChild;
   buildTools?: (input: {
     workspaceRoot: string;
     permission: WorkspacePermission;
@@ -127,22 +105,7 @@ export interface SubagentChildToolAssembly {
   shellApprovalBindings: SubagentShellToolBindingV2[];
 }
 
-export interface RunSubagentChildInput {
-  compactionEngine?: CompactionEngine;
-  compactionModelOverrides?: CompactionModelOverrides;
-  authority: SubagentRuntimeAuthority;
-  runId?: string;
-  childId?: string;
-  groupId: string;
-  runtime: ResolvedModelRuntime;
-  transformRuntime?: SubagentRuntimeTransform;
-  thinkingLevel: ThinkingLevel;
-  workspaceRoot: string;
-  permission: WorkspacePermission;
-  inheritedCeiling: readonly SubagentReadToolName[];
-  /** Exact private V2 ceiling; absent only on the V1 rollback path. */
-  v2Authority?: SubagentAuthorityV2;
-  currentV2Authority?: () => SubagentAuthorityV2 | undefined;
+export interface SubagentApprovalSeamsV2 {
   consumeNetworkOperation?: (authority: SubagentAuthorityV2) => boolean;
   prepareOutboundApproval?: (
     bindings: readonly SubagentOutboundToolBindingV2[],
@@ -159,6 +122,24 @@ export interface RunSubagentChildInput {
     bindings: readonly SubagentShellToolBindingV2[],
     runSignal?: AbortSignal,
   ) => SubagentShellGateV2;
+}
+
+export interface RunSubagentChildInput extends SubagentApprovalSeamsV2 {
+  compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
+  authority: SubagentRuntimeAuthority;
+  runId?: string;
+  childId?: string;
+  groupId: string;
+  runtime: ResolvedModelRuntime;
+  transformRuntime?: SubagentRuntimeTransform;
+  thinkingLevel: ThinkingLevel;
+  workspaceRoot: string;
+  permission: WorkspacePermission;
+  inheritedCeiling: readonly SubagentReadToolName[];
+  /** Exact private V2 ceiling; absent only on the V1 rollback path. */
+  v2Authority?: SubagentAuthorityV2;
+  currentV2Authority?: () => SubagentAuthorityV2 | undefined;
   /** Main-owned depth-2 execution seam. Absent for V1, depth-2, rollback, or denied authority. */
   executeNested?: (
     params: unknown,
@@ -1025,38 +1006,20 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     clearTimeout(deadlineTimer);
     removeParentAbort();
     unsubscribe();
-    if (workspaceWriteApproval) {
+    const drainApproval = async (gate?: { shutdown(): Promise<void> }) => {
+      if (!gate) return;
       let shutdownFailed = false;
       const shutdown = Promise.resolve()
-        .then(() => workspaceWriteApproval!.shutdown())
+        .then(() => gate.shutdown())
         .catch(() => {
           shutdownFailed = true;
         });
       if (!(await boundedDrain(shutdown, policy.cancellationGraceMs)) || shutdownFailed) {
         reportCleanupFailure(input);
       }
-    }
-    if (mcpMutationApproval) {
-      let shutdownFailed = false;
-      const shutdown = Promise.resolve()
-        .then(() => mcpMutationApproval!.shutdown())
-        .catch(() => {
-          shutdownFailed = true;
-        });
-      if (!(await boundedDrain(shutdown, policy.cancellationGraceMs)) || shutdownFailed) {
-        reportCleanupFailure(input);
-      }
-    }
-    if (shellApproval) {
-      let shutdownFailed = false;
-      const shutdown = Promise.resolve()
-        .then(() => shellApproval!.shutdown())
-        .catch(() => {
-          shutdownFailed = true;
-        });
-      if (!(await boundedDrain(shutdown, policy.cancellationGraceMs)) || shutdownFailed) {
-        reportCleanupFailure(input);
-      }
-    }
+    };
+    await drainApproval(workspaceWriteApproval);
+    await drainApproval(mcpMutationApproval);
+    await drainApproval(shellApproval);
   }
 }

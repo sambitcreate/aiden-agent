@@ -1,6 +1,8 @@
 import { createHmac } from "node:crypto";
 import { BOT_CAPABILITY_LIMITS } from "../../renderer/shared/bot-capabilities.js";
 import {
+  configuredSkillCandidate,
+  discoveredSkillCandidate,
   resolveSkillCandidates,
   type ResolvedSkillCandidate,
   type SkillRegistryCandidate,
@@ -23,31 +25,6 @@ export interface BotSkillInventoryDependencies {
   isHomeSkillApproved?(stableId: string, contentFingerprint: string): Promise<boolean>;
   /** Home skills found but not approved, for one review card each. */
   onUnapprovedHomeSkills?(skills: readonly DiscoveredSkill[]): void;
-}
-
-function configuredCandidate(skill: Skill): SkillRegistryCandidate {
-  return {
-    stableId: `configured:${skill.id}`,
-    name: skill.name,
-    description: skill.description,
-    instructions: skill.instructions,
-    source: "configured",
-    enabled: skill.enabled,
-  };
-}
-
-function discoveredCandidate(skill: DiscoveredSkill): SkillRegistryCandidate {
-  return {
-    stableId: skill.id,
-    name: skill.name,
-    description: skill.description,
-    instructions: skill.instructions,
-    modelInvocable: skill.modelInvocable ?? true,
-    userInvocable: skill.userInvocable ?? true,
-    source: skill.source,
-    enabled: true,
-    path: skill.path,
-  };
 }
 
 function safeSourceId(key: Uint8Array, candidate: SkillRegistryCandidate): string {
@@ -89,9 +66,11 @@ async function resolvedBotSkills(
   return {
     key,
     skills: resolveSkillCandidates([
-      ...configured.map(configuredCandidate),
-      ...globalDiscovered.filter(({ source }) => source === "global").map(discoveredCandidate),
-      ...workspaceDiscovered.map(discoveredCandidate),
+      ...configured.map(configuredSkillCandidate),
+      ...globalDiscovered
+        .filter(({ source }) => source === "global")
+        .map((skill) => discoveredSkillCandidate(skill)),
+      ...workspaceDiscovered.map((skill) => discoveredSkillCandidate(skill)),
     ])
       // Retain unavailable entries for saved selections, but never let them
       // crowd eligible automatic skills out of the bounded Bot inventory.

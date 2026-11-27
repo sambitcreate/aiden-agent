@@ -4,9 +4,9 @@ import { Type } from "typebox";
 import type {
   AgentTool,
   AgentToolResult,
-  BeforeToolCallContext,
   BeforeToolCallResult,
 } from "@earendil-works/pi-agent-core";
+import type { SubagentToolGateV2 } from "./contracts.js";
 import {
   isSubagentRunGrantApprovalDetails,
   SUBAGENT_WORKSPACE_WRITE_CHILD_LABEL_LIMIT,
@@ -63,19 +63,7 @@ interface PendingShell {
   owner: { effectId: string; approvalId: string; runId: string; chatId: string };
 }
 
-export interface SubagentShellGateV2 {
-  beforeToolCall(
-    context: BeforeToolCallContext,
-    signal?: AbortSignal,
-  ): Promise<BeforeToolCallResult | undefined>;
-  execute(input: {
-    toolCallId: string;
-    toolName: string;
-    arguments: unknown;
-    signal?: AbortSignal;
-  }): Promise<AgentToolResult<null>>;
-  shutdown(): Promise<void>;
-}
+export type SubagentShellGateV2 = SubagentToolGateV2;
 
 export interface SubagentShellBrokerV2Input {
   authority: SubagentAuthorityV2;

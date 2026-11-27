@@ -6,14 +6,14 @@ import type {
 import { validateScheduledMcpServerIds } from "../services/schedule-guard.js";
 import { parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
 
-function requiredString(value: unknown, name: string): string {
+export function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`Expected a non-empty string for "${name}".`);
   }
   return value;
 }
 
-function optionalString(value: unknown): string | undefined {
+export function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 

@@ -75,6 +75,10 @@ export interface SubagentChildSpec {
   onStarting?: () => void;
 }
 
+export type SubagentRuntimeChildSpecInput = SubagentChildSpec & {
+  initialMessages: AgentMessage[];
+};
+
 export interface SubagentRuntimeChild {
   childId: string;
   sessionId: string;
