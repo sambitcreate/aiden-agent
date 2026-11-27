@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ChatGenerationOwner } from "./chat-generation-owner.js";
+import { ownedPendingRequest, type ChatGenerationOwner } from "./chat-generation-owner.js";
 
 export const AIDEN_APP_DESTINATIONS = [
   "appearance",
@@ -74,15 +74,8 @@ export class AidenAppNavigation {
   }
   acknowledge(id: unknown, status: unknown, owner: ChatGenerationOwner): boolean {
     if (typeof id !== "string" || (status !== "opened" && status !== "blocked")) return false;
-    const request = this.pending.get(id);
-    if (
-      !request ||
-      request.owner.id !== owner.id ||
-      request.owner.documentId !== owner.documentId ||
-      request.owner.isDestroyed() ||
-      owner.isDestroyed()
-    )
-      return false;
+    const request = ownedPendingRequest(this.pending, id, owner);
+    if (!request) return false;
     request.finish(status);
     return true;
   }

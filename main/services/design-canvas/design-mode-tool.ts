@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
-import type { ChatGenerationOwner } from "../chat-generation-owner.js";
+import { ownedPendingRequest, type ChatGenerationOwner } from "../chat-generation-owner.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { declareOnDemandSummary } from "../on-demand-tools.js";
 
@@ -100,16 +100,8 @@ export class DesignModeConsent {
     enter: (chatId: string) => Promise<void>,
   ): Promise<boolean> {
     if (typeof requestId !== "string" || (answer !== "enter" && answer !== "decline")) return false;
-    const request = this.pending.get(requestId);
-    if (
-      !request ||
-      request.owner.id !== owner.id ||
-      request.owner.documentId !== owner.documentId ||
-      request.owner.isDestroyed() ||
-      owner.isDestroyed()
-    ) {
-      return false;
-    }
+    const request = ownedPendingRequest(this.pending, requestId, owner);
+    if (!request) return false;
     if (answer === "decline") {
       this.declined.delete(request.chatId);
       this.declined.add(request.chatId);

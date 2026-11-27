@@ -110,3 +110,22 @@ export function chatGenerationOwner(event: Electron.IpcMainInvokeEvent): ChatGen
     () => new Error("Chat generation must start from the active application document."),
   );
 }
+
+/** Return the pending request only when it belongs to the same live renderer document. */
+export function ownedPendingRequest<T extends { owner: ChatGenerationOwner }>(
+  pending: ReadonlyMap<string, T>,
+  requestId: string,
+  owner: Pick<ChatGenerationOwner, "id" | "documentId" | "isDestroyed">,
+): T | null {
+  const request = pending.get(requestId);
+  if (
+    !request ||
+    request.owner.id !== owner.id ||
+    request.owner.documentId !== owner.documentId ||
+    request.owner.isDestroyed() ||
+    owner.isDestroyed()
+  ) {
+    return null;
+  }
+  return request;
+}

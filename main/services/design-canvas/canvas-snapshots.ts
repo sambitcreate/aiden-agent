@@ -3,7 +3,7 @@
 // downscaled PNG of the canvas region (design mode P3d).
 
 import { randomUUID } from "node:crypto";
-import type { ChatGenerationOwner } from "../chat-generation-owner.js";
+import { ownedPendingRequest, type ChatGenerationOwner } from "../chat-generation-owner.js";
 
 /** `designCanvas:snapshot`, to the turn's window. */
 export type DesignCanvasSnapshotRequest = { requestId: string; chatId: string };
@@ -58,16 +58,8 @@ export class DesignCanvasSnapshots {
     owner: Pick<ChatGenerationOwner, "id" | "documentId" | "isDestroyed">,
   ): boolean {
     if (typeof requestId !== "string") return false;
-    const request = this.pending.get(requestId);
-    if (
-      !request ||
-      request.owner.id !== owner.id ||
-      request.owner.documentId !== owner.documentId ||
-      request.owner.isDestroyed() ||
-      owner.isDestroyed()
-    ) {
-      return false;
-    }
+    const request = ownedPendingRequest(this.pending, requestId, owner);
+    if (!request) return false;
     const valid =
       typeof dataUrl === "string" &&
       dataUrl.startsWith(PNG_PREFIX) &&
