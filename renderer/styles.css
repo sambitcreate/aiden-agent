@@ -2130,7 +2130,10 @@ textarea {
   gap: 16px 10px;
 }
 
-.appearance-tile {
+/* Choice cards communicate selection through the label's list-selection fill,
+   never a decorative border; keyboard focus keeps the neutral focus ring. */
+.appearance-tile,
+.appearance-width-option {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -2138,10 +2141,13 @@ textarea {
   gap: 7px;
   padding: 0;
   border: 0;
-  border-radius: 14px;
   background: transparent;
   color: var(--text-secondary);
   outline: none;
+}
+
+.appearance-tile {
+  border-radius: 14px;
 }
 
 .appearance-tile:focus-visible {
@@ -2165,7 +2171,8 @@ textarea {
   user-select: none;
 }
 
-.appearance-tile:hover .appearance-tile-swatch {
+.appearance-tile:hover .appearance-tile-swatch,
+.appearance-width-option:hover .appearance-width-preview {
   box-shadow: var(--elevation-control-hover);
 }
 
@@ -2241,20 +2248,8 @@ textarea {
   gap: 10px;
 }
 
-/* Choice cards communicate selection through the label's list-selection fill,
-   never a decorative border; keyboard focus keeps the neutral focus ring. */
 .appearance-width-option {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: center;
-  gap: 7px;
-  padding: 0;
-  border: 0;
   border-radius: 13px;
-  background: transparent;
-  color: var(--text-secondary);
-  outline: none;
 }
 
 .appearance-width-option:focus-visible {
@@ -2273,10 +2268,6 @@ textarea {
   background: var(--surface-popover);
   box-shadow: var(--elevation-control);
   transition: box-shadow 150ms ease-out;
-}
-
-.appearance-width-option:hover .appearance-width-preview {
-  box-shadow: var(--elevation-control-hover);
 }
 
 .appearance-width-preview-column {
