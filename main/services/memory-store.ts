@@ -936,33 +936,6 @@ export class MemoryStore {
     return removed;
   }
 
-  async deleteScope(scope: MemoryScope): Promise<number> {
-    const database = await this.db();
-    const valid = validateScope(scope);
-    database.exec("BEGIN IMMEDIATE");
-    let removed = 0;
-    try {
-      this.statement(database, `
-        UPDATE memory_facts SET supersedes_id = NULL
-        WHERE supersedes_id IN (
-          SELECT id FROM memory_facts WHERE scope_kind = ? AND scope_id = ?
-        )
-      `).run(valid.kind, valid.id);
-      const facts = this.statement(database, 
-        "DELETE FROM memory_facts WHERE scope_kind = ? AND scope_id = ?",
-      ).run(valid.kind, valid.id);
-      removed = Number(facts.changes);
-      this.statement(database, "DELETE FROM memory_documents WHERE scope_kind = ? AND scope_id = ?")
-        .run(valid.kind, valid.id);
-      database.exec("COMMIT");
-    } catch (error) {
-      database.exec("ROLLBACK");
-      throw error;
-    }
-    await this.repairPrivateModes();
-    return removed;
-  }
-
   async close(): Promise<void> {
     this.openGeneration += 1;
     if (this.database) reclaimSqlitePages(this.database);
