@@ -458,7 +458,6 @@
   --fill-danger-foreground: #FFFFFF;
   --fill-danger-hover: #B8443F;
   --fill-danger-active: #A73E39;
-  --focus-ring: var(--text-primary);
   --status-accent: #71ACEC;
   --status-accent-surface: rgb(62 151 246 / 0.080);
   --status-red: #EFA3A1;
@@ -473,20 +472,6 @@
   --support-green-foreground: #000000;
   --support-warning: #FFB020;
   --support-warning-foreground: #000000;
-  --bot-avatar-lilac: #c6a9ff;
-  --bot-avatar-sky: #83d8ff;
-  --bot-avatar-mint: #88e8b1;
-  --bot-avatar-sun: #ffda7b;
-  --bot-avatar-periwinkle: #b2bcff;
-  --bot-avatar-coral: #ff9f9b;
-  --bot-avatar-peach: #ffc294;
-  --bot-avatar-aqua: #78e8df;
-  --bot-avatar-rose: #ffa3c7;
-  --bot-avatar-lime: #c6ec7e;
-  --bot-avatar-plum: #dda8f2;
-  --bot-avatar-graphite: #c5c5ce;
-  --bot-avatar-face: #292735;
-  --bot-avatar-marker: #2f7eea;
   /* Dark surfaces take the bot-avatar hues as-is. */
   --chart-1: var(--bot-avatar-sky);
   --chart-2: var(--bot-avatar-mint);
