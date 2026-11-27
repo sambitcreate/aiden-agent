@@ -1617,6 +1617,8 @@ async function pickerFixture(
     candidates?: DesignAppsSnapshot["candidates"];
     apps?: DesignAppsSnapshot["apps"];
     chats?: Record<string, DesignCanvasChat>;
+    /** Runs while main reads the apps snapshot, as a person acting meanwhile. */
+    onSnapshot?: () => void;
   } = {},
 ) {
   const reported: number[] = [];
@@ -1627,13 +1629,16 @@ async function pickerFixture(
       enabled: () => options.live ?? true,
       registry: () => null,
       apps: {
-        snapshot: async (workspaceId) => ({
+        snapshot: async (workspaceId) => {
+          options.onSnapshot?.();
+          return {
           workspaceId,
           target: options.target ?? "single",
           apps: options.apps ?? [],
           candidates: options.candidates ?? [{ appRoot: ".", framework: "next", frameworkLabel: "Next.js" }],
           chosen: [],
-        }),
+          };
+        },
         appForOrigin: () => undefined,
         routes: async (_workspaceId, appRoot) => {
           routeCalls.push(appRoot);
@@ -1743,4 +1748,35 @@ test("3b: the person can place a route they removed, which forgets the removal",
   assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedAppRoutes, [appRouteKey(".", "/pricing")]);
   assert.ok("placed" in ((await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" })) as object));
   assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedAppRoutes, undefined);
+});
+
+test("3b: a chat that leaves design mode or moves while main reads its apps gets unavailable, and nothing is placed or listed", async (t) => {
+  for (const change of [
+    (chat: DesignCanvasChat): DesignCanvasChat => ({ ...chat, designMode: false }),
+    (chat: DesignCanvasChat): DesignCanvasChat => ({ ...chat, workspaceId: "workspace-2" }),
+  ]) {
+    const chats: Record<string, DesignCanvasChat> = { "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true } };
+    const original = chats["chat-1"]!;
+    let act = true;
+    const { invoke, store, broadcasts, focusSent, reported, routeCalls } = await pickerFixture(t, {
+      chats,
+      onSnapshot: () => {
+        if (act) chats["chat-1"] = change(original);
+      },
+    });
+    assert.deepEqual(await invoke("designCanvas:appRoutes", "chat-1", {}), { error: "unavailable" });
+    assert.deepEqual(routeCalls, [], "no routes were walked for a chat that left");
+    chats["chat-1"] = original;
+    assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" }), { error: "unavailable" });
+    act = false;
+    chats["chat-1"] = original;
+    const doc = (await store.get("chat-1", { workspaceId: "workspace-1" })).doc;
+    assert.deepEqual(appFramesIn(doc), [], "nothing was written to the canvas it left");
+    assert.deepEqual([broadcasts.length, focusSent.length, reported.length], [0, 0, 0]);
+  }
+});
+
+test("3b: placeAppRoute in a workspace whose apps are unavailable answers unavailable", async (t) => {
+  const { invoke } = await pickerFixture(t, { target: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" }), { error: "unavailable" });
 });

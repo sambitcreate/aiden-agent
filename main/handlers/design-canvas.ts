@@ -678,6 +678,12 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     return { chat, workspaceId: designCanvasWorkspaceOf(chat), live };
   };
 
+  /** Whether the chat is still framing in `workspaceId`: design mode on and not moved while main awaited. */
+  const stillFraming = async (chatId: string, workspaceId: string): Promise<boolean> => {
+    const current = await deps.getChat(chatId);
+    return canFrame(current) && designCanvasWorkspaceOf(current) === workspaceId;
+  };
+
   deps.handle("designCanvas:appRoutes", async (_event, chatId, request): Promise<DesignCanvasAppRoutesResult> => {
     if (!deps.enabled()) throw new Error(UNAVAILABLE);
     const asked = await pickerChat(chatId);
@@ -686,11 +692,13 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (appRoot !== undefined && (typeof appRoot !== "string" || !isAppRoot(appRoot))) return { error: "no-app" };
     const snapshot = await asked.live.apps.snapshot(asked.workspaceId);
     if (snapshot.target === "unavailable") return { error: "unavailable" };
+    if (!(await stillFraming(asked.chat.id, asked.workspaceId))) return { error: "unavailable" };
     const apps = pickerApps(snapshot);
     const root = appRoot ?? apps[0]?.appRoot;
     if (root === undefined || !apps.some((app) => app.appRoot === root)) return { error: "no-app" };
     const list = await asked.live.apps.routes!(asked.workspaceId, root);
     if ("error" in list) return list.error === "unavailable" ? { error: "unavailable" } : { error: "no-app" };
+    if (!(await stillFraming(asked.chat.id, asked.workspaceId))) return { error: "unavailable" };
     return { apps, appRoot: root, list };
   });
 
@@ -704,6 +712,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (typeof route !== "string" || !isConcreteRoute(route)) return { error: "bad-route" };
     const { chat, workspaceId, live } = asked;
     const snapshot = await live.apps.snapshot(workspaceId);
+    if (snapshot.target === "unavailable") return { error: "unavailable" };
+    if (!(await stillFraming(chat.id, workspaceId))) return { error: "unavailable" };
     if (!pickerApps(snapshot).some((app) => app.appRoot === appRoot)) return { error: "unknown-root" };
     const viewSize = rawSize === undefined ? undefined : parseDesignViewState({ selection: [], viewSize: rawSize })?.viewSize;
     const pages = designTurnPages({
@@ -754,7 +764,16 @@ export function registerDesignCanvasHandlers<Event>(deps: {
           outcome = { placed: placed.id, pageId: view.pageId };
           return placed.doc;
         },
-        { workspaceId },
+        {
+          workspaceId,
+          // Leaving design mode, deleting the chat or moving it while this waited writes nothing.
+          beforeWrite: async () => {
+            if (!(await stillFraming(chat.id, workspaceId))) {
+              outcome = { error: "unavailable" };
+              throw UNCHANGED;
+            }
+          },
+        },
       );
       // The person's own undo step.
       deps.broadcast({ workspaceId, chatId: chat.id, revision: saved.doc.revision, step: `add-app-route:${saved.doc.revision}` });
@@ -762,7 +781,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       if (error !== UNCHANGED) throw error;
     }
     const result = outcome as DesignCanvasPlaceAppRouteResult;
-    if ("placed" in result || "already" in result) {
+    if (("placed" in result || "already" in result) && (await stillFraming(chat.id, workspaceId))) {
       const frameId = "placed" in result ? result.placed : result.already;
       // Unlike a visual, the frame is focused on its own page too, so the person sees what Add did.
       const focusId = await pages.show(workspaceId, result.pageId);
