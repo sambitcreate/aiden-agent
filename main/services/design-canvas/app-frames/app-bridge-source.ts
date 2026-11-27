@@ -97,7 +97,8 @@ ${DESIGN_BRIDGE_CORE_SOURCE}
       if (!match) continue;
       const path = ownPath(match[1]);
       const number = Number(match[2]);
-      return path && Number.isInteger(number) && number > 0 ? { path, line: number } : null;
+      // A dependency's or another origin's frame is skipped for the app's own code below it.
+      if (path && Number.isInteger(number) && number > 0) return { path, line: number };
     }
     return null;
   };

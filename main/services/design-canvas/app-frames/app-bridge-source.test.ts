@@ -167,6 +167,23 @@ test("errors: thrown, rejected, Vite's and Next.js's overlays and a failed modul
   assert.match(errors.find((message) => message.kind === "module")!.message, /\/src\/main\.tsx/u);
 });
 
+test("an error thrown inside a dependency points at the first line of the app's own code below it", async () => {
+  const view = page(PRICING);
+  const stacks = [
+    `Error: bad input\n    at parse (${ORIGIN}/node_modules/.vite/deps/zod.js?v=1:50:11)\n    at Pricing (${ORIGIN}/src/Pricing.tsx:12:5)`,
+    `Error: x\n    at a (${ORIGIN}/@fs/Users/me/lib.js:3:1)\n    at b (https://cdn.example/lib.js:4:2)\n    at c (${ORIGIN}/src/Plans.tsx:40:9)`,
+    `Error: y\n    at a (${ORIGIN}/node_modules/react-dom.js:1:1)\n    at b (https://cdn.example/lib.js:4:2)`,
+  ];
+  for (const stack of stacks) {
+    view.window.dispatchEvent(new view.window.ErrorEvent("error", { message: "boom", error: Object.assign(new Error("boom"), { stack }) }));
+  }
+  await settle();
+  assert.deepEqual(
+    of(view, "error").map((message) => message.at),
+    [{ path: "src/Pricing.tsx", line: 12 }, { path: "src/Plans.tsx", line: 40 }, undefined],
+  );
+});
+
 test("hmr: only the page's own Vite client is imported, and its afterUpdate posts hmr", async () => {
   const vite = page(`<!doctype html><html><head><script type="module" src="/base/@vite/client"></script></head><body></body></html>`, { url: `${ORIGIN}/base/pricing` });
   await settle();
