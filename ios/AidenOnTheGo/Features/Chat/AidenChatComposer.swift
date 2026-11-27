@@ -32,9 +32,9 @@ struct AidenComposerView: View {
     let session: AidenComposerSession
     let autoStartVoice: Bool
     @Bindable var attachmentPicker: AidenAttachmentPickerState
-    let motionNamespace: Namespace.ID
     let canToggleAttachments: Bool
     let onToggleAttachmentPicker: () -> Void
+    var onLongPressAttachmentButton: (() -> Void)? = nil
     var placeholder = "Message Aiden"
 
     var body: some View {
@@ -60,9 +60,18 @@ struct AidenComposerView: View {
                 }
             }
         )
+        .background {
+            GeometryReader { proxy in
+                let minY = (proxy.frame(in: .named(AidenChatAttachmentCoordinateSpace.name)).minY * 2).rounded() / 2
+                Color.clear.preference(
+                    key: AidenComposerTopYPreferenceKey.self,
+                    value: minY
+                )
+            }
+        }
         .animation(
-            reduceMotion ? nil : .smooth(duration: 0.34),
-            value: visiblePendingAttachments.map(\.id) + attachmentPicker.committingAssets.map(\.localIdentifier)
+            reduceMotion ? nil : .smooth(duration: 0.28),
+            value: visiblePendingAttachments.isEmpty && model.stagingAttachments.isEmpty
         )
         .task {
             await model.startVoiceForLaunch(if: autoStartVoice) { await toggleVoice() }
@@ -105,37 +114,20 @@ struct AidenComposerView: View {
 
     @ViewBuilder
     private var accessory: some View {
-        if let progress = model.uploadProgress {
-            AidenUploadProgressRow(progress: progress, onCancel: model.cancelUploads)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-        }
-
-        if !visiblePendingAttachments.isEmpty || !attachmentPicker.committingAssets.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(visiblePendingAttachments) { attachment in
-                        AidenPendingAttachmentCard(
-                            attachment: attachment,
-                            loadImageData: {
-                                await model.pendingAttachmentImageData(for: attachment)
-                            },
-                            onRemove: {
-                                Task { await model.removeAttachment(attachment) }
-                            }
-                        )
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                    }
-
-                    ForEach(attachmentPicker.committingAssets, id: \.localIdentifier) { asset in
-                        AidenCommittingPhotoCard(
-                            asset: asset,
-                            motionNamespace: motionNamespace
-                        )
-                    }
+        if !visiblePendingAttachments.isEmpty || !model.stagingAttachments.isEmpty {
+            AidenComposerAttachmentStrip(
+                pendingAttachments: visiblePendingAttachments,
+                stagingStore: model.attachmentStagingStore,
+                loadImageData: { attachment in
+                    await model.pendingAttachmentImageData(for: attachment)
+                },
+                onRemovePending: { attachment in
+                    Task { await model.removeAttachment(attachment) }
+                },
+                onCancelStaging: { id in
+                    model.cancelStagingAttachment(id: id)
                 }
-                .padding(.horizontal, 1)
-            }
-            .accessibilityLabel("Attachments")
+            )
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
 
@@ -180,15 +172,21 @@ struct AidenComposerView: View {
     }
 
     private var attachButton: some View {
-        AidenComposerAttachButton(
+        let hint: String = if onLongPressAttachmentButton != nil {
+            String(localized: "Tap for attachment options, or touch and hold for quick photos")
+        } else if model.acceptsImageAttachments {
+            String(localized: "Attach an image or bounded text file")
+        } else {
+            String(localized: "Attach a bounded text file. This model cannot read images")
+        }
+        return AidenComposerAttachButton(
             isOpen: attachmentPicker.isPresented,
-            isBusy: model.isUploadingAttachment || model.isPreparingAttachments,
-            showsSpinner: model.uploadProgress == nil,
-            hint: model.acceptsImageAttachments
-                ? String(localized: "Attach an image or bounded text file")
-                : String(localized: "Attach a bounded text file. This model cannot read images"),
+            isBusy: model.isUploadingAttachment || model.isPreparingAttachments || !model.stagingAttachments.isEmpty,
+            showsSpinner: model.stagingAttachments.isEmpty && model.uploadProgress == nil,
+            hint: hint,
             coordinateSpace: AidenChatAttachmentCoordinateSpace.name,
-            action: onToggleAttachmentPicker
+            action: onToggleAttachmentPicker,
+            onLongPress: onLongPressAttachmentButton
         )
         .disabled(!canToggleAttachments)
     }
@@ -230,8 +228,7 @@ struct AidenComposerView: View {
     }
 
     private var visiblePendingAttachments: [AidenAttachmentReference] {
-        guard !attachmentPicker.committingAssets.isEmpty else { return session.attachments }
-        return Array(session.attachments.prefix(attachmentPicker.committingPendingPrefixCount))
+        session.attachments
     }
 
     /// One pill while a run streams, matching the desktop and Android control:

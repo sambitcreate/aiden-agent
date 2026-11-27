@@ -132,7 +132,7 @@ struct AidenBotSessionChatView: View {
     @State private var attachmentPicker: AidenAttachmentPickerState
     @State private var isFileImporterPresented = false
     @State private var attachButtonCenter: CGPoint?
-    @Namespace private var attachmentMotionNamespace
+    @State private var composerTopY: CGFloat?
     @State private var showsSessionSheet = false
     /// Runs once the sheet has closed, so what it opens has the screen to itself.
     @State private var pendingSessionAction: AidenSessionAction?
@@ -270,15 +270,14 @@ struct AidenBotSessionChatView: View {
         }
         .coordinateSpace(name: AidenBotComposerCoordinateSpace.name)
         .onPreferenceChange(AidenAttachmentButtonCenterPreferenceKey.self) { center in
+            guard attachButtonCenter != center else { return }
             attachButtonCenter = center
         }
-        .animation(
-            AidenAttachmentPickerPresentationMotion.transition(
-                isPresented: attachmentPicker.isPresented,
-                reduceMotion: reduceMotion
-            ),
-            value: attachmentPicker.isPresented
-        )
+        .onPreferenceChange(AidenComposerTopYPreferenceKey.self) { topY in
+            guard composerTopY != topY else { return }
+            composerTopY = topY
+        }
+        .preference(key: AidenChatHoldsAttachmentsKey.self, value: composerSession.holdsAttachments)
         .fileImporter(
             isPresented: $isFileImporterPresented,
             allowedContentTypes: [.image, .plainText, .sourceCode, .json, .xml, .commaSeparatedText],
@@ -1328,7 +1327,7 @@ struct AidenBotSessionChatView: View {
             }
             return
         }
-        guard composerSession.hasContent, !model.isAttaching else { return }
+        guard composerSession.hasContent, !model.isPreparingAttachments else { return }
         let text = composerSession.text
         composerSession.text = ""
         // The person's own message scrolls into view wherever they were reading.
@@ -1345,7 +1344,7 @@ struct AidenBotSessionChatView: View {
     /// empty draft too, so the mode can be picked before typing.
     private func busyPill(_ model: AidenBotSessionModel) -> some View {
         let available = canCompose && model.canSend && !model.composerHeldForPlan
-        let enabled = available && composerSession.hasContent && !model.isAttaching
+        let enabled = available && composerSession.hasContent && !model.isPreparingAttachments
         return AidenBotBusyPill(
             title: busyMode.busyLabel,
             actionLabel: busyMode.busyActionLabel,
@@ -1379,12 +1378,9 @@ struct AidenBotSessionChatView: View {
             onSend: { submit(model, whenBusy: nil) },
             onStop: model.isRunning ? { Task { await model.stop() } } : nil,
             accessory: {
-                if let progress = model.uploadProgress {
-                    AidenUploadProgressRow(progress: progress, onCancel: model.cancelUploads)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                }
-                if !composerSession.attachments.isEmpty {
+                if !composerSession.attachments.isEmpty || !model.stagingAttachments.isEmpty {
                     pendingAttachments(model)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             },
             attachButton: { attachButton(model) },
@@ -1403,6 +1399,19 @@ struct AidenBotSessionChatView: View {
                 }
             }
         )
+        .background {
+            GeometryReader { proxy in
+                let minY = (proxy.frame(in: .named(AidenBotComposerCoordinateSpace.name)).minY * 2).rounded() / 2
+                Color.clear.preference(
+                    key: AidenComposerTopYPreferenceKey.self,
+                    value: minY
+                )
+            }
+        }
+        .animation(
+            reduceMotion ? nil : .smooth(duration: 0.28),
+            value: composerSession.attachments.isEmpty && model.stagingAttachments.isEmpty
+        )
     }
 
     private func composerPlaceholder(_ model: AidenBotSessionModel) -> String {
@@ -1418,51 +1427,55 @@ struct AidenBotSessionChatView: View {
         }
     }
 
-    /// The workspace chat's +: Files, Camera and Photos.
+    /// The workspace chat's +: Files, Camera and Photos on tap; quick-photo strip on long-press.
     private func attachButton(_ model: AidenBotSessionModel) -> some View {
-        AidenComposerAttachButton(
+        let canOpen = canCompose && canWrite && model.canAttach
+        let canQuickPick = canOpen && !attachmentPicker.isPresented
+        return AidenComposerAttachButton(
             isOpen: attachmentPicker.isPresented,
-            isBusy: model.isAttaching,
-            showsSpinner: model.uploadProgress == nil,
-            hint: String(localized: "Attach a photo or a text file"),
-            coordinateSpace: AidenBotComposerCoordinateSpace.name
-        ) {
-            toggleAttachmentPicker(model)
-        }
-        .disabled(!canCompose || (!model.canAttach && !attachmentPicker.isPresented))
+            isBusy: model.isAttaching || !model.stagingAttachments.isEmpty,
+            showsSpinner: model.stagingAttachments.isEmpty && model.uploadProgress == nil,
+            hint: canQuickPick
+                ? String(localized: "Tap for attachment options, or touch and hold for quick photos")
+                : String(localized: "Attach a photo or a text file"),
+            coordinateSpace: AidenBotComposerCoordinateSpace.name,
+            action: { toggleAttachmentPicker(model) },
+            onLongPress: canQuickPick ? { openQuickPhotos(model) } : nil
+        )
+        .disabled(!canOpen && !attachmentPicker.isPresented)
     }
 
     /// The photos and files waiting to go with the next message.
     private func pendingAttachments(_ model: AidenBotSessionModel) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(composerSession.attachments) { attachment in
-                    AidenPendingAttachmentCard(
-                        attachment: attachment,
-                        loadImageData: { model.attachmentImageData(attachment.id) },
-                        onRemove: { Task { await model.removeAttachment(attachment.id) } }
-                    )
-                }
+        AidenComposerAttachmentStrip(
+            pendingAttachments: composerSession.attachments,
+            stagingStore: model.attachmentStagingStore,
+            loadImageData: { attachment in
+                model.attachmentImageData(attachment.id)
+            },
+            onRemovePending: { attachment in
+                Task { await model.removeAttachment(attachment.id) }
+            },
+            onCancelStaging: { id in
+                model.cancelStagingAttachment(id: id)
             }
-            .padding(.horizontal, 4)
-            .padding(.top, 4)
-        }
-        .scrollClipDisabled()
+        )
     }
 
     private func attachmentPickerOverlay(_ model: AidenBotSessionModel) -> some View {
         AidenAttachmentPickerOverlay(
             picker: attachmentPicker,
-            motionNamespace: attachmentMotionNamespace,
             attachmentCapacity: model.attachmentCapacity,
             canChoosePhotos: true,
             isBotChat: false,
-            isBusy: model.isAttaching || !canWrite,
+            isBusy: model.isPreparingAttachments || !canWrite,
             attachmentButtonCenter: attachButtonCenter,
+            composerTopY: composerTopY,
             onUnavailableBotPhotos: {},
             onChooseFiles: { isFileImporterPresented = true },
             onCaptureCameraPhoto: { data in attachCapturedPhoto(data, model: model) },
-            onCommitPhotos: { attachSelectedPhotos(model) }
+            onCommitPhotos: { attachSelectedPhotos(model) },
+            onPickQuickPhoto: { selection in attachQuickPhoto(selection, model: model) }
         )
         .allowsHitTesting(attachmentPicker.isPresented)
         .accessibilityHidden(!attachmentPicker.isPresented)
@@ -1474,9 +1487,15 @@ struct AidenBotSessionChatView: View {
             attachmentPicker.dismiss()
             return
         }
-        guard model.canAttach else { return }
+        guard canCompose, canWrite, model.canAttach else { return }
         composerSession.putAwayKeyboard()
         attachmentPicker.openMenu()
+    }
+
+    private func openQuickPhotos(_ model: AidenBotSessionModel) {
+        guard canCompose, canWrite, model.canAttach, !attachmentPicker.isPresented else { return }
+        composerSession.putAwayKeyboard()
+        attachmentPicker.openQuickPhotos()
     }
 
     /// Revision 50: this phone holds `attachments:raw` on the connected Mac.
@@ -1484,41 +1503,40 @@ struct AidenBotSessionChatView: View {
         ownerConnection?.server?.supportsRawUploads == true
     }
 
+    private func attachQuickPhoto(_ selection: AidenQuickPhotoSelection, model: AidenBotSessionModel) {
+        attachmentPicker.dismiss()
+        guard canWrite, model.canAttach else { return }
+        model.rawImageUploads = rawImageUploadsGranted
+        model.stageAndAttach([.quickPhoto(selection)])
+    }
+
     private func attachSelectedPhotos(_ model: AidenBotSessionModel) {
-        guard !model.isAttaching,
+        guard canWrite, !model.isPreparingAttachments,
               let commit = attachmentPicker.beginCommit(pendingCount: model.pendingAttachments.count) else { return }
-        let items: [@MainActor () async throws -> AidenAttachmentUpload] = commit.assets.map { asset in
-            {
-                let picked = try await AidenPhotoLibraryImageLoader.pickedImage(for: asset)
-                return try await AidenAttachmentPreparation.imageUploadAsync(data: picked.data, name: picked.name)
-            }
+        let items = commit.assets.map(AidenAttachmentStageItem.photoAsset)
+        model.rawImageUploads = rawImageUploadsGranted
+        guard let task = model.stageAndAttach(items) else {
+            attachmentPicker.finishCommit(commit.id)
+            return
         }
         Task { @MainActor in
-            model.rawImageUploads = rawImageUploadsGranted
-            await model.attach(items)
+            _ = await task.value
             attachmentPicker.finishCommit(commit.id)
         }
     }
 
     private func attachCapturedPhoto(_ data: Data, model: AidenBotSessionModel) {
         attachmentPicker.dismiss()
-        Task { @MainActor in
-            model.rawImageUploads = rawImageUploadsGranted
-            await model.attach([{
-                try await AidenAttachmentPreparation.imageUploadAsync(data: data, name: "Camera Photo.jpg")
-            }])
-        }
+        guard canWrite, model.canAttach else { return }
+        model.rawImageUploads = rawImageUploadsGranted
+        model.stageAndAttach([.cameraCapture(data)])
     }
 
     private func attachFiles(_ result: Result<[URL], Error>) {
-        guard let model, case let .success(urls) = result, !urls.isEmpty else { return }
-        let items: [@MainActor () async throws -> AidenAttachmentUpload] = urls.map { url in
-            { try await AidenAttachmentPreparation.fileUploadAsync(url: url) }
-        }
-        Task { @MainActor in
-            model.rawImageUploads = rawImageUploadsGranted
-            await model.attach(items)
-        }
+        guard let model, canWrite, case let .success(urls) = result, !urls.isEmpty else { return }
+        let items = urls.map(AidenAttachmentStageItem.fileURL)
+        model.rawImageUploads = rawImageUploadsGranted
+        model.stageAndAttach(items)
     }
 
     @MainActor
@@ -1655,7 +1673,7 @@ extension AidenBotSessionModel {
 
     func canSendFromComposer(connection: AidenHostConnection?, hasContent: Bool) -> Bool {
         let canCompose = Self.canCompose(on: connection)
-        return canCompose && canSend && !composerHeldForPlan && !composerIsHeld && hasContent && !isAttaching
+        return canCompose && canSend && !composerHeldForPlan && !composerIsHeld && hasContent && !isPreparingAttachments
             && (!composerAnswersHandoff || (connection?.connectionState == .connected && canAnswerHandoff))
     }
 

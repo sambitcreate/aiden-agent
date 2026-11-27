@@ -378,27 +378,50 @@ struct AidenComposerStopButton: View {
     }
 }
 
-/// The +: Files, Camera and Photos. It reports its center so the picker can
-/// grow out of it, in the conversation's own coordinate space.
+/// Top edge of the composer surface in the conversation's attachment coordinate
+/// space, so floating overlays anchor cleanly above stacked or multi-line drafts.
+struct AidenComposerTopYPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat? = nil
+
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+        value = nextValue() ?? value
+    }
+}
+
+/// The +: Files, Camera and Photos on tap; instant quick-photo strip on press
+/// and hold. It reports its center so overlays can grow out of it, in the
+/// conversation's own coordinate space.
 struct AidenComposerAttachButton: View {
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     @AidenComposerActionSize private var actionSize
     let isOpen: Bool
     let isBusy: Bool
-    /// False while the upload bar shows progress: it is then the only spinner.
+    /// False while an inline upload card already carries progress.
     let showsSpinner: Bool
     let hint: String
     let coordinateSpace: String
     let action: () -> Void
+    var onLongPress: (() -> Void)? = nil
+
+    @State private var suppressNextTap = false
+    @State private var longPressFeedbackSequence = 0
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            if suppressNextTap {
+                suppressNextTap = false
+                return
+            }
+            action()
+        } label: {
             Image(systemName: "plus")
                 .font(.title3.weight(.medium))
                 .dynamicTypeSize(...AidenComposerLayout.largestGlyphSize)
                 .foregroundStyle(palette.foreground)
                 .frame(width: actionSize, height: actionSize)
                 .rotationEffect(.degrees(isOpen ? 45 : 0))
+                .animation(reduceMotion ? nil : .spring(duration: 0.28, bounce: 0.1), value: isOpen)
                 .opacity(isBusy ? 0.48 : 1)
                 .overlay(alignment: .bottomTrailing) {
                     if isBusy, showsSpinner {
@@ -410,19 +433,75 @@ struct AidenComposerAttachButton: View {
                 }
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AidenAttachButtonPressStyle(
+            reduceMotion: reduceMotion,
+            onPressEnded: {
+                guard suppressNextTap else { return }
+                DispatchQueue.main.async { suppressNextTap = false }
+            }
+        ))
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.32, maximumDistance: 18)
+                .onEnded { _ in
+                    guard !isOpen, let onLongPress else { return }
+                    suppressNextTap = true
+                    longPressFeedbackSequence &+= 1
+                    onLongPress()
+                },
+            including: (!isOpen && onLongPress != nil) ? .all : .none
+        )
+        .sensoryFeedback(
+            .impact(flexibility: .soft, intensity: 0.7),
+            trigger: longPressFeedbackSequence
+        )
         .accessibilityLabel("Add attachment")
         .accessibilityValue(isOpen ? "Open" : "Closed")
         .accessibilityHint(hint)
+        .accessibilityActions {
+            if !isOpen, let onLongPress {
+                Button("Quick attach photo", action: onLongPress)
+            }
+        }
+        .onChange(of: isOpen) { _, open in
+            if !open { suppressNextTap = false }
+        }
         .background {
             GeometryReader { proxy in
                 let frame = proxy.frame(in: .named(coordinateSpace))
+                let quantized = CGPoint(
+                    x: (frame.midX * 2).rounded() / 2,
+                    y: (frame.midY * 2).rounded() / 2
+                )
                 Color.clear.preference(
                     key: AidenAttachmentButtonCenterPreferenceKey.self,
-                    value: CGPoint(x: frame.midX, y: frame.midY)
+                    value: quantized
                 )
             }
         }
+    }
+}
+
+/// Local press bloom on the `+` button without turning the outer composer glass
+/// container `.interactive()` (which would recompute Liquid Glass during streaming).
+private struct AidenAttachButtonPressStyle: ButtonStyle {
+    @Environment(\.aidenPalette) private var palette
+    let reduceMotion: Bool
+    let onPressEnded: () -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                palette.foreground.opacity(configuration.isPressed ? 0.12 : 0),
+                in: Circle()
+            )
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 1.07 : 1)
+            .animation(
+                reduceMotion ? nil : .spring(duration: 0.22, bounce: 0.15),
+                value: configuration.isPressed
+            )
+            .onChange(of: configuration.isPressed) { wasPressed, isPressed in
+                if wasPressed, !isPressed { onPressEnded() }
+            }
     }
 }
 

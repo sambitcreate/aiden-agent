@@ -120,6 +120,10 @@ final class AidenComposerSurfaceTests: XCTestCase {
         owner.isPreparingAttachments = false
         owner.pendingAttachments = [Self.attachment]
         XCTAssertTrue(session.holdsAttachments)
+
+        owner.pendingAttachments = []
+        owner.stagingAttachments = [AidenStagingAttachment(kind: .image, displayName: "Photo.jpg", phase: .preparing)]
+        XCTAssertTrue(session.holdsAttachments)
     }
 
     // MARK: - The keyboard
@@ -786,6 +790,7 @@ final class AidenComposerFakeDraft: AidenComposerDraftOwner {
 @Observable
 final class AidenComposerFakeAttachments: AidenComposerAttachmentOwner {
     var pendingAttachments: [AidenAttachmentReference] = []
+    var stagingAttachments: [AidenStagingAttachment] = []
     var isPreparingAttachments = false
     private(set) var cancellations = 0
 

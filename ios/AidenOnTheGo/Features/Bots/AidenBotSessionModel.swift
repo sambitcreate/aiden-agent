@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Observation
+import UIKit
 
 /// Host feature tokens added in contract revision 25.
 enum AidenBotHostFeature {
@@ -1334,6 +1335,10 @@ final class AidenBotSessionModel {
     var attachmentsSupported = false
     /// Photos and files staged on the Mac for the next message, in the order they were added.
     private(set) var pendingAttachments: [AidenAttachmentReference] = []
+    /// Shared staging store keeping in-flight cards and zero-flash preview handoffs.
+    let attachmentStagingStore = AidenAttachmentStagingStore()
+    var stagingAttachments: [AidenStagingAttachment] { attachmentStagingStore.items }
+    @ObservationIgnored private var activeAttachBatchID: UUID?
     /// Attachments are being prepared or uploaded; the + and Send wait for them.
     private(set) var isAttaching = false
     /// Revision 50: the phone holds `attachments:raw`, so pictures go as their own bytes.
@@ -1520,7 +1525,7 @@ final class AidenBotSessionModel {
         inFlight.remove(.answerApproval)
         approvalSuccessNotice = nil
         invalidatePlanResponses()
-        attachTask?.cancel()
+        cancelUploads()
         backoffTask?.cancel()
         flushTask?.cancel()
         sharedImages.removeAll()
@@ -2357,6 +2362,10 @@ final class AidenBotSessionModel {
         approvalSuccessNotice = nil
         invalidatePlanResponses()
         adoptPlan(nil)
+        cancelUploads()
+        pendingAttachments = []
+        attachmentImages = [:]
+        attachmentStagingStore.resetAll()
         restoreTask?.cancel()
         outbox = []
         if let cacheKey {
@@ -2814,11 +2823,14 @@ final class AidenBotSessionModel {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         // The staged photos and files go with it, and only with it.
         let attachments = pendingAttachments
-        guard canSend, !composerHeldForPlan, !isAttaching,
+        guard canSend, !composerHeldForPlan, !isPreparingAttachments,
               (try? AidenBotMessageRequest(text: text, attachmentIds: attachments.map(\.id))) != nil,
               enqueue(text, mode: offersBusyModes ? mode ?? .queue : nil, retryOf: nil, attachments: attachments) else { return false }
         pendingAttachments = []
-        for attachment in attachments { attachmentImages[attachment.id] = nil }
+        for attachment in attachments {
+            attachmentImages[attachment.id] = nil
+            attachmentStagingStore.removePendingMetadata(for: attachment.id)
+        }
         // A new turn retires the last approval's answered line.
         approvalAnsweredButton = nil
         await runFlush()
@@ -2829,17 +2841,21 @@ final class AidenBotSessionModel {
 
     /// Room for more photos and files on the next message.
     var attachmentCapacity: Int {
-        AidenAttachmentPickerPolicy.availableCapacity(pendingCount: pendingAttachments.count)
+        AidenAttachmentPickerPolicy.availableCapacity(
+            pendingCount: pendingAttachments.count + attachmentStagingStore.count
+        )
     }
 
     /// Whether the + can open now: the Mac takes attachments and nothing is uploading.
-    var canAttach: Bool { attachmentsSupported && canSend && handoff == nil && !isAttaching && attachmentCapacity > 0 }
+    var canAttach: Bool { attachmentsSupported && canSend && handoff == nil && !isPreparingAttachments && attachmentCapacity > 0 }
 
     /// Prepares each picked item and stages it on the Mac, in order, up to the
     /// room left. Returns how many couldn't be added; the rest stay ready to send.
     @discardableResult
     func attach(_ items: [@MainActor () async throws -> AidenAttachmentUpload]) async -> Int {
         guard canAttach, !items.isEmpty else { return items.count }
+        let batchID = UUID()
+        activeAttachBatchID = batchID
         isAttaching = true
         let task = Task { await performAttach(items) }
         attachTask = task
@@ -2848,18 +2864,56 @@ final class AidenBotSessionModel {
         } onCancel: {
             task.cancel()
         }
-        attachTask = nil
-        isAttaching = false
+        if activeAttachBatchID == batchID {
+            activeAttachBatchID = nil
+            attachTask = nil
+            isAttaching = false
+        }
         return failures
+    }
+
+    /// Synchronously inserts optimistic staging cards and starts preparing/uploading
+    /// each item sequentially with per-card circular progress and per-item cancel.
+    @discardableResult
+    func stageAndAttach(_ items: [AidenAttachmentStageItem]) -> Task<Int, Never>? {
+        guard canAttach, !items.isEmpty else { return nil }
+        let capacity = attachmentCapacity
+        let accepted = Array(items.prefix(capacity))
+        let overflowFailures = max(0, items.count - capacity)
+        let batchID = UUID()
+        activeAttachBatchID = batchID
+        isAttaching = true
+        attachmentStagingStore.beginBatch(accepted)
+        let task = Task { [weak self] () -> Int in
+            guard let self else { return items.count }
+            defer {
+                if activeAttachBatchID == batchID {
+                    activeAttachBatchID = nil
+                    attachTask = nil
+                    isAttaching = false
+                    attachmentStagingStore.finishBatch()
+                }
+            }
+            return await performStagedAttach(accepted, overflowFailures: overflowFailures)
+        }
+        attachTask = task
+        return task
+    }
+
+    /// Cancels one in-flight or queued staging card while preserving already-staged attachments.
+    func cancelStagingAttachment(id: UUID) {
+        attachmentStagingStore.cancelItem(id: id)
     }
 
     /// Stop on the progress bar: the upload in flight is dropped; what already
     /// reached the Mac stays ready to send.
     func cancelUploads() {
+        attachmentStagingStore.cancelAll()
         attachTask?.cancel()
+        isAttaching = false
     }
 
-    var isPreparingAttachments: Bool { isAttaching }
+    var isPreparingAttachments: Bool { isAttaching || !attachmentStagingStore.isEmpty }
 
     func cancelAttachmentPreparation() {
         cancelUploads()
@@ -2870,6 +2924,163 @@ final class AidenBotSessionModel {
         guard uploadProgressID == id, let current = uploadProgress, current.index == index,
               let next = current.advanced(to: fraction) else { return }
         uploadProgress = next
+    }
+
+    private func performStagedAttach(_ batch: [AidenAttachmentStageItem], overflowFailures: Int) async -> Int {
+        let progressID = UUID()
+        uploadProgressID = progressID
+        defer {
+            if uploadProgressID == progressID {
+                uploadProgressID = nil
+                uploadProgress = nil
+            }
+        }
+        let rawImages = rawImageUploads
+        var failures = overflowFailures
+        for (index, item) in batch.enumerated() {
+            if Task.isCancelled || released { return batch.count }
+            if attachmentStagingStore.isCancelled(item.id) {
+                attachmentStagingStore.removeStagingItem(id: item.id)
+                continue
+            }
+            attachmentStagingStore.setPhase(.preparing, for: item.id)
+
+            let prepareCancelBox = AidenStageCancelBox()
+            let prepareTask = Task { @MainActor [weak self] in
+                try await item.prepare(
+                    { progress in
+                        prepareCancelBox.attach(progress: progress)
+                    },
+                    { preview in
+                        self?.attachmentStagingStore.setPreview(preview, for: item.id)
+                    }
+                )
+            }
+            prepareCancelBox.attach { prepareTask.cancel() }
+            attachmentStagingStore.registerActiveCancel(for: item.id, box: prepareCancelBox)
+
+            let upload: AidenAttachmentUpload
+            do {
+                upload = try await withTaskCancellationHandler {
+                    try await prepareTask.value
+                } onCancel: {
+                    prepareCancelBox.cancel()
+                }
+            } catch let error where aidenIsCancellation(error) {
+                attachmentStagingStore.clearActiveCancel(for: item.id)
+                if attachmentStagingStore.isCancelled(item.id) {
+                    attachmentStagingStore.removeStagingItem(id: item.id)
+                    continue
+                }
+                return batch.count
+            } catch {
+                attachmentStagingStore.clearActiveCancel(for: item.id)
+                attachmentStagingStore.removeStagingItem(id: item.id)
+                if attachmentStagingStore.isCancelled(item.id) { continue }
+                if Task.isCancelled || released { return batch.count }
+                failures += 1
+                continue
+            }
+            attachmentStagingStore.clearActiveCancel(for: item.id)
+
+            if attachmentStagingStore.isCancelled(item.id) {
+                attachmentStagingStore.removeStagingItem(id: item.id)
+                continue
+            }
+            if Task.isCancelled || released { return batch.count }
+
+            uploadProgress = AidenUploadProgress(index: index, count: batch.count, fraction: 0)
+            attachmentStagingStore.setPhase(.uploading(0), for: item.id)
+            let percentGate = AidenMonotonicPercentGate()
+            let progress: @Sendable (Double) -> Void = { [weak self] fraction in
+                guard let acceptedFraction = percentGate.accept(fraction) else { return }
+                Task { @MainActor in
+                    self?.recordUploadProgress(acceptedFraction, index: index, id: progressID)
+                    self?.attachmentStagingStore.setPhase(.uploading(acceptedFraction), for: item.id)
+                }
+            }
+
+            let uploadCancelBox = AidenStageCancelBox()
+            let itemUploadTask = Task { [transport, botID, requestLimit] in
+                try await aidenBotWithin(max(requestLimit, .seconds(60))) {
+                    let reference = try await transport.uploadBotAttachment(
+                        botId: botID,
+                        upload: upload,
+                        rawImages: rawImages,
+                        progress: progress
+                    )
+                    if Task.isCancelled {
+                        Task { try? await transport.removeBotAttachment(botId: botID, attachmentId: reference.id) }
+                        throw CancellationError()
+                    }
+                    return reference
+                }
+            }
+            uploadCancelBox.attach { itemUploadTask.cancel() }
+            attachmentStagingStore.registerActiveCancel(for: item.id, box: uploadCancelBox)
+
+            do {
+                let reference = try await withTaskCancellationHandler {
+                    try await itemUploadTask.value
+                } onCancel: {
+                    uploadCancelBox.cancel()
+                }
+                attachmentStagingStore.clearActiveCancel(for: item.id)
+                guard reference.isValid(now: now()) else { throw AidenRemoteClientError.invalidResponse }
+
+                if attachmentStagingStore.isCancelled(item.id) {
+                    attachmentStagingStore.removeStagingItem(id: item.id)
+                    await removeBotAttachmentDetached(reference.id)
+                    continue
+                }
+                if Task.isCancelled || released {
+                    await removeBotAttachmentDetached(reference.id)
+                    return batch.count
+                }
+
+                var fallbackPreview: UIImage?
+                if attachmentStagingStore.item(for: item.id)?.previewImage == nil,
+                   case let .image(_, _, data) = upload {
+                    fallbackPreview = await AidenPickedPhotoItemLoader.makeThumbnailAsync(from: data)
+                }
+                if attachmentStagingStore.isCancelled(item.id) {
+                    attachmentStagingStore.removeStagingItem(id: item.id)
+                    await removeBotAttachmentDetached(reference.id)
+                    continue
+                }
+                if Task.isCancelled || released {
+                    await removeBotAttachmentDetached(reference.id)
+                    return batch.count
+                }
+
+                if case let .image(_, _, data) = upload { attachmentImages[reference.id] = data }
+                attachmentStagingStore.promote(
+                    stagingID: item.id,
+                    to: reference.id,
+                    fallbackPreview: fallbackPreview
+                )
+                pendingAttachments.append(reference)
+            } catch let error where aidenIsCancellation(error) {
+                attachmentStagingStore.clearActiveCancel(for: item.id)
+                if attachmentStagingStore.isCancelled(item.id) {
+                    attachmentStagingStore.removeStagingItem(id: item.id)
+                    continue
+                }
+                return batch.count
+            } catch {
+                attachmentStagingStore.clearActiveCancel(for: item.id)
+                attachmentStagingStore.removeStagingItem(id: item.id)
+                if attachmentStagingStore.isCancelled(item.id) { continue }
+                if Task.isCancelled || released { return batch.count }
+                failures += 1
+            }
+        }
+        if failures > 0 {
+            errorMessage = failures == 1
+                ? "One attachment couldn’t be added. The others are ready to send."
+                : "\(failures) attachments couldn’t be added. The others are ready to send."
+        }
+        return failures
     }
 
     private func performAttach(_ items: [@MainActor () async throws -> AidenAttachmentUpload]) async -> Int {
@@ -2890,26 +3101,51 @@ final class AidenBotSessionModel {
                 let upload = try await prepare()
                 if Task.isCancelled || released { return items.count }
                 uploadProgress = AidenUploadProgress(index: index, count: batch.count, fraction: 0)
+                let percentGate = AidenMonotonicPercentGate()
                 let progress: @Sendable (Double) -> Void = { [weak self] fraction in
+                    guard let acceptedFraction = percentGate.accept(fraction) else { return }
                     Task { @MainActor in
-                        self?.recordUploadProgress(fraction, index: index, id: progressID)
+                        self?.recordUploadProgress(acceptedFraction, index: index, id: progressID)
                     }
                 }
                 // A photo can take longer than a message on a slow connection.
                 let reference = try await aidenBotWithin(max(requestLimit, .seconds(60))) { [transport, botID] in
-                    try await transport.uploadBotAttachment(
+                    let uploaded = try await transport.uploadBotAttachment(
                         botId: botID,
                         upload: upload,
                         rawImages: rawImages,
                         progress: progress
                     )
+                    if Task.isCancelled {
+                        Task { try? await transport.removeBotAttachment(botId: botID, attachmentId: uploaded.id) }
+                        throw CancellationError()
+                    }
+                    return uploaded
                 }
                 guard reference.isValid(now: now()) else { throw AidenRemoteClientError.invalidResponse }
-                if case let .image(_, _, data) = upload { attachmentImages[reference.id] = data }
+                if Task.isCancelled || released {
+                    await removeBotAttachmentDetached(reference.id)
+                    return items.count
+                }
+                var preview: UIImage?
+                if case let .image(_, _, data) = upload {
+                    preview = await AidenPickedPhotoItemLoader.makeThumbnailAsync(from: data)
+                }
+                if Task.isCancelled || released {
+                    await removeBotAttachmentDetached(reference.id)
+                    return items.count
+                }
+                if case let .image(_, _, data) = upload {
+                    attachmentImages[reference.id] = data
+                    if let preview {
+                        attachmentStagingStore.rememberPreview(preview, for: reference.id)
+                    }
+                }
                 pendingAttachments.append(reference)
             } catch let error where aidenIsCancellation(error) {
                 return items.count
             } catch {
+                if Task.isCancelled || released { return items.count }
                 failures += 1
             }
         }
@@ -2921,11 +3157,23 @@ final class AidenBotSessionModel {
         return failures
     }
 
+    /// Sends best-effort server cleanup in a fresh uncancelled `Task` so a
+    /// cancelled upload task never aborts the `DELETE` before it hits the wire.
+    private func removeBotAttachmentDetached(_ id: String) async {
+        let cleanup = Task { [transport, botID] in
+            try? await transport.removeBotAttachment(botId: botID, attachmentId: id)
+        }
+        if !released {
+            await cleanup.value
+        }
+    }
+
     /// Takes a staged photo or file off the next message, and off the Mac.
     func removeAttachment(_ id: String) async {
         guard pendingAttachments.contains(where: { $0.id == id }) else { return }
         pendingAttachments.removeAll { $0.id == id }
         attachmentImages[id] = nil
+        attachmentStagingStore.removePendingMetadata(for: id)
         // Best effort: an upload left behind expires on the Mac within minutes.
         try? await transport.removeBotAttachment(botId: botID, attachmentId: id)
     }
@@ -2933,6 +3181,10 @@ final class AidenBotSessionModel {
     /// A staged photo's bytes, for its thumbnail in the composer.
     func attachmentImageData(_ id: String) -> Data? {
         attachmentImages[id]
+    }
+
+    func pendingAttachmentPreviewImage(_ id: String) -> UIImage? {
+        attachmentStagingStore.previewImage(for: id)
     }
 
     static let outboxFull = "Too many messages are waiting. Send or remove some, then try again."

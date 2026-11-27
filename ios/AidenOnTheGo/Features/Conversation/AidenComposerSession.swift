@@ -77,8 +77,13 @@ protocol AidenComposerDraftOwner: AnyObject {
 @MainActor
 protocol AidenComposerAttachmentOwner: AnyObject {
     var pendingAttachments: [AidenAttachmentReference] { get }
+    var stagingAttachments: [AidenStagingAttachment] { get }
     var isPreparingAttachments: Bool { get }
     func cancelAttachmentPreparation()
+}
+
+extension AidenComposerAttachmentOwner {
+    var stagingAttachments: [AidenStagingAttachment] { [] }
 }
 
 /// An ask for a composer's keyboard. Each ask has its own `id`, so asking twice
@@ -133,6 +138,10 @@ final class AidenComposerSession {
         attachmentOwner?.pendingAttachments ?? localAttachments
     }
 
+    var stagingAttachments: [AidenStagingAttachment] {
+        attachmentOwner?.stagingAttachments ?? []
+    }
+
     /// The latest ask to raise or put away this composer's keyboard. The
     /// composer's own field carries it out (`AidenComposerFieldReach`), so an
     /// ask from a chat that isn't showing touches only that chat's field, never
@@ -153,7 +162,7 @@ final class AidenComposerSession {
     }
 
     /// True while leaving would lose attachments: only the words are saved with a chat.
-    var holdsAttachments: Bool { !attachments.isEmpty || isPreparingAttachments }
+    var holdsAttachments: Bool { !attachments.isEmpty || !stagingAttachments.isEmpty || isPreparingAttachments }
 
     var isRecording: Bool { voice.isListening }
     /// Also true while asking for the mic and while finishing a transcript.

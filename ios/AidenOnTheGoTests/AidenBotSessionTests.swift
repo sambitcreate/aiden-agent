@@ -122,6 +122,9 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     private var _uploads: [AidenAttachmentUpload] = []
     private var _uploadFailures: Set<Int> = []
     private var _removedAttachmentIds: [String] = []
+    private var _lastRemoveTaskWasCancelled: Bool?
+    var ignoreUploadCancellation = false
+    var lastRemoveTaskWasCancelled: Bool? { locked { _lastRemoveTaskWasCancelled } }
     private var _streamErrors: [Error] = []
     private var _sendErrors: [Error] = []
     private var _keyErrors: [UUID: Error] = [:]
@@ -277,7 +280,9 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
             return (_uploads.count - 1, _uploadFailures.contains(_uploads.count - 1))
         }
         await uploadGate.pass()
-        try Task.checkCancellation()
+        if !ignoreUploadCancellation {
+            try Task.checkCancellation()
+        }
         if fails { throw URLError(.networkConnectionLost) }
         let (name, mimeType, kind, size): (String, String, String, Int) = switch upload {
         case let .image(name, mimeType, data): (name, mimeType, "image", data.count)
@@ -291,7 +296,11 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     }
 
     func removeBotAttachment(botId: String, attachmentId: String) async throws {
-        locked { _removedAttachmentIds.append(attachmentId) }
+        let wasCancelled = Task.isCancelled
+        locked {
+            _lastRemoveTaskWasCancelled = wasCancelled
+            _removedAttachmentIds.append(attachmentId)
+        }
     }
 
     func resumeBotSession(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
@@ -5059,6 +5068,124 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
         let failures = await model.attach([photo])
         XCTAssertEqual(failures, 1)
         XCTAssertTrue(transport.uploads.isEmpty)
+    }
+
+    func testStagedBotAttachmentsTrackPerItemProgressCancelAndPreviewHandoff() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = try await loaded(transport)
+        let preview = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 16)).image { ctx in
+            UIColor.systemTeal.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        }
+        let pngData = try XCTUnwrap(preview.pngData())
+
+        let firstStarted = expectation(description: "first staging upload started")
+        transport.uploadGate.hold()
+        defer { transport.uploadGate.releaseAll() }
+
+        let firstID = UUID()
+        let secondID = UUID()
+        let thirdID = UUID()
+
+        let firstItem = AidenAttachmentStageItem(
+            id: firstID,
+            kind: .image,
+            displayName: "first.png",
+            initialPreview: preview
+        ) { _, _ in
+            firstStarted.fulfill()
+            return .image(name: "first.png", mimeType: "image/png", data: pngData)
+        }
+        let secondItem = AidenAttachmentStageItem(
+            id: secondID,
+            kind: .file,
+            displayName: "skipped.txt"
+        ) { _, _ in
+            XCTFail("Cancelled queued item should not prepare")
+            return .text(name: "skipped.txt", mimeType: "text/plain", text: "nope")
+        }
+        let thirdItem = AidenAttachmentStageItem(
+            id: thirdID,
+            kind: .file,
+            displayName: "cancelled-inflight.txt"
+        ) { _, _ in
+            .text(name: "cancelled-inflight.txt", mimeType: "text/plain", text: "ok")
+        }
+
+        let attaching = try XCTUnwrap(model.stageAndAttach([firstItem, secondItem, thirdItem]))
+        // Synchronous insertion before any await (no race window after dismissing picker).
+        XCTAssertTrue(model.isAttaching)
+        XCTAssertEqual(model.stagingAttachments.map(\.id), [firstID, secondID, thirdID])
+        XCTAssertEqual(model.attachmentCapacity, 7)
+        XCTAssertFalse(model.canAttach)
+
+        await fulfillment(of: [firstStarted], timeout: 5)
+
+        let deadline = Date().addingTimeInterval(5)
+        while !transport.uploadGate.isHolding {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for first upload gate") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        // Cancel the queued middle item before it starts.
+        model.cancelStagingAttachment(id: secondID)
+        XCTAssertEqual(model.stagingAttachments.map(\.id), [firstID, thirdID])
+
+        // Let the first upload finish; the third enters upload and pauses at the gate.
+        transport.uploadGate.release()
+        let secondDeadline = Date().addingTimeInterval(5)
+        while model.pendingAttachments.count < 1 || !transport.uploadGate.isHolding {
+            guard Date() < secondDeadline else { return XCTFail("Timed out waiting for third upload gate") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        let stagedFirst = try XCTUnwrap(model.pendingAttachments.first)
+        XCTAssertNotNil(model.pendingAttachmentPreviewImage(stagedFirst.id), "preview hands off synchronously with zero flash")
+
+        // Cancel the third item while its upload response is in flight, then release the gate.
+        model.cancelStagingAttachment(id: thirdID)
+        transport.uploadGate.releaseAll()
+        let failures = await attaching.value
+
+        XCTAssertEqual(failures, 0, "user cancel is not an upload error")
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["first.png"])
+        XCTAssertTrue(model.stagingAttachments.isEmpty)
+        XCTAssertEqual(transport.uploads.count, 2, "cancelled queued middle item never left the phone")
+        XCTAssertTrue(transport.removedAttachmentIds.isEmpty, "in-flight cancel aborts cleanly and keeps already-staged photo")
+        XCTAssertTrue(model.canAttach)
+    }
+
+    func testBotStagedUploadCancelRacingServerAcceptanceDeletesInUncancelledTask() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.ignoreUploadCancellation = true
+        let model = try await loaded(transport)
+        transport.uploadGate.hold()
+        defer { transport.uploadGate.releaseAll() }
+
+        let task = try XCTUnwrap(model.stageAndAttach([
+            AidenAttachmentStageItem(kind: .file, displayName: "raced.txt") { _, _ in
+                .text(name: "raced.txt", mimeType: "text/plain", text: "ok")
+            },
+        ]))
+
+        let deadline = Date().addingTimeInterval(5)
+        while !transport.uploadGate.isHolding {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for upload gate") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        model.cancelUploads()
+        transport.uploadGate.releaseAll()
+        _ = await task.value
+
+        let cleanupDeadline = Date().addingTimeInterval(2)
+        while transport.removedAttachmentIds.isEmpty, Date() < cleanupDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertTrue(model.pendingAttachments.isEmpty, "cancelled raced upload must not resurrect in pendingAttachments")
+        XCTAssertEqual(transport.removedAttachmentIds.count, 1, "server cleanup DELETE runs for raced acceptance")
+        XCTAssertEqual(transport.lastRemoveTaskWasCancelled, false, "server cleanup DELETE executes inside an uncancelled Task")
     }
 }
 

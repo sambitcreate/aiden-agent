@@ -342,6 +342,14 @@ final class AidenChatViewModel {
             if pendingAttachments != oldValue { composerGeneration &+= 1 }
         }
     }
+    /// Shared staging store keeping in-flight cards and zero-flash preview handoffs.
+    let attachmentStagingStore = AidenAttachmentStagingStore()
+    var stagingAttachments: [AidenStagingAttachment] { attachmentStagingStore.items }
+    @ObservationIgnored private var activeStagingBatchID: UUID?
+    /// Inner staging worker joined by `onRemovalCleanup`; never awaits `joinDeferredUploadRevocation()`.
+    @ObservationIgnored private var stagingWorkerTask: Task<Void, Never>?
+    /// Batch IDs whose already-promoted references survive user Stop / chat leave.
+    @ObservationIgnored private var batchesKeepingStagedOnCancel: Set<UUID> = []
     private(set) var isUploadingAttachment = false
     /// How far the attachments being uploaded have got; nil while none are.
     private(set) var uploadProgress: AidenUploadProgress?
@@ -507,8 +515,11 @@ final class AidenChatViewModel {
         let draftInstanceId = owner.instanceId
         let draftChatId = chat.id
         lifetime.onRemovalCleanup = { @MainActor [weak self] in
-            // The worker never initiates purge itself, so joining it cannot
-            // create an upload -> purge -> upload dependency cycle.
+            // Neither worker awaits `joinDeferredUploadRevocation()`, so joining
+            // them cannot create an upload -> purge -> upload deadlock on 401.
+            let staging = self?.stagingWorkerTask
+            staging?.cancel()
+            await staging?.value
             let uploading = self?.uploadTask
             uploading?.cancel()
             _ = await uploading?.value
@@ -547,6 +558,7 @@ final class AidenChatViewModel {
         terminalReconciliationTask?.cancel()
         draftPersistenceTask?.cancel()
         attachmentPreparationTask?.cancel()
+        stagingWorkerTask?.cancel()
         runInputReceiptTask?.cancel()
         uploadTask?.cancel()
         skillCatalogTask?.cancel()
@@ -568,8 +580,19 @@ final class AidenChatViewModel {
         draftSession = nil
         draftGeneration &+= 1
         composerGeneration &+= 1
-        cancelAttachmentPreparation()
+        // Cancel in-flight staging without nilling `stagingWorkerTask` so
+        // `onRemovalCleanup` can join its cancellation and server cleanup.
+        batchesKeepingStagedOnCancel = []
+        attachmentStagingStore.resetAll()
+        attachmentPreparationTask?.cancel()
+        attachmentPreparationTask = nil
+        attachmentPreparationID = nil
+        activeStagingBatchID = nil
+        stagingWorkerTask?.cancel()
         uploadTask?.cancel()
+        isUploadingAttachment = false
+        uploadProgressID = nil
+        uploadProgress = nil
         pendingAttachments = []
         runInputReceiptTask?.cancel()
         runInputReceipt = nil
@@ -813,7 +836,7 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation, !isRemoved, pendingSend == nil, sendRecoveryError == nil else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
         isConnected && coordinator.isLive(owner)
-            && !isStarting && !isRestoringStream && activeStreamID == nil && !isPreparingAttachments && !isUploadingAttachment && !isStreaming && hasTurnModelAuthority
+            && !isStarting && !isRestoringStream && activeStreamID == nil && !isPreparingAttachments && !isUploadingAttachment && stagingAttachments.isEmpty && !isStreaming && hasTurnModelAuthority
     }
 
     var selectedProvider: AidenProvider? {
@@ -1963,6 +1986,7 @@ final class AidenChatViewModel {
                 }
             }
             guard !isRemoved else { return }
+            attachmentStagingStore.prunePendingMetadata(keeping: Set(pendingAttachments.map(\.id)))
             for reference in submittedAttachments { ownedUploadReferences.removeValue(forKey: reference.id) }
             let stream = AidenChatCache.ActiveStream(
                 deviceId: context.deviceId,
@@ -2160,10 +2184,357 @@ final class AidenChatViewModel {
         return task
     }
 
+    /// Synchronously inserts optimistic staging cards and prepares/uploads each
+    /// item sequentially with per-card circular progress and per-item cancel.
+    @discardableResult
+    func stageAndUploadAttachments(_ items: [AidenAttachmentStageItem]) -> Task<Void, Never>? {
+        guard !isReadOnlyPresentation, !isRemoved, !items.isEmpty else { return nil }
+        let capacity = max(0, 10 - pendingAttachments.count - attachmentStagingStore.count)
+        guard capacity > 0,
+              isConnected, !isPreparingAttachments, !isUploadingAttachment, attachmentStagingStore.isEmpty,
+              !isStarting, !isStreaming,
+              let context = liveOwner,
+              let uploadClient = try? coordinator.remoteClient(for: context) else { return nil }
+
+        let accepted = Array(items.prefix(capacity))
+        let overflowFailures = max(0, items.count - capacity)
+        let imageWriteToken = cache.reserveChatWrite()
+        let rawImages = ownerServer?.supportsRawUploads == true
+
+        composerGeneration &+= 1
+        presentedError = nil
+        attachmentStagingStore.beginBatch(accepted)
+
+        let preparationID = UUID()
+        let progressID = UUID()
+        attachmentPreparationID = preparationID
+        activeStagingBatchID = preparationID
+        uploadProgressID = progressID
+
+        // Inner worker: joined by `onRemovalCleanup`; records deferred revocation
+        // without awaiting `joinDeferredUploadRevocation()` to prevent 401 self-deadlock.
+        let worker = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                batchesKeepingStagedOnCancel.remove(preparationID)
+                if activeStagingBatchID == preparationID {
+                    activeStagingBatchID = nil
+                    isUploadingAttachment = false
+                    attachmentStagingStore.finishBatch()
+                    stagingWorkerTask = nil
+                }
+                if uploadProgressID == progressID {
+                    uploadProgressID = nil
+                    uploadProgress = nil
+                }
+            }
+
+            var failedCount = overflowFailures
+            var promotedReferences: [AidenAttachmentReference] = []
+
+            for (index, item) in accepted.enumerated() {
+                if isRemoved || Task.isCancelled || !coordinator.isLive(context) {
+                    await cleanupCancelledStagedBatch(
+                        promoted: promotedReferences,
+                        unpromoted: nil,
+                        batchID: preparationID,
+                        context: context
+                    )
+                    return
+                }
+                if attachmentStagingStore.isCancelled(item.id) {
+                    attachmentStagingStore.removeStagingItem(id: item.id)
+                    continue
+                }
+                attachmentStagingStore.setPhase(.preparing, for: item.id)
+
+                let prepareCancelBox = AidenStageCancelBox()
+                let prepareTask = Task { @MainActor [weak self] in
+                    try await item.prepare(
+                        { progress in
+                            prepareCancelBox.attach(progress: progress)
+                        },
+                        { preview in
+                            self?.attachmentStagingStore.setPreview(preview, for: item.id)
+                        }
+                    )
+                }
+                prepareCancelBox.attach { prepareTask.cancel() }
+                attachmentStagingStore.registerActiveCancel(for: item.id, box: prepareCancelBox)
+
+                let upload: AidenAttachmentUpload
+                do {
+                    upload = try await withTaskCancellationHandler {
+                        try await prepareTask.value
+                    } onCancel: {
+                        prepareCancelBox.cancel()
+                    }
+                } catch let error where aidenIsCancellation(error) {
+                    attachmentStagingStore.clearActiveCancel(for: item.id)
+                    if attachmentStagingStore.isCancelled(item.id) {
+                        attachmentStagingStore.removeStagingItem(id: item.id)
+                        continue
+                    }
+                    await cleanupCancelledStagedBatch(
+                        promoted: promotedReferences,
+                        unpromoted: nil,
+                        batchID: preparationID,
+                        context: context
+                    )
+                    return
+                } catch {
+                    attachmentStagingStore.clearActiveCancel(for: item.id)
+                    attachmentStagingStore.removeStagingItem(id: item.id)
+                    if attachmentStagingStore.isCancelled(item.id) { continue }
+                    if isRemoved || Task.isCancelled || !coordinator.isLive(context) {
+                        await cleanupCancelledStagedBatch(
+                            promoted: promotedReferences,
+                            unpromoted: nil,
+                            batchID: preparationID,
+                            context: context
+                        )
+                        return
+                    }
+                    failedCount += 1
+                    continue
+                }
+                attachmentStagingStore.clearActiveCancel(for: item.id)
+
+                if attachmentStagingStore.isCancelled(item.id) {
+                    attachmentStagingStore.removeStagingItem(id: item.id)
+                    continue
+                }
+                if isRemoved || Task.isCancelled || !coordinator.isLive(context) {
+                    await cleanupCancelledStagedBatch(
+                        promoted: promotedReferences,
+                        unpromoted: nil,
+                        batchID: preparationID,
+                        context: context
+                    )
+                    return
+                }
+
+                if activeStagingBatchID == preparationID {
+                    isUploadingAttachment = true
+                    uploadProgress = AidenUploadProgress(index: index, count: accepted.count, fraction: 0)
+                }
+                attachmentStagingStore.setPhase(.uploading(0), for: item.id)
+                let percentGate = AidenMonotonicPercentGate()
+
+                let uploadCancelBox = AidenStageCancelBox()
+                let itemUploadTask = Task {
+                    try await uploadClient.uploadAttachment(
+                        chatId: chat.id,
+                        upload: upload,
+                        rawImages: rawImages,
+                        progress: { [weak self] fraction in
+                            guard let acceptedFraction = percentGate.accept(fraction) else { return }
+                            Task { @MainActor in
+                                self?.recordUploadProgress(acceptedFraction, index: index, id: progressID)
+                                self?.attachmentStagingStore.setPhase(.uploading(acceptedFraction), for: item.id)
+                            }
+                        }
+                    )
+                }
+                uploadCancelBox.attach { itemUploadTask.cancel() }
+                attachmentStagingStore.registerActiveCancel(for: item.id, box: uploadCancelBox)
+
+                do {
+                    let reference = try await withTaskCancellationHandler {
+                        try await itemUploadTask.value
+                    } onCancel: {
+                        uploadCancelBox.cancel()
+                    }
+                    attachmentStagingStore.clearActiveCancel(for: item.id)
+                    guard reference.isValid() else { throw AidenRemoteClientError.invalidResponse }
+                    ownedUploadReferences[reference.id] = (reference, context, uploadClient)
+
+                    if attachmentStagingStore.isCancelled(item.id) {
+                        attachmentStagingStore.removeStagingItem(id: item.id)
+                        await cleanupOwnedAttachment(reference.id)
+                        continue
+                    }
+                    if isRemoved || Task.isCancelled || !coordinator.isLive(context) {
+                        await cleanupCancelledStagedBatch(
+                            promoted: promotedReferences,
+                            unpromoted: reference,
+                            batchID: preparationID,
+                            context: context
+                        )
+                        return
+                    }
+
+                    var fallbackPreview: UIImage?
+                    if attachmentStagingStore.item(for: item.id)?.previewImage == nil,
+                       case .image(_, _, let data) = upload {
+                        fallbackPreview = await AidenPickedPhotoItemLoader.makeThumbnailAsync(from: data)
+                    }
+                    if attachmentStagingStore.isCancelled(item.id) {
+                        attachmentStagingStore.removeStagingItem(id: item.id)
+                        await cleanupOwnedAttachment(reference.id)
+                        continue
+                    }
+                    if isRemoved || Task.isCancelled || !coordinator.isLive(context) {
+                        await cleanupCancelledStagedBatch(
+                            promoted: promotedReferences,
+                            unpromoted: reference,
+                            batchID: preparationID,
+                            context: context
+                        )
+                        return
+                    }
+
+                    attachmentStagingStore.promote(
+                        stagingID: item.id,
+                        to: reference.id,
+                        fallbackPreview: fallbackPreview
+                    )
+                    pendingAttachments.append(reference)
+                    promotedReferences.append(reference)
+
+                    if case .image(_, let mimeType, let data) = upload {
+                        let attachment = AidenMessageAttachment(
+                            id: reference.id,
+                            name: reference.name,
+                            mimeType: mimeType,
+                            kind: .image,
+                            size: reference.size
+                        )
+                        if isRemoved || Task.isCancelled {
+                            await cleanupCancelledStagedBatch(
+                                promoted: promotedReferences,
+                                unpromoted: nil,
+                                batchID: preparationID,
+                                context: context
+                            )
+                            return
+                        }
+                        _ = try? await cache.saveAttachmentImage(
+                            data,
+                            instanceId: instanceId,
+                            deviceId: context.deviceId,
+                            chatId: chat.id,
+                            attachment: attachment,
+                            writeToken: imageWriteToken
+                        )
+                        if isRemoved || Task.isCancelled {
+                            await cleanupCancelledStagedBatch(
+                                promoted: promotedReferences,
+                                unpromoted: nil,
+                                batchID: preparationID,
+                                context: context
+                            )
+                            return
+                        }
+                    }
+                } catch let error where aidenIsCancellation(error) {
+                    attachmentStagingStore.clearActiveCancel(for: item.id)
+                    if attachmentStagingStore.isCancelled(item.id) {
+                        attachmentStagingStore.removeStagingItem(id: item.id)
+                        continue
+                    }
+                    await cleanupCancelledStagedBatch(
+                        promoted: promotedReferences,
+                        unpromoted: nil,
+                        batchID: preparationID,
+                        context: context
+                    )
+                    return
+                } catch {
+                    attachmentStagingStore.clearActiveCancel(for: item.id)
+                    attachmentStagingStore.removeStagingItem(id: item.id)
+                    if attachmentStagingStore.isCancelled(item.id) { continue }
+                    if deferUploadRevocation(error, context: context) {
+                        return
+                    }
+                    if isRemoved || Task.isCancelled || !coordinator.isLive(context) {
+                        await cleanupCancelledStagedBatch(
+                            promoted: promotedReferences,
+                            unpromoted: nil,
+                            batchID: preparationID,
+                            context: context
+                        )
+                        return
+                    }
+                    failedCount += 1
+                }
+            }
+
+            guard !isRemoved, !Task.isCancelled, coordinator.isLive(context),
+                  activeStagingBatchID == preparationID else { return }
+            if failedCount > 0 {
+                presentedError = failedCount == 1
+                    ? String(localized: "One selected attachment could not be added. Other attachments are still ready to send.")
+                    : String(localized: "\(failedCount) selected attachments could not be added. Other attachments are still ready to send.")
+                coordinator.haptics.play(promotedReferences.isEmpty ? .error : .warning, scope: hapticScope)
+            }
+        }
+        stagingWorkerTask = worker
+
+        // Outer task: awaits the worker, clears preparation gate, then joins
+        // any deferred 401 revocation outside `onRemovalCleanup`'s awaited task.
+        let task = Task { [weak self] in
+            await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard let self else { return }
+            if attachmentPreparationID == preparationID {
+                attachmentPreparationID = nil
+                attachmentPreparationTask = nil
+            }
+            await joinDeferredUploadRevocation()
+        }
+        attachmentPreparationTask = task
+        return task
+    }
+
+    private func cleanupCancelledStagedBatch(
+        promoted: [AidenAttachmentReference],
+        unpromoted: AidenAttachmentReference?,
+        batchID: UUID,
+        context: AidenRemoteRequestContext
+    ) async {
+        // An unpromoted upload that raced cancellation is always cleaned up on the Mac.
+        if let unpromoted {
+            await cleanupOwnedAttachment(unpromoted.id)
+        }
+        // User Stop / leaving chat preserves already-promoted items (even if Send
+        // already moved them out of `pendingAttachments`); removal/revocation cleans all.
+        let keepPromoted = !isRemoved
+            && coordinator.isLive(context)
+            && batchesKeepingStagedOnCancel.contains(batchID)
+        guard !keepPromoted else { return }
+        for reference in promoted {
+            await cleanupOwnedAttachment(reference.id)
+        }
+    }
+
+    /// Cancels one in-flight or queued staging card without discarding already-staged attachments.
+    func cancelStagingAttachment(id: UUID) {
+        attachmentStagingStore.cancelItem(id: id)
+    }
+
+    func pendingAttachmentPreviewImage(for attachment: AidenAttachmentReference) -> UIImage? {
+        attachmentStagingStore.previewImage(for: attachment.id)
+    }
+
     func cancelAttachmentPreparation() {
+        if !isRemoved, let batchID = activeStagingBatchID {
+            batchesKeepingStagedOnCancel.insert(batchID)
+        }
+        attachmentStagingStore.cancelAll()
+        activeStagingBatchID = nil
         attachmentPreparationTask?.cancel()
         attachmentPreparationTask = nil
         attachmentPreparationID = nil
+        stagingWorkerTask?.cancel()
+        if uploadTask == nil {
+            isUploadingAttachment = false
+            uploadProgressID = nil
+            uploadProgress = nil
+        }
     }
 
     @discardableResult
@@ -2329,7 +2700,7 @@ final class AidenChatViewModel {
     /// Stop on the progress bar: the upload in flight is dropped; what already
     /// reached the Mac stays ready to send, as on Android.
     func cancelUploads() {
-        guard isUploadingAttachment else { return }
+        guard isUploadingAttachment || isPreparingAttachments || !stagingAttachments.isEmpty else { return }
         stopKeepsStagedUploads = true
         cancelAttachmentPreparation()
         uploadTask?.cancel()
@@ -2349,6 +2720,7 @@ final class AidenChatViewModel {
         if let cleanup = attachmentCleanupTasks[id] { await cleanup.value; return }
         guard let (reference, context, cleanupClient) = ownedUploadReferences.removeValue(forKey: id) else { return }
         pendingAttachments.removeAll { $0.id == id }
+        attachmentStagingStore.removePendingMetadata(for: id)
         let cleanup = Task { @MainActor [self] in
             await cache.removeAttachmentImage(instanceId: instanceId, deviceId: context.deviceId, chatId: chat.id, attachmentId: reference.id)
             do {
