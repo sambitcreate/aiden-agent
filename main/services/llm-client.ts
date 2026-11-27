@@ -778,27 +778,26 @@ interface LoadMonitorState {
   readyEmitted: boolean;
 }
 
-interface ActiveGeneration {
-  agent: PiAgentRuntimeHarness;
+interface OwnerBoundGeneration extends GenerationOwnershipEntry {
   chatId: string;
   owner: ChatGenerationOwner;
-  removeOwnerInvalidation: () => void;
   ownerInvalidationListeners?: Set<() => void>;
   stopCacheWarming?: () => void;
-  workspaceId?: string;
   cancelRequested: boolean;
   cancellationOrigin?: GenerationCancellationOrigin;
   rendererDetached: boolean;
   /** Nobody attends this run's prompts, so a refused one is not left for the Inbox. */
   promptsUnattended: boolean;
   computerUse?: ComputerUseController;
+  formFill?: FormFillService;
+  loadMonitor?: LoadMonitorState;
+}
+
+interface ActiveGeneration extends OwnerBoundGeneration {
+  agent: PiAgentRuntimeHarness;
   /** Set when a computer_use or fill_form call first reaches the access gate. */
   computerUseActivated?: boolean;
-  formFill?: FormFillService;
   completion: Promise<void> | null;
-  loadMonitor?: LoadMonitorState;
-  releaseSkillReservation: () => void;
-  releaseBotAuthority: () => void;
   /** A steered send stops this run's still-running subagents. */
   stopSubagentsForGuidance?: () => void;
   /** UserPromptSubmit for mid-flight input, in a chat that runs hooks. */
@@ -819,23 +818,8 @@ interface GenerationEscape {
   settle(): Promise<void>;
 }
 
-interface InitializingGeneration {
-  chatId: string;
-  owner: ChatGenerationOwner;
-  removeOwnerInvalidation: () => void;
-  ownerInvalidationListeners?: Set<() => void>;
-  stopCacheWarming?: () => void;
-  workspaceId?: string;
-  cancelRequested: boolean;
-  cancellationOrigin?: GenerationCancellationOrigin;
-  rendererDetached: boolean;
-  promptsUnattended: boolean;
+interface InitializingGeneration extends OwnerBoundGeneration {
   controller: AbortController;
-  computerUse?: ComputerUseController;
-  formFill?: FormFillService;
-  loadMonitor?: LoadMonitorState;
-  releaseSkillReservation: () => void;
-  releaseBotAuthority: () => void;
   skillInvocation?: PreparedSkillInvocation;
   skillPrompt?: string;
 }
