@@ -265,7 +265,8 @@ The test is this table, run through `appRequestVerdict` with fabricated `details
 | N8 | frame `null`, no initiator, not on the frameless allowlist | `https://example.com/` | cancelled, and logged (D4) |
 | N9 | frame `null`, no initiator, on the audited frameless allowlist (D4) | that URL | untouched |
 | N10 | frame `null`, initiator the renderer's own origin (`file://` as Task 5's audit records it, or `http://127.0.0.1:4143` in dev) | `https://api.example.com/` | untouched |
-| N11 | frame `null`, any initiator | `aiden-design://…`, `data:…`, `blob:…` (not network) | untouched |
+| N11 | frame `null`, the renderer's own initiator or none | `aiden-design://…`, `data:…`, `blob:…` (not network) | untouched |
+| N12 | frame `null`, an app, other loopback or opaque initiator (an app's worker or service worker) | `aiden-design://…`, `aiden-attachment://…`, `file:///etc/hosts`, `blob:https://example.com/…` | cancelled; `data:` and loopback `blob:` allowed (review fix, 2026-11-27) |
 | E1 | app export window, main frame | `http://127.0.0.1:5173/pricing` | allowed |
 | E2 | app export window | `https://fonts.googleapis.com/css2?family=Inter` | cancelled |
 | M1 | main window, main frame | `https://api.openai.com/v1/…` | untouched |
@@ -297,7 +298,7 @@ The test is this table, run through `appRequestVerdict` with fabricated `details
 **D4. Frameless requests (S3, S57).** Electron 43.8.4 reports `initiatorOrigin`, "kept from the original request across redirects; absent for requests the browser started itself". So:
 - **App initiator.** A `frame: null` request whose `initiatorOrigin` is an app origin, or any loopback `http:` origin other than the renderer's own, or `"null"` (opaque), is app context and gets D3's rule (N1–N7). This covers service-worker fetches, `pagehide` beacons, keepalive fetches after the iframe is removed and WebSockets. Opaque `aiden-genui:` frames' keepalive requests to the network are therefore cancelled with the flag on; that is an accepted change.
 - **No initiator.** A `frame: null` request with no `initiatorOrigin` and a network scheme (`http`, `https`, `ws`, `wss`) to a non-loopback host is cancelled (N8), **unless** it matches an entry on the audited frameless allowlist (N9). The list **starts empty** and gains only what Task 5's audit observes in the Space, each entry a fixed URL prefix with a test row and a comment naming its owner. Each frameless cancel is logged to diagnostics as `design-live frameless-cancel` with the host only, at most once per host per minute, so a missed entry shows up in the field rather than as a silent break.
-- **Renderer traffic.** A `frame: null` request whose initiator is the renderer's own origin is Aiden's own (N10), as are non-network schemes (N11). Task 5's audit records the exact `initiatorOrigin` the packaged `file://` renderer's frameless requests carry. **If it is `"null"`**, N6 would cancel Aiden's own traffic: stop, and amend D4 and S57 before Task 5 Step 2 (the flag-on chat-send smoke run in Task 14 is the end-to-end check).
+- **Renderer traffic.** A `frame: null` request whose initiator is the renderer's own origin is Aiden's own (N10), as are non-network schemes from it or with no initiator (N11). An app initiator decides first, for every scheme (N12). Task 5's audit records the exact `initiatorOrigin` the packaged `file://` renderer's frameless requests carry. **If it is `"null"`**, N6 would cancel Aiden's own traffic: stop, and amend D4 and S57 before Task 5 Step 2 (the flag-on chat-send smoke run in Task 14 is the end-to-end check).
 - Electron's `net` module isn't used by Aiden's main process (no `net.request` or `net.fetch` call), and `electron-updater` uses its own partition; the audit confirms both.
 
 **D5. Aiden's own loopback ports (S59, S72).** App frames are loopback-only, but Aiden itself listens on loopback. `ownPorts` is a live set, and its loopback requests from app context are cancelled (A27–A29, A31–A34):
@@ -326,7 +327,7 @@ A design app is never on one of these ports: 2b picks free ports and 2c excludes
 **D7. Response headers (S4, S71).** The design headers subscriber acts only on responses in app context:
 - **For every app-context response** (any loopback origin, any resource type):
   - `Report-To`, `NEL` and `Reporting-Endpoints` are removed, so the Reporting API's uploader (`net/reporting`, outside URLLoader) has no endpoint;
-  - for `mainFrame`, `subFrame` and worker-script responses, a **second** `Content-Security-Policy` header is added: `connect-src 'self' http://localhost:* http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:* ws://[::1]:* data: blob:`. A second policy only narrows, so the app's own CSP still applies; `'self'` keeps an `[::1]` app's own connections working even if Chromium drops the `[::1]` sources (S74);
+  - for `mainFrame`, `subFrame` and worker-script responses, a **second** `Content-Security-Policy` header is added: `connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* data: blob:`. A second policy only narrows, so the app's own CSP still applies. It names no `[::1]` source, because Chromium rejects them as invalid (probe 6); `'self'` covers an `[::1]` export window's own origin (S74);
   - `X-DNS-Prefetch-Control: off` is set.
 - **Only for responses from an app origin** (`isAppOrigin`):
   - **Cookies.** Each `Set-Cookie` value gets its `SameSite` attribute replaced by `SameSite=None`, and `Secure` added if absent (`appSetCookie(value)`, pure). Chromium treats `127.0.0.1`, `[::1]` and `localhost` as potentially trustworthy, so a `Secure` cookie is accepted and sent on plain `http:` there. A packaged build loads the renderer from `file://`, which makes the frame cross-site, so without this rewrite a default `SameSite=Lax` session cookie is refused. Task 14's E2E runs against the `file://` renderer and proves sign-in. **If that fails**, the rewrite is removed and the limit documented (S4's fallback). A proxy is not added in 3a. A sign-in that sets its cookie from another loopback API port (A8) isn't rewritten; docs say so;
@@ -348,12 +349,12 @@ A design app is never on one of these ports: 2b picks free ports and 2c excludes
   - every check and request whose `isMainFrame` is false, whose web contents is the main window, and whose `requestingUrl` isn't on Aiden's own list (the renderer's own origin, which in `npm run dev` is the dev origin `http://127.0.0.1:4143`; `aiden-design:` and `aiden-genui:` and blobs of them). Electron gives no frame here, so this is the fail-closed form of "a frame under an app origin". Only admitted app frames and what they nest can be such frames;
   - any check or request whose requesting origin `isAppOrigin()`, from any web contents;
   - a check with no web contents (service workers) whose `securityOrigin` or requesting origin is an app origin or another loopback origin other than the renderer's own;
-  - display media whose `request.frame` is in app context;
+  - display media whose `securityOrigin` is an app or other loopback origin, whose `request.frame` is in app context (it or an ancestor on an app or other loopback origin, which covers export windows, or under an admitted frame in the main window), or that has no frame and doesn't come from Aiden's own documents. Other default-session windows (Quick Chat, the pill, bot bubbles) are judged by their own frames, not as the main window's;
   - device permission whose `origin` is an app origin or another loopback origin other than the renderer's own.
 
   Electron 43's permission names list no background-sync, periodic-sync or background-fetch entry (`electron.d.ts:13473`, `:13482`). The layer denies every check and request from app context, including `unknown`; Task 2's probe records whether Chromium consults the handler when the fixture's service worker registers a sync. Either way S76's clear is the guarantee.
-- **Downloads.** The design download subscriber cancels any download whose `webContents` is an export window, or whose `frame` is in app context. Sandboxed app iframes without `allow-downloads` can't start one anyway (D2 row in D3b).
-- **Device choosers.** With the flag on, the main window handles `select-bluetooth-device` with `preventDefault()` and `callback("")`, because Electron otherwise picks the first device. The session's `select-hid-device`, `select-serial-port` and `select-usb-device` go through `onSelectDevice`; the design subscriber cancels when `details.frame` is in app context. Aiden uses none of them.
+- **Downloads.** The design download subscriber cancels any download whose `webContents` is an export window, whose `frame` is in app context, or, when the frame is gone, whose `item.getInitiatorOrigin()` is an app or other loopback origin. Sandboxed app iframes without `allow-downloads` can't start one anyway (D2 row in D3b).
+- **Device choosers.** With the flag on, the main window handles `select-bluetooth-device` with `preventDefault()` and `callback("")`, because Electron otherwise picks the first device. The export window handles `select-bluetooth-device` the same way. The session's `select-hid-device`, `select-serial-port` and `select-usb-device` go through `onSelectDevice`. HID and USB are `(event, details, callback)`: the design subscriber cancels when `details.frame` is in app context or null. Serial is `(event, portList, webContents, callback)` with no frame: it cancels in the main window and in export windows. Aiden uses none of them.
 - **macOS system picker.** On macOS, `getDisplayMedia` uses the system picker and never reaches the display handler (`display-media-contract.ts:50`), so the iframe's `allow` (`display-capture 'none'`) is the guard there. Task 11 asserts it in the token set and Task 14 probes `getDisplayMedia` in the Linux Space.
 - **Gemini Live.** `display-media-contract.ts`'s tests don't change. A new test binds Live and checks an app frame's microphone request is denied while Live's own document is still granted, and the same unbound.
 
@@ -986,7 +987,7 @@ export class AppFrameRegistry {
 
 Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-specimen.html`, `GUI.md` and `docs/design-guide.md`.
 
-- [ ] **Step 1: Write failing tests** (Testing Library on happy-dom, with a fake snapshot hook, a fake mount IPC and a fake event source):
+- [x] **Step 1: Write failing tests** (Testing Library on happy-dom, with a fake snapshot hook, a fake mount IPC and a fake event source):
   - **iframe contract:** with a running app and a mount reply `{origin: "http://127.0.0.1:5173"}`, the iframe's `sandbox` token set is exactly `allow-scripts`, `allow-same-origin`, `allow-forms` (no `allow-modals`, `allow-popups`, `allow-top-navigation`, `allow-downloads`); the `allow` token set denies every D16 feature, `picture-in-picture`, `fullscreen` and `display-capture` included; `referrerpolicy` is `no-referrer`; `src` is `http://127.0.0.1:5173/pricing`; `name` parses back to the frame id and the token passed to the mount call; there is `data-app-frame-id` and **no** `data-frame-id`;
   - **mount order:** no iframe exists until the mount call resolves; the mount call carries `chatId`, the frame id and a fresh token, and no URL; a mount reply with `[::1]` gives `http://[::1]:5173/pricing` (or, after Task 2's `[::1]` fallback, the IPv6 sentence and no iframe);
   - a new origin in the snapshot gives a new mount call, a new token and a new iframe element;
@@ -1005,11 +1006,11 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
   - **present:** while presenting, app frames are rendered with `inert` and the presentation's arrow keys still advance; the frame menu doesn't offer full window;
   - **comments:** C + click on an app frame creates a comment with that `frameId` and no `anchor`.
   - **`app-frame-messages.test.tsx`:** a message with an `aiden-design:` prefix posted from an app iframe's window changes nothing in `design-comments.tsx`'s and `file-node.tsx`'s state (no anchors written), and `design-comments.tsx` ignores a page report from a frame whose kind isn't `file`.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement** D16, the export toast copy for the new codes, and the IPC wrappers.
-- [ ] **Step 4: Register** both test files (`renderer-other`). Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Rerun, plus `npm run test:design-mode`. Expected: PASS.
-- [ ] **Step 6:** Commit `feat(design): live app frames on the canvas`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement** D16, the export toast copy for the new codes, and the IPC wrappers.
+- [x] **Step 4: Register** both test files (`renderer-other`). Run `npm run test:ci-policy`.
+- [x] **Step 5:** Rerun, plus `npm run test:design-mode`. Expected: PASS.
+- [x] **Step 6:** Commit `feat(design): live app frames on the canvas`.
 
 ### Task 12: `canvas_place_frame {kind: "app"}`
 
@@ -1122,7 +1123,7 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
 
 ## Spec amendments S57–S77 (Task 15 writes these)
 
-- **S57. Frameless requests use the initiator (3a; amends S3).** Electron 43.8.4's `webRequest` details carry `initiatorOrigin`. A `frame: null` request whose initiator is an app origin, another loopback origin or opaque gets the app rule. One with no initiator and a network scheme to a non-loopback host is cancelled unless it is on the audited frameless allowlist, which starts empty; each such cancel is logged (host only, rate-limited). The renderer's own initiator (as Task 5 recorded it) and non-network schemes are untouched.
+- **S57. Frameless requests use the initiator (3a; amends S3).** Electron 43.8.4's `webRequest` details carry `initiatorOrigin`. A `frame: null` request whose initiator is an app origin, another loopback origin or opaque gets the app rule. One with no initiator and a network scheme to a non-loopback host is cancelled unless it is on the audited frameless allowlist, which starts empty; each such cancel is logged (host only, rate-limited). The renderer's own initiator (as Task 5 recorded it) is untouched, and so are non-network schemes from it or with no initiator. An app, other loopback or opaque initiator gets the app rule for every scheme, so an app's worker can't reach Aiden's own schemes, files or another site's blobs (review fix, 2026-11-27).
 - **S58. App frames are tracked by frame tree node (3a; amends §6.3.4).** An admitted main-window subframe stays an app frame for its element's life, even after it navigates to another loopback origin. Its descendants are app context too, as is any main-window subframe on a non-renderer loopback origin and any whose chain doesn't reach the main frame.
 - **S59. Aiden's own loopback ports (3a).** App frames can't reach the debugging ports, the renderer dev server or any port an Aiden service or Aiden-spawned daemon listens on (S72 lists them).
 - **S60. Permissions are decided by requesting URL (3a; amends S9).** Electron gives permission handlers no frame. The design layer denies every non-main-frame request in the main window that isn't from Aiden's own origin or schemes, every request from an app origin, every request in an app export window, and display and device requests from app context. Gemini Live registers through the dispatcher's owner slot; its handlers are unchanged. The main window answers `select-bluetooth-device` with no device, and the session's HID, serial and USB choosers cancel for app context.
@@ -1150,8 +1151,8 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
   Preconnect and DNS prefetch outcomes are recorded in As built.
 - **S72. Aiden's own ports, complete (3a; extends S59).** The set covers every Aiden loopback listener in `main/` (including the device hub proxy and local device host), the device hub and agent daemons Aiden spawns or reuses, electron-updater's Squirrel.Mac proxy (from the native feed URL), the renderer dev server, and the debugging ports read from the real switches. `check:aiden-rules` fails when a new loopback `listen` isn't registered or allowlisted with a reason.
 - **S73. App export hardening (3a; extends S13 and S65).** App frames export as PNG or PDF only. The app must be running before the Save dialog opens; the handler answers `app-not-running` or `live-off`. The export window's document is CSP-sandboxed (no downloads, modals, printing or popups), downloads from it are cancelled, and it renders at zoom 1 with 2× through device emulation (or 1×, per Task 2).
-- **S74. `[::1]` framing outcome (3a; S52).** Task 2's result: Chromium keeps `http://[::1]:*` in `frame-src` and `[::1]` apps frame, or it drops the source and app frames refuse `[::1]` origins with a sentence asking to restart the app on `127.0.0.1`.
-- **S75. Focus and keys (3a; amends §6.3.2).** App iframes are `inert` until entered, so a page can't take focus from Aiden. Esc inside an entered frame reaches the canvas through the bridge's `escape` message; a click on the canvas also leaves. While presenting, app frames stay inert unless entered, and Open full window isn't offered for them.
+- **S74. `[::1]` framing outcome (3a; S52).** Task 2's result: Chromium rejects `http://[::1]:*` as an invalid `frame-src` source and ignores it, so `frame-src` lists only `http://localhost:*` and `http://127.0.0.1:*`, and app frames refuse `[::1]` origins with "This app runs on IPv6 localhost, which the canvas can't show yet. Restart it on 127.0.0.1."
+- **S75. Focus and keys (3a; amends §6.3.2).** App iframes are `inert` until entered, so a page can't take focus from Aiden. Esc inside an entered frame reaches the canvas through the bridge's `escape` message; a click on the canvas also leaves. While presenting, app frames stay inert unless entered, and Open full window isn't offered for them. **Decided (2026-11-27):** Task 2's probe 8 showed `inert` alone doesn't hold: a page's repeated `focus()` still pulled focus out of the composer into an `inert` iframe (1 of 20 typed characters landed). So `inert` stays on every app iframe that isn't entered, and while any app frame is mounted one document-level guard listens in capture phase for `focusout` and the window's `blur`. When focus moves into an app iframe that isn't entered, it goes back to the element that lost it, if that element is still connected and focusable; when nothing of Aiden's had focus (the body), the iframe is blurred. The check runs synchronously and once more in a microtask, with no polling and no timers. Entering a frame exempts that iframe until it is left; presenting keeps the guard. The guard is removed with the last app frame and on dispose (`renderer/design/app-frame-focus-guard.ts`).
 - **S76. App service workers don't outlive design mode (3a).** Main keeps a device-local list of admitted app origins (at most 64, origins only). Their service workers are cleared when design mode ends for the workspace and at every start, flag on or off, and the list is emptied.
 - **S77. App frame states follow the app's phase (3a; amends §6.3.2).** Stopped, waiting for consent, installing or starting, crashed (with Retry), running before load (the snapshot stays), attached-lost, too many live frames, live apps off and not in this workspace each have a fixed overlay using 2c's chip labels.
 
@@ -1315,7 +1316,7 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
    - The shared core is a script fragment: the embedding bridge declares `host`, `doc`, `PREFIX` and `send`, then calls `handleCore(type, data)`.
 12. **`canvas_place_frame {kind: "app"}` details (Task 12).**
     - The `apps` dep is `{ snapshot(workspaceId) }`, an async read of `designAppServers.snapshot`. The roots come from its apps, candidates and chosen roots, and `canvas_read` reads `live` from the same snapshot (phase `running`).
-    - A reused frame takes the new title. It takes a new viewport or scale only when `width`, `height` or `scale` is given.
+    - A reused frame takes the new title. It changes only the viewport sides and scale that are given (not null); the rest stay the frame's own, and the scale is refit and the box recomputed from the merged values (review fix M6).
     - App placement runs the shared look fields: `guide` applies, and `dark`, `tweaks`, `paper` and `printMode` give the existing kind errors.
     - `nextTo`, `groupId`, `page`, `x` and `y` work as for other kinds.
     - `colorScheme` exists on `canvas_update_frame` only with live apps on; on a frame of another kind it gives "Only a live app frame has a colorScheme."
@@ -1338,6 +1339,27 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
     - `tests/e2e/design-live-frames.spec.ts`, its observers and the screenshots wait for Task 11: without the live node there is no app iframe to drive. The flag-off and flag-on v1 runs and the flag-on chat-send smoke run ran (see Build status).
     - The docs describe what is built: app frames that Aiden places, the static card, and Download. The "Live frames" docs section from Task 15 Step 2 (entering, overlays, blocked label, cookies, the dev-only process note) lands with Task 11.
     - `docs/pi-gui-artifacts.md` gave the main window's `frame-src` from before design mode; it was corrected.
+
+15. **The live app node (Task 11, 2026-11-27).**
+    - **S75's guard.** `renderer/design/app-frame-focus-guard.ts`: each mounted `AppFrame` holds the document's guard (`holdAppFrameFocusGuard`). The first holder installs a capture `focusout` listener on the document and a capture `blur` listener on the window, and the last one removes them. When the active element becomes an app iframe without `data-app-frame-entered`, focus goes back to the element that lost it, if it is connected, not inert, not disabled and not the body; otherwise the iframe is blurred. The check runs at once (Chromium's order, probe 8) and again in a microtask (engines, including happy-dom, that move focus after `focusout`).
+    - Its tests are in `app-node.test.tsx`: "a page that pulls focus into a not-entered app frame gives it straight back to the composer", "with nothing of Aiden's focused, a page that takes focus is blurred back to the body", "an entered app frame keeps the focus the person gave it" and "the focus guard goes away with the last app frame". The first, second and fourth failed with the guard switched off.
+    - The iframe carries `data-app-frame-id` (never `data-frame-id`, so v1's page listeners skip it) and `data-app-frame-entered` while entered. `design-comments.tsx` also ignores messages from frames whose kind isn't `file`; `app-frame-messages.test.tsx` checks that an app page's `aiden-design:ready` gets no `locate`.
+    - Resizing an app frame goes through `appResizeScale` (moved with `APP_DEFAULT_VIEWPORT` to `renderer/shared/design-canvas/app-frame.ts`) in `canvas-adapter-core.ts`, so the width decides the scale unless only the height moved.
+    - The context gains `leave(id)` (clears `entered` and focuses `.studio-canvas`) and `openInBrowser(url)` (the browser panel's `open_link`). Enter on a selected app frame enters it. Presenting fits app frames with the header offset, and the presenting CSS hides their header.
+    - The leave-by-pane-click case is tested in Task 14 only: React Flow reads pane clicks through its pointer path, which happy-dom doesn't synthesize, so the unit test covers the bridge's `escape` and the canvas's Esc instead.
+16. **Review fixes (review-p3a-1, 2026-11-27).** Every finding was real, and each fix started from a failing test.
+    - B1: frameless requests from an app, other loopback or opaque initiator get the app rule for every scheme (new D3 row N12; S57 amended).
+    - B2: `select-serial-port` is `(event, portList, webContents, callback)` in Electron 43 (`electron.d.ts:12729`). The dispatcher wires it that way and gives subscribers `{frame: null, webContents}`.
+    - M1: display media and HID/USB choosers fail closed without a frame. Frames are judged by their own ancestors, so Quick Chat, the pill and bot bubbles aren't treated as the main window.
+    - M2: `designCanvas:appFrameMount` needs design mode on (`canFrame`) before and after it awaits the app's origin.
+    - M3: export checks the running app's origin again after the Save dialog.
+    - M4: the export window cancels `select-bluetooth-device`.
+    - M5: the cancel cache doesn't cache `blob:` or `about:`.
+    - M6: see deviation 12.
+    - m1: an error's `at` skips dependency and other-origin stack frames.
+    - m2: the bridge injects at every `dom-ready` of a frame, not only the first.
+    - m3: a download whose frame is gone is judged by `item.getInitiatorOrigin()`.
+    - m4: `APP_CONNECT_SRC` names no `[::1]` source.
 
 ### Build status (2026-11-27)
 
