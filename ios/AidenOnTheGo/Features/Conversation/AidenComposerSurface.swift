@@ -523,15 +523,16 @@ private struct AidenComposerGlassModifier: ViewModifier {
     }
 }
 
-/// Messages scroll under the floating composer: the edge softens so the words
-/// stay readable; under Reduce Transparency it stays plain.
+/// Messages scroll under the floating composer, and under a Bot's name capsule
+/// at the top: the edges soften so the words stay readable; under Reduce
+/// Transparency they stay plain.
 private struct AidenComposerSoftScrollEdge: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if !reduceTransparency {
-            content.scrollEdgeEffectStyle(.soft, for: .bottom)
+            content.scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
         } else {
             content
         }

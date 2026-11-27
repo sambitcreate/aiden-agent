@@ -1435,6 +1435,27 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(grants.contains(.chatContinueInNewChat))
     }
 
+    /// Revision 70: the Agent Slider is an opt-in asked for alone, because a Mac
+    /// saves a sent selection only for a phone that holds it.
+    func testAgentSliderIsAnOptInNegotiatedAlone() async throws {
+        let section = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["agentSlider"])) as? [String: Any]
+        )
+        let capability = try XCTUnwrap(section["capability"] as? String)
+        XCTAssertEqual(AidenRemoteCapability(rawValue: capability), .chatAgentSlider)
+        XCTAssertFalse(AidenRemoteCapability.v1Known.contains(.chatAgentSlider))
+        XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.chatAgentSlider))
+        let askedForAlone = await MainActor.run { AidenRemoteCoordinator.capabilitiesAskedForAlone }
+        XCTAssertTrue(askedForAlone.contains([.chatAgentSlider]))
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
+            XCTAssertEqual(try Self.jsonBody(request)["accepts"] as? [String], [capability])
+            return Self.response(for: request, status: 200, json: #"{"capabilities":["chat:read","chat:write","chat:agent-slider"]}"#)
+        }
+        let grants = try await makeClient().updateDeviceCapabilities(accepts: [.chatAgentSlider])
+        XCTAssertTrue(grants.contains(.chatAgentSlider))
+    }
+
     /// Revision 65: `stream:snapshot-reasons` is negotiated solo so older phones
     /// with closed snapshot decoders keep receiving the legacy 3-key payload.
     func testStreamSnapshotReasonsIsAnOptInNegotiatedAlone() async throws {
@@ -1454,6 +1475,23 @@ final class AidenRemoteClientTests: XCTestCase {
         }
         let grants = try await makeClient().updateDeviceCapabilities(accepts: [.streamSnapshotReasons])
         XCTAssertTrue(grants.contains(.streamSnapshotReasons))
+    }
+
+    /// Revision 68: `bot:needs-you` is negotiated alone, because a Mac before
+    /// revision 68 refuses the name, and only its holders' Bot lists carry `needsYou`.
+    func testBotNeedsYouIsAnOptInNegotiatedAlone() async throws {
+        XCTAssertEqual(AidenRemoteCapability(rawValue: "bot:needs-you"), .botNeedsYou)
+        XCTAssertFalse(AidenRemoteCapability.v1Known.contains(.botNeedsYou))
+        XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.botNeedsYou))
+        let askedForAlone = await MainActor.run { AidenRemoteCoordinator.capabilitiesAskedForAlone }
+        XCTAssertTrue(askedForAlone.contains([.botNeedsYou]))
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
+            XCTAssertEqual(try Self.jsonBody(request)["accepts"] as? [String], ["bot:needs-you"])
+            return Self.response(for: request, status: 200, json: #"{"capabilities":["server:read","bot:read","bot:needs-you"]}"#)
+        }
+        let grants = try await makeClient().updateDeviceCapabilities(accepts: [.botNeedsYou])
+        XCTAssertTrue(grants.contains(.botNeedsYou))
     }
 
     /// Revision 64: Continue in a new chat posts only the destination workspace
@@ -2013,7 +2051,23 @@ final class AidenRemoteClientTests: XCTestCase {
             key
         )
         XCTAssertTrue(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.invalidResponse))
-        XCTAssertFalse(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(409)))
+        XCTAssertTrue(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(409)))
+        let conflictBody = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"revision_conflict","message":"Changed.","requestId":"req_test_1","retryable":false}"#.utf8)
+        )
+        XCTAssertFalse(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.server(statusCode: 409, body: conflictBody)))
+        let inFlightBody = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"idempotency_in_flight","message":"In flight.","requestId":"req_test_2","retryable":true}"#.utf8)
+        )
+        XCTAssertTrue(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.server(statusCode: 409, body: inFlightBody)))
+        let internalErrorBody = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"internal_error","message":"This Bot request cannot be safely repeated.","requestId":"req_test_3","retryable":false}"#.utf8)
+        )
+        XCTAssertTrue(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.server(statusCode: 500, body: internalErrorBody)))
+        XCTAssertFalse(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.server(statusCode: 409, body: internalErrorBody)))
     }
 
     func testBotFileRoutesUseBoundedFilePayloadsAndValidateCanonicalResponses() async throws {

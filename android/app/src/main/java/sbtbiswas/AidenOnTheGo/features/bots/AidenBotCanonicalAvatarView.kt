@@ -50,9 +50,11 @@ fun AidenBotCanonicalAvatarView(
     botCache: AidenBotCache? = null,
     name: String = "",
     size: Dp = 48.dp,
-    /** The Bot is working: its face glances, or a glance badge says so (R8, R19). */
+    /** The Bot is working: its sprite moves, or a badge on its photo says so (R8, R19). */
     working: Boolean = false,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** What the Bot is doing, for the Bot chat header and running Bot cards; see [AidenBotSemanticAvatarView]. */
+    state: AidenBotAvatarState? = null
 ) {
     val coordinatorClient = coordinator?.client?.collectAsStateWithLifecycle()?.value
     val effectiveClient = client ?: coordinatorClient
@@ -98,26 +100,27 @@ fun AidenBotCanonicalAvatarView(
     }
 
     val reduceMotion = aidenReduceMotion()
+    val busy = working || state?.isActive == true
     val motion = aidenBotFaceMotion(
-        working = working,
+        working = busy,
         photo = customBitmap != null,
         reduceMotion = reduceMotion,
-        powerSave = working && aidenPowerSaveMode(),
+        powerSave = busy && aidenPowerSaveMode(),
         resumed = aidenBotIsResumed()
     )
     Box(modifier = modifier.size(size)) {
         if (reduceMotion) {
-            AidenBotAvatarLayer(customBitmap, avatar, name, size, working)
+            AidenBotAvatarLayer(customBitmap, avatar, name, size, working, state)
         } else {
             Crossfade(
                 targetState = customBitmap,
                 animationSpec = AidenMotion.short(),
                 label = "bot_avatar_reveal"
             ) { bmp ->
-                AidenBotAvatarLayer(bmp, avatar, name, size, working)
+                AidenBotAvatarLayer(bmp, avatar, name, size, working, state)
             }
         }
-        // A photo can't glance, and a still face can't show it's working: a small glance mark does.
+        // A photo can't move, so a small glance mark says the Bot is working.
         if (motion.badge) {
             Box(
                 Modifier
@@ -144,7 +147,8 @@ private fun AidenBotAvatarLayer(
     avatar: AidenBotAvatar,
     name: String,
     size: Dp,
-    working: Boolean
+    working: Boolean,
+    state: AidenBotAvatarState?
 ) {
     if (bitmap != null) {
         Image(
@@ -160,7 +164,8 @@ private fun AidenBotAvatarLayer(
             avatar = avatar.semantic,
             name = name,
             size = size,
-            working = working
+            working = working,
+            state = state
         )
     }
 }

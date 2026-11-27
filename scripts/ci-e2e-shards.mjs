@@ -38,6 +38,7 @@ export const FILE_SECONDS = Object.freeze({
   "bots-starter.spec.ts": 22,
   "browser-agent.spec.ts": 38,
   "browser-cancellation.spec.ts": 66,
+  "browser-grab.spec.ts": 60,
   "browser-initial-crash.spec.ts": 3,
   "browser-lifecycle.spec.ts": 237,
   "browser-throttling.spec.ts": 29,
@@ -69,7 +70,6 @@ export const FILE_SECONDS = Object.freeze({
   "lmstudio-chat-attachments.spec.ts": 22,
   "memory-list.spec.ts": 16,
   "model-call-retry.spec.ts": 26,
-  "model-pad-responsive.spec.ts": 13,
   "no-workspace-chat.spec.ts": 37,
   "onboarding-lmstudio.spec.ts": 41,
   "peer-project-clone.spec.ts": 11,
@@ -145,6 +145,17 @@ export function selectedSpecs(discovered, selection) {
   return discovered.filter((file) => present.has(file) && wanted.includes(file));
 }
 
+// On a pull request the macOS shard runs only its planned macOS-only specs.
+// A missing or malformed plan falls back to the ordinary selection.
+export function specsForRunner(discovered, selection, runner) {
+  const specs = selectedSpecs(discovered, selection);
+  const plan = selection?.macE2E;
+  if (runner !== "macos" || plan?.scope !== "macos" || !Array.isArray(plan.specs) || plan.specs.length === 0) return specs;
+  const present = new Set(discovered);
+  if (plan.specs.some((file) => !present.has(file))) return specs;
+  return discovered.filter((file) => plan.specs.includes(file));
+}
+
 export function readTestSelection(filePath = process.env.AIDEN_CI_TEST_SELECTION) {
   if (!filePath) return null;
   try {
@@ -165,7 +176,7 @@ function writeShardTimings(reportPath, outputPath) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const selection = readTestSelection();
-  const specs = selectedSpecs(discoverSpecs(), selection);
+  const specs = specsForRunner(discoverSpecs(), selection, process.env.AIDEN_E2E_RUNNER);
   const { shard, args, empty } = shardArguments(specs, process.argv[2], {
     recorded: loadRecordedWeights(),
     allowEmpty: selection?.e2e?.mode === "related",

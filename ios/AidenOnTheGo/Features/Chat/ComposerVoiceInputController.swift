@@ -4,38 +4,565 @@ import Observation
 import Speech
 import UIKit
 
+/// Pure state/resource reducer for `ComposerVoiceInputController`.
+///
+/// Consolidates every state transition across `(state, backend, resources,
+/// suppressNextRecognitionError, sessionFence)` and guarantees that every exit
+/// to `.idle` emits teardown effects for any owned audio tap, `AVAudioSession`,
+/// recognition request/task, Mac accumulator/transcriber, and async tasks.
+struct ComposerVoiceInputReducer: Equatable, Sendable {
+    enum Backend: Equatable, Sendable {
+        case none
+        case nativeOnDevice
+        case pairedMac
+    }
+
+    struct ResourceOwnership: Equatable, Sendable {
+        var audioSessionActivated = false
+        var audioTapInstalled = false
+        var audioEngineActive = false
+        var capturingPublished = false
+        var recognitionRequestActive = false
+        var recognitionTaskActive = false
+        var macAccumulatorActive = false
+        var macTranscriberActive = false
+        var macTranscriptionTaskActive = false
+        var nativeFinalizationTaskActive = false
+
+        static let none = ResourceOwnership()
+
+        var isClean: Bool { self == .none }
+    }
+
+    enum Effect: Equatable, Sendable {
+        case stopAcceptingDraftUpdates
+        case setCapturing(Bool)
+        case teardownAudioCapture(removeTap: Bool, deactivateAudioSession: Bool)
+        case endRecognitionAudio
+        case releaseRecognition(cancelTask: Bool)
+        case releaseMacCaptureResources
+        case cancelMacTranscriptionTask
+        case cancelNativeFinalizationTask
+        case scheduleNativeFinalizationTimeout(session: Int)
+        case recordFailureDiagnostic(VoiceInputFailureLogCategory)
+        case setErrorMessage(String?)
+        case clearLiveTranscript
+    }
+
+    struct BeginResult: Equatable, Sendable {
+        let session: Int
+        let effects: [Effect]
+    }
+
+    enum StopKeepingTranscriptAction: Equatable, Sendable {
+        case ignore
+        case finishPairedMac(session: Int, effects: [Effect])
+        case finalizeNative(session: Int, effects: [Effect])
+    }
+
+    private(set) var state: ComposerVoiceInputController.State = .idle
+    private(set) var backend: Backend = .none
+    private(set) var resources: ResourceOwnership = .none
+    private(set) var suppressNextRecognitionError = false
+    private(set) var sessionFence = ComposerVoiceSessionFence()
+
+    func isCurrent(_ session: Int) -> Bool {
+        sessionFence.accepts(session)
+    }
+
+    mutating func beginSession(backend: Backend) -> BeginResult? {
+        guard state == .idle, backend != .none else { return nil }
+        let session = sessionFence.advance()
+        var effects: [Effect] = []
+        if resources.macTranscriptionTaskActive {
+            resources.macTranscriptionTaskActive = false
+            effects.append(.cancelMacTranscriptionTask)
+        }
+        if resources.nativeFinalizationTaskActive {
+            resources.nativeFinalizationTaskActive = false
+            effects.append(.cancelNativeFinalizationTask)
+        }
+        suppressNextRecognitionError = false
+        self.backend = backend
+        state = .requestingPermission
+        if backend == .pairedMac {
+            resources.macTranscriberActive = true
+        }
+        effects.append(.setErrorMessage(nil))
+        effects.append(.clearLiveTranscript)
+        return BeginResult(session: session, effects: effects)
+    }
+
+    /// Cleans up any stale capture resources before starting a new engine.
+    mutating func prepareAudioCapture() -> [Effect] {
+        var effects: [Effect] = []
+        if resources.capturingPublished {
+            resources.capturingPublished = false
+            effects.append(.setCapturing(false))
+        }
+        if resources.audioEngineActive || resources.audioTapInstalled || resources.audioSessionActivated {
+            let removeTap = resources.audioTapInstalled
+            let deactivateSession = resources.audioSessionActivated
+            resources.audioEngineActive = false
+            resources.audioTapInstalled = false
+            resources.audioSessionActivated = false
+            effects.append(.teardownAudioCapture(removeTap: removeTap, deactivateAudioSession: deactivateSession))
+        }
+        if resources.recognitionRequestActive || resources.recognitionTaskActive {
+            resources.recognitionRequestActive = false
+            resources.recognitionTaskActive = false
+            effects.append(.releaseRecognition(cancelTask: true))
+        }
+        return effects
+    }
+
+    mutating func didActivateAudioSession() {
+        resources.audioSessionActivated = true
+    }
+
+    mutating func didAttachAudioEngine() {
+        resources.audioEngineActive = true
+    }
+
+    mutating func didInstallAudioTap() {
+        resources.audioTapInstalled = true
+    }
+
+    mutating func didCreateRecognitionRequest() {
+        resources.recognitionRequestActive = true
+    }
+
+    mutating func didStartRecognitionTask() {
+        resources.recognitionTaskActive = true
+    }
+
+    mutating func didCreateMacAccumulator() {
+        resources.macAccumulatorActive = true
+    }
+
+    mutating func didStartListening(session: Int) -> [Effect]? {
+        guard isCurrent(session), state == .requestingPermission else { return nil }
+        state = .listening
+        resources.capturingPublished = true
+        return [.setCapturing(true)]
+    }
+
+    mutating func stopKeepingTranscript() -> StopKeepingTranscriptAction {
+        guard state == .listening else { return .ignore }
+        let session = sessionFence.current
+        switch backend {
+        case .pairedMac:
+            var effects: [Effect] = []
+            if resources.capturingPublished {
+                resources.capturingPublished = false
+                effects.append(.setCapturing(false))
+            }
+            if resources.audioEngineActive || resources.audioTapInstalled || resources.audioSessionActivated {
+                let removeTap = resources.audioTapInstalled
+                let deactivateSession = resources.audioSessionActivated
+                resources.audioEngineActive = false
+                resources.audioTapInstalled = false
+                resources.audioSessionActivated = false
+                effects.append(.teardownAudioCapture(removeTap: removeTap, deactivateAudioSession: deactivateSession))
+            }
+            if resources.recognitionRequestActive || resources.recognitionTaskActive {
+                resources.recognitionRequestActive = false
+                resources.recognitionTaskActive = false
+                effects.append(.releaseRecognition(cancelTask: true))
+            }
+            if resources.macAccumulatorActive || resources.macTranscriberActive {
+                resources.macAccumulatorActive = false
+                resources.macTranscriberActive = false
+                effects.append(.releaseMacCaptureResources)
+            }
+            return .finishPairedMac(session: session, effects: effects)
+
+        case .nativeOnDevice:
+            suppressNextRecognitionError = true
+            state = .transcribing
+            var effects: [Effect] = []
+            if resources.capturingPublished {
+                resources.capturingPublished = false
+                effects.append(.setCapturing(false))
+            }
+            if resources.audioEngineActive || resources.audioTapInstalled || resources.audioSessionActivated {
+                let removeTap = resources.audioTapInstalled
+                let deactivateSession = resources.audioSessionActivated
+                resources.audioEngineActive = false
+                resources.audioTapInstalled = false
+                resources.audioSessionActivated = false
+                effects.append(.teardownAudioCapture(removeTap: removeTap, deactivateAudioSession: deactivateSession))
+            }
+            if resources.recognitionRequestActive {
+                effects.append(.endRecognitionAudio)
+            }
+            if resources.nativeFinalizationTaskActive {
+                effects.append(.cancelNativeFinalizationTask)
+            }
+            resources.nativeFinalizationTaskActive = true
+            effects.append(.scheduleNativeFinalizationTimeout(session: session))
+            return .finalizeNative(session: session, effects: effects)
+
+        case .none:
+            return .ignore
+        }
+    }
+
+    mutating func beginMacTranscription(session: Int) -> [Effect]? {
+        guard isCurrent(session), backend == .pairedMac else { return nil }
+        state = .transcribing
+        var effects: [Effect] = []
+        if resources.macTranscriptionTaskActive {
+            effects.append(.cancelMacTranscriptionTask)
+        }
+        resources.macTranscriptionTaskActive = true
+        return effects
+    }
+
+    mutating func macTranscriptionCompleted(session: Int) -> [Effect]? {
+        guard isCurrent(session), state == .transcribing, backend == .pairedMac else { return nil }
+        // The completing task is already exiting, so do not emit self-cancellation.
+        resources.macTranscriptionTaskActive = false
+        return transitionToIdle(cancelRecognitionTask: true)
+    }
+
+    mutating func nativeFinalizationTimedOut(session: Int) -> [Effect]? {
+        guard isCurrent(session), state == .transcribing, backend == .nativeOnDevice else { return nil }
+        // The timeout task itself is exiting now.
+        resources.nativeFinalizationTaskActive = false
+        suppressNextRecognitionError = false
+        return transitionToIdle(cancelRecognitionTask: true)
+    }
+
+    mutating func nativeRecognitionTerminated(
+        session: Int,
+        errorDescription: String?
+    ) -> [Effect]? {
+        guard isCurrent(session), state != .idle, backend == .nativeOnDevice else { return nil }
+        var effects = transitionToIdle(cancelRecognitionTask: false)
+        if let errorDescription {
+            if suppressNextRecognitionError {
+                suppressNextRecognitionError = false
+            } else {
+                effects.append(.setErrorMessage(errorDescription))
+            }
+        } else {
+            suppressNextRecognitionError = false
+        }
+        return effects
+    }
+
+    mutating func stopForSubmitOrCancel() -> [Effect] {
+        _ = sessionFence.advance()
+        suppressNextRecognitionError = true
+        return transitionToIdle(cancelRecognitionTask: true)
+    }
+
+    mutating func fail(
+        session: Int?,
+        message: String,
+        logCategory: VoiceInputFailureLogCategory
+    ) -> [Effect]? {
+        if let session, !isCurrent(session) { return nil }
+        suppressNextRecognitionError = false
+        var effects: [Effect] = [.recordFailureDiagnostic(logCategory)]
+        effects.append(contentsOf: transitionToIdle(cancelRecognitionTask: true))
+        effects.append(.setErrorMessage(message))
+        return effects
+    }
+
+    /// Single canonical exit to `.idle`. Guarantees every owned resource flag
+    /// is drained and emitted as an explicit teardown effect so no exit to
+    /// `.idle` can leak a tap, `AVAudioSession`, recognition handle, or task.
+    private mutating func transitionToIdle(cancelRecognitionTask: Bool) -> [Effect] {
+        var effects: [Effect] = []
+        if resources.macTranscriptionTaskActive {
+            resources.macTranscriptionTaskActive = false
+            effects.append(.cancelMacTranscriptionTask)
+        }
+        if resources.nativeFinalizationTaskActive {
+            resources.nativeFinalizationTaskActive = false
+            effects.append(.cancelNativeFinalizationTask)
+        }
+        effects.append(.stopAcceptingDraftUpdates)
+        if resources.capturingPublished {
+            resources.capturingPublished = false
+            effects.append(.setCapturing(false))
+        }
+        if resources.audioEngineActive || resources.audioTapInstalled || resources.audioSessionActivated {
+            let removeTap = resources.audioTapInstalled
+            let deactivateSession = resources.audioSessionActivated
+            resources.audioEngineActive = false
+            resources.audioTapInstalled = false
+            resources.audioSessionActivated = false
+            effects.append(.teardownAudioCapture(removeTap: removeTap, deactivateAudioSession: deactivateSession))
+        }
+        if resources.recognitionRequestActive || resources.recognitionTaskActive {
+            resources.recognitionRequestActive = false
+            resources.recognitionTaskActive = false
+            effects.append(.releaseRecognition(cancelTask: cancelRecognitionTask))
+        }
+        if resources.macAccumulatorActive || resources.macTranscriberActive {
+            resources.macAccumulatorActive = false
+            resources.macTranscriberActive = false
+            effects.append(.releaseMacCaptureResources)
+        }
+        resources = .none
+        backend = .none
+        state = .idle
+        return effects
+    }
+}
+
+// MARK: - Injectable Platform Seams
+
+struct ComposerVoiceAudioSessionInputMetrics: Equatable, Sendable {
+    let isInputAvailable: Bool
+    let sampleRate: Double
+    let inputNumberOfChannels: Int
+}
+
+@MainActor
+protocol ComposerVoiceAudioSessionDriver: AnyObject {
+    func activateForRecording() throws -> ComposerVoiceAudioSessionInputMetrics
+    func deactivateAfterRecording()
+}
+
+protocol ComposerVoiceNativeRecognitionRequest: AnyObject, Sendable {
+    func append(_ buffer: AVAudioPCMBuffer)
+    func endAudio()
+}
+
+@MainActor
+protocol ComposerVoiceNativeRecognitionTask: AnyObject {
+    func cancel()
+}
+
+struct ComposerVoiceRecognitionUpdate: Equatable, Sendable {
+    let transcript: String?
+    let isFinal: Bool
+    let errorDescription: String?
+}
+
+@MainActor
+protocol ComposerVoiceAudioEngineHandle: AnyObject {
+    var isRunning: Bool { get }
+    var inputSampleRate: Double { get }
+    var inputChannelCount: UInt32 { get }
+    func installMacTap(into accumulator: ComposerMacSpeechPCMAccumulator)
+    func installNativeTap(forwardingTo request: any ComposerVoiceNativeRecognitionRequest)
+    func prepareAndStart() throws
+    func stopAndReset(removeTap: Bool)
+}
+
+@MainActor
+protocol ComposerVoiceNativeSpeechDriver: AnyObject {
+    func prepareOnDeviceRecognizer(for locale: Locale) -> Bool
+    func makeRequest() -> any ComposerVoiceNativeRecognitionRequest
+    func startRecognition(
+        request: any ComposerVoiceNativeRecognitionRequest,
+        onUpdate: @escaping @MainActor (ComposerVoiceRecognitionUpdate) -> Void
+    ) -> (any ComposerVoiceNativeRecognitionTask)?
+}
+
+// MARK: - Live Platform Implementations
+
+@MainActor
+private final class LiveComposerVoiceAudioSessionDriver: ComposerVoiceAudioSessionDriver {
+    func activateForRecording() throws -> ComposerVoiceAudioSessionInputMetrics {
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(
+            ComposerVoiceAudioSessionConfiguration.category,
+            mode: ComposerVoiceAudioSessionConfiguration.mode,
+            options: ComposerVoiceAudioSessionConfiguration.options
+        )
+        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+        return ComposerVoiceAudioSessionInputMetrics(
+            isInputAvailable: audioSession.isInputAvailable,
+            sampleRate: audioSession.sampleRate,
+            inputNumberOfChannels: audioSession.inputNumberOfChannels
+        )
+    }
+
+    func deactivateAfterRecording() {
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+}
+
+private final class LiveComposerVoiceNativeRecognitionRequest: ComposerVoiceNativeRecognitionRequest, @unchecked Sendable {
+    let underlying: SFSpeechAudioBufferRecognitionRequest
+
+    init() {
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = true
+        self.underlying = request
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        underlying.append(buffer)
+    }
+
+    func endAudio() {
+        underlying.endAudio()
+    }
+}
+
+@MainActor
+private final class LiveComposerVoiceNativeRecognitionTask: ComposerVoiceNativeRecognitionTask {
+    private let underlying: SFSpeechRecognitionTask
+
+    init(_ underlying: SFSpeechRecognitionTask) {
+        self.underlying = underlying
+    }
+
+    func cancel() {
+        underlying.cancel()
+    }
+}
+
+@MainActor
+private final class LiveComposerVoiceAudioEngineHandle: ComposerVoiceAudioEngineHandle {
+    private let engine: AVAudioEngine
+
+    init(engine: AVAudioEngine) {
+        self.engine = engine
+    }
+
+    var isRunning: Bool { engine.isRunning }
+
+    var inputSampleRate: Double {
+        engine.inputNode.outputFormat(forBus: 0).sampleRate
+    }
+
+    var inputChannelCount: UInt32 {
+        engine.inputNode.outputFormat(forBus: 0).channelCount
+    }
+
+    func installMacTap(into accumulator: ComposerMacSpeechPCMAccumulator) {
+        let inputNode = engine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: recordingFormat) { buffer, _ in
+            accumulator.append(buffer)
+        }
+    }
+
+    func installNativeTap(forwardingTo request: any ComposerVoiceNativeRecognitionRequest) {
+        let inputNode = engine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: recordingFormat) { [weak request] buffer, _ in
+            request?.append(buffer)
+        }
+    }
+
+    func prepareAndStart() throws {
+        engine.prepare()
+        try engine.start()
+    }
+
+    func stopAndReset(removeTap: Bool) {
+        if engine.isRunning { engine.stop() }
+        if removeTap {
+            engine.inputNode.removeTap(onBus: 0)
+        }
+        engine.reset()
+    }
+}
+
+@MainActor
+private final class LiveComposerVoiceNativeSpeechDriver: ComposerVoiceNativeSpeechDriver {
+    private let speechRecognizerFactory: () -> SFSpeechRecognizer?
+    private var speechRecognizer: SFSpeechRecognizer?
+
+    init(speechRecognizerFactory: @escaping () -> SFSpeechRecognizer?) {
+        self.speechRecognizerFactory = speechRecognizerFactory
+    }
+
+    func prepareOnDeviceRecognizer(for locale: Locale) -> Bool {
+        if let speechRecognizer {
+            return speechRecognizer.supportsOnDeviceRecognition
+        }
+        let target = Self.normalizedLocaleIdentifier(locale.identifier)
+        guard SFSpeechRecognizer.supportedLocales().contains(where: {
+            Self.normalizedLocaleIdentifier($0.identifier) == target
+        }) else { return false }
+
+        let recognizer = speechRecognizerFactory()
+        guard recognizer?.supportsOnDeviceRecognition == true else { return false }
+        speechRecognizer = recognizer
+        return true
+    }
+
+    func makeRequest() -> any ComposerVoiceNativeRecognitionRequest {
+        LiveComposerVoiceNativeRecognitionRequest()
+    }
+
+    func startRecognition(
+        request: any ComposerVoiceNativeRecognitionRequest,
+        onUpdate: @escaping @MainActor (ComposerVoiceRecognitionUpdate) -> Void
+    ) -> (any ComposerVoiceNativeRecognitionTask)? {
+        guard let speechRecognizer,
+              let liveRequest = request as? LiveComposerVoiceNativeRecognitionRequest else {
+            return nil
+        }
+        let task = speechRecognizer.recognitionTask(with: liveRequest.underlying) { result, error in
+            let update = ComposerVoiceRecognitionUpdate(
+                transcript: result?.bestTranscription.formattedString,
+                isFinal: result?.isFinal == true,
+                errorDescription: error?.localizedDescription
+            )
+            Task { @MainActor in onUpdate(update) }
+        }
+        return LiveComposerVoiceNativeRecognitionTask(task)
+    }
+
+    private static func normalizedLocaleIdentifier(_ identifier: String) -> String {
+        identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+    }
+}
+
+// MARK: - Controller
+
 /// Composer dictation using either native on-device recognition or the explicitly
 /// selected, authenticated paired-Mac local speech model.
 @MainActor
 @Observable
 final class ComposerVoiceInputController {
-    enum State: Equatable {
+    enum State: Equatable, Sendable {
         case idle
         case requestingPermission
         case listening
         case transcribing
     }
 
-    private(set) var state: State = .idle
+    struct Dependencies {
+        var selectedMode: @MainActor () -> AidenVoiceInputMode
+        var isAppActive: @MainActor () -> Bool
+        var requestMicrophonePermission: @MainActor () async -> Bool
+        var requestSpeechAuthorization: @MainActor () async -> SFSpeechRecognizerAuthorizationStatus
+        var audioSession: any ComposerVoiceAudioSessionDriver
+        var audioEngineFactory: @MainActor () -> any ComposerVoiceAudioEngineHandle
+        var nativeSpeech: any ComposerVoiceNativeSpeechDriver
+        var makeMacAccumulator: @MainActor () -> ComposerMacSpeechPCMAccumulator
+        var finalizationSleep: @Sendable (Duration) async throws -> Void
+        var setCapturing: @MainActor (Bool) -> Void
+    }
+
+    private(set) var reducer = ComposerVoiceInputReducer()
+    var state: State { reducer.state }
     private(set) var errorMessage: String?
     private(set) var liveTranscript = ""
 
-    private let speechRecognizerFactory: () -> SFSpeechRecognizer?
-    private let audioEngineFactory: () -> AVAudioEngine
-    private var speechRecognizer: SFSpeechRecognizer?
-    private var audioEngine: AVAudioEngine?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
-    private var draftUpdateSession = ComposerVoiceDraftUpdateSession()
-    private var updateDraft: ((String) -> Void)?
-    private var suppressNextRecognitionError = false
-    private var activatedAudioSessionForRecording = false
-    private var audioTapInstalled = false
-    private var macAccumulator: ComposerMacSpeechPCMAccumulator?
-    private var macTranscriber: ((Data) async throws -> String)?
-    private var macTranscriptionTask: Task<Void, Never>?
-    private var nativeFinalizationTask: Task<Void, Never>?
-    private var sessionFence = ComposerVoiceSessionFence()
+    @ObservationIgnored private let dependencies: Dependencies
+    @ObservationIgnored private var audioEngine: (any ComposerVoiceAudioEngineHandle)?
+    @ObservationIgnored private var recognitionRequest: (any ComposerVoiceNativeRecognitionRequest)?
+    @ObservationIgnored private var recognitionTask: (any ComposerVoiceNativeRecognitionTask)?
+    @ObservationIgnored private var draftUpdateSession = ComposerVoiceDraftUpdateSession()
+    @ObservationIgnored private var updateDraft: ((String) -> Void)?
+    @ObservationIgnored private var macAccumulator: ComposerMacSpeechPCMAccumulator?
+    @ObservationIgnored private var macTranscriber: ((Data) async throws -> String)?
+    @ObservationIgnored private var macTranscriptionTask: Task<Void, Never>?
+    @ObservationIgnored private var nativeFinalizationTask: Task<Void, Never>?
 
     @ObservationIgnored var locale = Locale.current
 
@@ -45,8 +572,31 @@ final class ComposerVoiceInputController {
         },
         audioEngineFactory: @escaping () -> AVAudioEngine = { AVAudioEngine() }
     ) {
-        self.speechRecognizerFactory = speechRecognizerFactory
-        self.audioEngineFactory = audioEngineFactory
+        self.dependencies = Dependencies(
+            selectedMode: { AidenVoiceInputMode.selected },
+            isAppActive: { UIApplication.shared.applicationState == .active },
+            requestMicrophonePermission: { await ComposerVoiceMicrophonePermissionRequester.request() },
+            requestSpeechAuthorization: {
+                await withCheckedContinuation { continuation in
+                    SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+                }
+            },
+            audioSession: LiveComposerVoiceAudioSessionDriver(),
+            audioEngineFactory: { LiveComposerVoiceAudioEngineHandle(engine: audioEngineFactory()) },
+            nativeSpeech: LiveComposerVoiceNativeSpeechDriver(speechRecognizerFactory: speechRecognizerFactory),
+            makeMacAccumulator: { ComposerMacSpeechPCMAccumulator() },
+            finalizationSleep: { try await Task.sleep(for: $0) },
+            setCapturing: { AidenComposerAudioCaptureState.shared.setCapturing($0) }
+        )
+    }
+
+    init(dependencies: Dependencies) {
+        self.dependencies = dependencies
+    }
+
+    deinit {
+        macTranscriptionTask?.cancel()
+        nativeFinalizationTask?.cancel()
     }
 
     var isListening: Bool { state == .listening }
@@ -61,7 +611,7 @@ final class ComposerVoiceInputController {
             stopKeepingTranscript()
         } else {
             guard state == .idle else { return }
-            if AidenVoiceInputMode.selected == .pairedMac {
+            if dependencies.selectedMode() == .pairedMac {
                 await startMac(
                     currentDraft: currentDraft,
                     updateDraft: updateDraft,
@@ -74,32 +624,21 @@ final class ComposerVoiceInputController {
     }
 
     func stopKeepingTranscript() {
-        if macAccumulator != nil {
-            finishMacRecording()
+        switch reducer.stopKeepingTranscript() {
+        case .ignore:
             return
-        }
-        suppressNextRecognitionError = true
-        let session = sessionFence.current
-        state = .transcribing
-        finishNativeAudioCapture()
-        nativeFinalizationTask?.cancel()
-        nativeFinalizationTask = Task {
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled, isCurrent(session), state == .transcribing else { return }
-            stopAcceptingDraftUpdates()
-            stopAudio(cancelTask: true)
-            state = .idle
+        case let .finishPairedMac(session, effects):
+            let pcm = macAccumulator?.data ?? Data()
+            let transcriber = macTranscriber
+            apply(effects)
+            finishMacRecording(session: session, pcm: pcm, transcriber: transcriber)
+        case let .finalizeNative(_, effects):
+            apply(effects)
         }
     }
 
     func stopBeforeSubmittingDraft() {
-        invalidateSession()
-        suppressNextRecognitionError = true
-        stopAcceptingDraftUpdates()
-        stopAudio(cancelTask: true)
-        macAccumulator = nil
-        macTranscriber = nil
-        state = .idle
+        apply(reducer.stopForSubmitOrCancel())
     }
 
     func cancelDiscardingRecording() {
@@ -111,323 +650,259 @@ final class ComposerVoiceInputController {
         updateDraft: @escaping (String) -> Void,
         transcriber: @escaping (Data) async throws -> String
     ) async {
-        let session = beginSession()
-        errorMessage = nil
-        liveTranscript = ""
+        guard let begun = reducer.beginSession(backend: .pairedMac) else { return }
+        let session = begun.session
+        apply(begun.effects)
         draftUpdateSession.begin(baseDraft: currentDraft)
         self.updateDraft = updateDraft
         macTranscriber = transcriber
-        state = .requestingPermission
 
-        let microphoneGranted = await ComposerVoiceMicrophonePermissionRequester.request()
-        guard isCurrent(session), state == .requestingPermission else { return }
+        let microphoneGranted = await dependencies.requestMicrophonePermission()
+        guard reducer.isCurrent(session), state == .requestingPermission else { return }
         guard microphoneGranted else {
             fail(
+                session: session,
                 String(localized: "Microphone access is disabled. Enable it in Settings to use voice input."),
                 logCategory: .microphonePermission
             )
             return
         }
-        guard isCurrent(session), ComposerVoiceInputStartPolicy.canStart(appIsActive: UIApplication.shared.applicationState == .active) else {
-            fail(ComposerVoiceInputError.appNotActive.localizedDescription, logCategory: .appNotActive)
+        guard reducer.isCurrent(session), ComposerVoiceInputStartPolicy.canStart(appIsActive: dependencies.isAppActive()) else {
+            fail(session: session, ComposerVoiceInputError.appNotActive.localizedDescription, logCategory: .appNotActive)
             return
         }
         do {
             try startMacAudioCapture()
-            state = .listening
+            if let effects = reducer.didStartListening(session: session) {
+                apply(effects)
+            }
         } catch {
-            fail(error.localizedDescription, logCategory: Self.logCategory(for: error))
+            fail(session: session, error.localizedDescription, logCategory: Self.logCategory(for: error))
         }
     }
 
     private func startMacAudioCapture() throws {
-        stopAudio(cancelTask: true)
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(
-            ComposerVoiceAudioSessionConfiguration.category,
-            mode: ComposerVoiceAudioSessionConfiguration.mode,
-            options: ComposerVoiceAudioSessionConfiguration.options
-        )
-        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-        activatedAudioSessionForRecording = true
+        apply(reducer.prepareAudioCapture())
+        let metrics = try dependencies.audioSession.activateForRecording()
+        reducer.didActivateAudioSession()
         try ComposerVoiceInputStartPolicy.validateAudioSessionInput(
-            isInputAvailable: audioSession.isInputAvailable,
-            sampleRate: audioSession.sampleRate,
-            inputNumberOfChannels: audioSession.inputNumberOfChannels
+            isInputAvailable: metrics.isInputAvailable,
+            sampleRate: metrics.sampleRate,
+            inputNumberOfChannels: metrics.inputNumberOfChannels
         )
 
-        let engine = audioEngineFactory()
+        let engine = dependencies.audioEngineFactory()
         audioEngine = engine
-        let inputNode = engine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        try ComposerVoiceInputPreflight.validate(recordingFormat: recordingFormat)
-        let accumulator = ComposerMacSpeechPCMAccumulator()
+        reducer.didAttachAudioEngine()
+        try ComposerVoiceInputPreflight.validate(
+            sampleRate: engine.inputSampleRate,
+            channelCount: engine.inputChannelCount
+        )
+        let accumulator = dependencies.makeMacAccumulator()
         macAccumulator = accumulator
-        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: recordingFormat) { buffer, _ in
-            accumulator.append(buffer)
-        }
-        audioTapInstalled = true
-        engine.prepare()
-        try engine.start()
-        AidenComposerAudioCaptureState.shared.setCapturing(true)
+        reducer.didCreateMacAccumulator()
+        engine.installMacTap(into: accumulator)
+        reducer.didInstallAudioTap()
+        try engine.prepareAndStart()
     }
 
-    private func finishMacRecording() {
-        let session = sessionFence.current
-        let pcm = macAccumulator?.data ?? Data()
-        let transcriber = macTranscriber
-        macAccumulator = nil
-        macTranscriber = nil
-        stopAudio(cancelTask: true)
+    private func finishMacRecording(
+        session: Int,
+        pcm: Data,
+        transcriber: ((Data) async throws -> String)?
+    ) {
         guard !pcm.isEmpty, let transcriber else {
-            fail(String(localized: "No speech was recorded."), logCategory: .audioStartup)
+            fail(session: session, String(localized: "No speech was recorded."), logCategory: .audioStartup)
             return
         }
-        state = .transcribing
-        macTranscriptionTask?.cancel()
-        macTranscriptionTask = Task {
+        guard let effects = reducer.beginMacTranscription(session: session) else { return }
+        apply(effects)
+        macTranscriptionTask = Task { [weak self] in
             do {
                 let transcript = try await transcriber(pcm)
                 try Task.checkCancellation()
-                guard isCurrent(session), state == .transcribing else { return }
-                liveTranscript = transcript
-                if let draft = draftUpdateSession.composedDraft(for: transcript) {
-                    updateDraft?(draft)
+                guard let self, self.reducer.isCurrent(session), self.state == .transcribing else { return }
+                self.liveTranscript = transcript
+                if let draft = self.draftUpdateSession.composedDraft(for: transcript) {
+                    self.updateDraft?(draft)
                 }
-                stopAcceptingDraftUpdates()
-                state = .idle
+                self.macTranscriptionTask = nil
+                if let completionEffects = self.reducer.macTranscriptionCompleted(session: session) {
+                    self.apply(completionEffects)
+                }
             } catch {
-                guard !Task.isCancelled, isCurrent(session), state == .transcribing else { return }
-                fail(error.localizedDescription, logCategory: .audioStartup)
+                guard let self, !Task.isCancelled, self.reducer.isCurrent(session), self.state == .transcribing else { return }
+                self.macTranscriptionTask = nil
+                self.fail(session: session, error.localizedDescription, logCategory: .audioStartup)
             }
         }
     }
 
     private func start(currentDraft: String, updateDraft: @escaping (String) -> Void) async {
-        guard state == .idle else { return }
-        let session = beginSession()
-
-        errorMessage = nil
-        liveTranscript = ""
-        suppressNextRecognitionError = false
+        guard let begun = reducer.beginSession(backend: .nativeOnDevice) else { return }
+        let session = begun.session
+        apply(begun.effects)
         draftUpdateSession.begin(baseDraft: currentDraft)
         self.updateDraft = updateDraft
-        state = .requestingPermission
 
-        guard let speechRecognizer = onDeviceSpeechRecognizerForRecording() else {
+        guard dependencies.nativeSpeech.prepareOnDeviceRecognizer(for: locale) else {
             fail(
+                session: session,
                 String(localized: "On-device speech recognition is not available for the current locale."),
                 logCategory: .speechUnavailable
             )
             return
         }
 
-        let speechStatus = await requestSpeechAuthorization()
-        guard isCurrent(session), state == .requestingPermission else { return }
+        let speechStatus = await dependencies.requestSpeechAuthorization()
+        guard reducer.isCurrent(session), state == .requestingPermission else { return }
         guard speechStatus == .authorized else {
-            fail(Self.speechAuthorizationMessage(for: speechStatus), logCategory: .speechAuthorization)
+            fail(session: session, Self.speechAuthorizationMessage(for: speechStatus), logCategory: .speechAuthorization)
             return
         }
 
-        let microphoneGranted = await ComposerVoiceMicrophonePermissionRequester.request()
-        guard isCurrent(session), state == .requestingPermission else { return }
+        let microphoneGranted = await dependencies.requestMicrophonePermission()
+        guard reducer.isCurrent(session), state == .requestingPermission else { return }
         guard microphoneGranted else {
             fail(
+                session: session,
                 String(localized: "Microphone access is disabled. Enable it in Settings to use voice input."),
                 logCategory: .microphonePermission
             )
             return
         }
 
-        guard isCurrent(session), ComposerVoiceInputStartPolicy.canStart(
-            appIsActive: UIApplication.shared.applicationState == .active
+        guard reducer.isCurrent(session), ComposerVoiceInputStartPolicy.canStart(
+            appIsActive: dependencies.isAppActive()
         ) else {
-            fail(ComposerVoiceInputError.appNotActive.localizedDescription, logCategory: .appNotActive)
+            fail(session: session, ComposerVoiceInputError.appNotActive.localizedDescription, logCategory: .appNotActive)
             return
         }
 
         do {
-            try startRecognition(speechRecognizer: speechRecognizer, session: session)
-            state = .listening
+            try startRecognition(session: session)
+            if let effects = reducer.didStartListening(session: session) {
+                apply(effects)
+            }
         } catch {
-            fail(error.localizedDescription, logCategory: Self.logCategory(for: error))
+            fail(session: session, error.localizedDescription, logCategory: Self.logCategory(for: error))
         }
     }
 
-    private func startRecognition(speechRecognizer: SFSpeechRecognizer, session: Int) throws {
-        stopAudio(cancelTask: true)
+    private func startRecognition(session: Int) throws {
+        apply(reducer.prepareAudioCapture())
 
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(
-            ComposerVoiceAudioSessionConfiguration.category,
-            mode: ComposerVoiceAudioSessionConfiguration.mode,
-            options: ComposerVoiceAudioSessionConfiguration.options
-        )
-        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-        activatedAudioSessionForRecording = true
+        let metrics = try dependencies.audioSession.activateForRecording()
+        reducer.didActivateAudioSession()
         try ComposerVoiceInputStartPolicy.validateAudioSessionInput(
-            isInputAvailable: audioSession.isInputAvailable,
-            sampleRate: audioSession.sampleRate,
-            inputNumberOfChannels: audioSession.inputNumberOfChannels
+            isInputAvailable: metrics.isInputAvailable,
+            sampleRate: metrics.sampleRate,
+            inputNumberOfChannels: metrics.inputNumberOfChannels
         )
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
+        let request = dependencies.nativeSpeech.makeRequest()
         recognitionRequest = request
+        reducer.didCreateRecognitionRequest()
 
-        let engine = audioEngineFactory()
+        let engine = dependencies.audioEngineFactory()
         audioEngine = engine
+        reducer.didAttachAudioEngine()
         try ComposerVoiceInputStartPolicy.validateAudioEngine(isRunning: engine.isRunning)
+        try ComposerVoiceInputPreflight.validate(
+            sampleRate: engine.inputSampleRate,
+            channelCount: engine.inputChannelCount
+        )
+        engine.installNativeTap(forwardingTo: request)
+        reducer.didInstallAudioTap()
 
-        let inputNode = engine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        try ComposerVoiceInputPreflight.validate(recordingFormat: recordingFormat)
-        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: recordingFormat) { [weak request] buffer, _ in
-            request?.append(buffer)
+        recognitionTask = dependencies.nativeSpeech.startRecognition(request: request) { [weak self] update in
+            self?.handleRecognition(update: update, session: session)
         }
-        audioTapInstalled = true
-
-        engine.prepare()
-        recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
-            Task { @MainActor in self?.handleRecognition(result: result, error: error, session: session) }
+        if recognitionTask != nil {
+            reducer.didStartRecognitionTask()
         }
-        try engine.start()
-        AidenComposerAudioCaptureState.shared.setCapturing(true)
+        try engine.prepareAndStart()
     }
 
-    private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?, session: Int) {
-        guard isCurrent(session), state != .idle else { return }
-        if let result {
-            liveTranscript = result.bestTranscription.formattedString
+    private func handleRecognition(update: ComposerVoiceRecognitionUpdate, session: Int) {
+        guard reducer.isCurrent(session), state != .idle else { return }
+        if let transcript = update.transcript {
+            liveTranscript = transcript
             if let draft = draftUpdateSession.composedDraft(for: liveTranscript) {
                 updateDraft?(draft)
             }
         }
 
-        if let error {
-            nativeFinalizationTask?.cancel()
-            nativeFinalizationTask = nil
-            stopAcceptingDraftUpdates()
-            stopAudio(cancelTask: false)
-            state = .idle
-            if suppressNextRecognitionError {
-                suppressNextRecognitionError = false
-            } else {
-                errorMessage = error.localizedDescription
+        if let errorDescription = update.errorDescription {
+            if let effects = reducer.nativeRecognitionTerminated(session: session, errorDescription: errorDescription) {
+                apply(effects)
             }
-        } else if result?.isFinal == true {
-            nativeFinalizationTask?.cancel()
-            nativeFinalizationTask = nil
-            stopAcceptingDraftUpdates()
-            stopAudio(cancelTask: false)
-            state = .idle
-            suppressNextRecognitionError = false
-        }
-    }
-
-    private func stopAcceptingDraftUpdates() {
-        draftUpdateSession.stopAcceptingUpdates()
-        updateDraft = nil
-    }
-
-    private func stopAudio(cancelTask: Bool) {
-        AidenComposerAudioCaptureState.shared.setCapturing(false)
-        if let audioEngine {
-            if audioEngine.isRunning { audioEngine.stop() }
-            if audioTapInstalled {
-                audioEngine.inputNode.removeTap(onBus: 0)
-                audioTapInstalled = false
+        } else if update.isFinal {
+            if let effects = reducer.nativeRecognitionTerminated(session: session, errorDescription: nil) {
+                apply(effects)
             }
-            audioEngine.reset()
-        }
-        audioEngine = nil
-        recognitionRequest?.endAudio()
-        if cancelTask { recognitionTask?.cancel() }
-        recognitionTask = nil
-        recognitionRequest = nil
-        if activatedAudioSessionForRecording {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            activatedAudioSessionForRecording = false
         }
     }
 
-    private func finishNativeAudioCapture() {
-        AidenComposerAudioCaptureState.shared.setCapturing(false)
-        if let audioEngine {
-            if audioEngine.isRunning { audioEngine.stop() }
-            if audioTapInstalled {
-                audioEngine.inputNode.removeTap(onBus: 0)
-                audioTapInstalled = false
+    private func fail(session: Int?, _ message: String, logCategory: VoiceInputFailureLogCategory) {
+        guard let effects = reducer.fail(session: session, message: message, logCategory: logCategory) else { return }
+        apply(effects)
+    }
+
+    private func apply(_ effects: [ComposerVoiceInputReducer.Effect]) {
+        for effect in effects {
+            switch effect {
+            case .stopAcceptingDraftUpdates:
+                draftUpdateSession.stopAcceptingUpdates()
+                updateDraft = nil
+            case let .setCapturing(capturing):
+                dependencies.setCapturing(capturing)
+            case let .teardownAudioCapture(removeTap, deactivateAudioSession):
+                if let audioEngine {
+                    audioEngine.stopAndReset(removeTap: removeTap)
+                }
+                audioEngine = nil
+                if deactivateAudioSession {
+                    dependencies.audioSession.deactivateAfterRecording()
+                }
+            case .endRecognitionAudio:
+                recognitionRequest?.endAudio()
+            case let .releaseRecognition(cancelTask):
+                recognitionRequest?.endAudio()
+                if cancelTask { recognitionTask?.cancel() }
+                recognitionTask = nil
+                recognitionRequest = nil
+            case .releaseMacCaptureResources:
+                macAccumulator = nil
+                macTranscriber = nil
+            case .cancelMacTranscriptionTask:
+                macTranscriptionTask?.cancel()
+                macTranscriptionTask = nil
+            case .cancelNativeFinalizationTask:
+                nativeFinalizationTask?.cancel()
+                nativeFinalizationTask = nil
+            case let .scheduleNativeFinalizationTimeout(session):
+                let sleep = dependencies.finalizationSleep
+                nativeFinalizationTask = Task { [weak self] in
+                    try? await sleep(.seconds(2))
+                    guard !Task.isCancelled, let self else { return }
+                    self.nativeFinalizationTask = nil
+                    if let timeoutEffects = self.reducer.nativeFinalizationTimedOut(session: session) {
+                        self.apply(timeoutEffects)
+                    }
+                }
+            case let .recordFailureDiagnostic(logCategory):
+                AidenDiagnostics.record(
+                    .speech,
+                    event: .speechFailed,
+                    outcome: .failed,
+                    code: logCategory.diagnosticCode
+                )
+            case let .setErrorMessage(message):
+                errorMessage = message
+            case .clearLiveTranscript:
+                liveTranscript = ""
             }
-            audioEngine.reset()
-        }
-        audioEngine = nil
-        recognitionRequest?.endAudio()
-        if activatedAudioSessionForRecording {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            activatedAudioSessionForRecording = false
-        }
-    }
-
-    private func onDeviceSpeechRecognizerForRecording() -> SFSpeechRecognizer? {
-        if let speechRecognizer {
-            return speechRecognizer.supportsOnDeviceRecognition ? speechRecognizer : nil
-        }
-
-        let target = Self.normalizedLocaleIdentifier(locale.identifier)
-        guard SFSpeechRecognizer.supportedLocales().contains(where: {
-            Self.normalizedLocaleIdentifier($0.identifier) == target
-        }) else { return nil }
-
-        let recognizer = speechRecognizerFactory()
-        guard recognizer?.supportsOnDeviceRecognition == true else { return nil }
-        speechRecognizer = recognizer
-        return recognizer
-    }
-
-    private static func normalizedLocaleIdentifier(_ identifier: String) -> String {
-        identifier.replacingOccurrences(of: "_", with: "-").lowercased()
-    }
-
-    private func fail(_ message: String, logCategory: VoiceInputFailureLogCategory) {
-        AidenDiagnostics.record(
-            .speech,
-            event: .speechFailed,
-            outcome: .failed,
-            code: logCategory.diagnosticCode
-        )
-        suppressNextRecognitionError = false
-        stopAcceptingDraftUpdates()
-        stopAudio(cancelTask: true)
-        macAccumulator = nil
-        macTranscriber = nil
-        state = .idle
-        errorMessage = message
-    }
-
-    private func beginSession() -> Int {
-        let session = sessionFence.advance()
-        macTranscriptionTask?.cancel()
-        macTranscriptionTask = nil
-        nativeFinalizationTask?.cancel()
-        nativeFinalizationTask = nil
-        return session
-    }
-
-    private func invalidateSession() {
-        sessionFence.advance()
-        macTranscriptionTask?.cancel()
-        macTranscriptionTask = nil
-        nativeFinalizationTask?.cancel()
-        nativeFinalizationTask = nil
-    }
-
-    private func isCurrent(_ session: Int) -> Bool { sessionFence.accepts(session) }
-
-    private func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
-        await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
         }
     }
 
@@ -457,7 +932,7 @@ final class ComposerVoiceInputController {
     }
 }
 
-struct ComposerVoiceSessionFence {
+struct ComposerVoiceSessionFence: Equatable, Sendable {
     private(set) var current = 0
 
     mutating func advance() -> Int {
@@ -547,7 +1022,7 @@ enum ComposerVoiceInputError: LocalizedError {
     }
 }
 
-enum VoiceInputFailureLogCategory: String {
+enum VoiceInputFailureLogCategory: String, Equatable, Sendable {
     case speechUnavailable, speechAuthorization, microphonePermission, appNotActive
     case noAudioInput, invalidInputFormat, audioEngineAlreadyRunning, audioStartup
 }

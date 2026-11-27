@@ -38,6 +38,16 @@ data class AidenApprovalCardArgument(val key: String, val value: String)
 data class AidenApprovalCardRow(val label: String, val value: String)
 
 /**
+ * Revision 69 (`approval:plain-words`): one of Aiden's own tags for a shell command, read by the
+ * Mac from the command text without any model. A [RISK] tag (deleting files, the internet, a
+ * downloaded script, admin rights, files outside the project, stopping programs) draws in a soft
+ * red fill; a [CALM] one in grey.
+ */
+enum class AidenApprovalCardTagTone(val wire: String) { CALM("calm"), RISK("risk") }
+
+data class AidenApprovalCardTag(val label: String, val tone: AidenApprovalCardTagTone)
+
+/**
  * One of the card's buttons. [scope] is null for a one-time allow and for Deny; [answered] is the
  * status line the card shows once this answer is given ("Allowed once", "Denied").
  */
@@ -67,7 +77,14 @@ data class AidenApprovalCard(
     /** Deny first, then the allow buttons the desktop offers. */
     val buttons: List<AidenApprovalCardButton>,
     /** Present exactly when this device may only deny: why, and where to allow it. */
-    val allowOnMac: String?
+    val allowOnMac: String?,
+    /**
+     * Revision 69 (`approval:plain-words`): the model's one-line description of a shell command.
+     * The card opens on it; [body] keeps the exact command one flip away.
+     */
+    val explanation: String? = null,
+    /** Revision 69: Aiden's own tags for the command, risky ones first. Never empty when sent. */
+    val tags: List<AidenApprovalCardTag>? = null
 ) {
     val denyButton: AidenApprovalCardButton get() = buttons.first()
     val allowButtons: List<AidenApprovalCardButton> get() = buttons.filter { it.decision == AidenApprovalDecision.ALLOW }
@@ -115,6 +132,8 @@ data class AidenApprovalCard(
         put("title", title)
         put("arguments", buildJsonArray { arguments.forEach { add(buildJsonObject { put("key", it.key); put("value", it.value) }) } })
         body?.let { put("body", it.json()) }
+        explanation?.let { put("explanation", it) }
+        tags?.let { list -> put("tags", buildJsonArray { list.forEach { add(buildJsonObject { put("label", it.label); put("tone", it.tone.wire) }) } }) }
         previous?.let { put("previous", it.json()) }
         rows?.let { list -> put("rows", buildJsonArray { list.forEach { add(buildJsonObject { put("label", it.label); put("value", it.value) }) } }) }
         notes?.let { list -> put("notes", buildJsonArray { list.forEach { add(JsonPrimitive(it)) } }) }
@@ -145,12 +164,15 @@ data class AidenApprovalCard(
         const val MAX_BUTTONS = 5
         const val MAX_BUTTON_TEXT = 80
         const val MAX_ALLOW_ON_MAC = 120
+        const val MAX_EXPLANATION = 400
+        const val MAX_TAGS = 8
+        const val MAX_TAG_LABEL = 80
         /** The desktop's own line for a card a phone can only deny. */
         const val ALLOW_ON_MAC = "Allow it on your Mac."
         /** Why a task card is Deny-only on a phone without `schedule:write` (the summary card's own note). */
         const val SCHEDULE_WRITE_REQUIRED = "Schedule write access is required to approve this task."
 
-        private val CARD_KEYS = setOf("kind", "mac", "title", "arguments", "body", "previous", "rows", "notes", "buttons", "allowOnMac")
+        private val CARD_KEYS = setOf("kind", "mac", "title", "arguments", "body", "explanation", "tags", "previous", "rows", "notes", "buttons", "allowOnMac")
 
         /** Strict parse, as a revision-61 client decodes the card. Throws [AidenBotUxContractException]. */
         fun parse(element: JsonElement): AidenApprovalCard {
@@ -162,9 +184,26 @@ data class AidenApprovalCard(
             val buttons = buttonsJson.mapIndexed { index, raw -> parseButton(raw, index) }
             val allows = buttons.any { it.decision == AidenApprovalDecision.ALLOW }
             if (obj.containsKey("allowOnMac") == allows) throw AidenBotUxContractException("card.allowOnMac")
+            val mac = obj["mac"]?.let { BotUxJson.member(it, "card.mac", AidenApprovalCardMac.entries) { m -> m.wire } }
+            val body = obj["body"]?.let { parseText(it, "card.body") }
+            // Revision 69: only a shell card with a command carries plain words.
+            val plainWords = kind == AidenApprovalCardKind.MAC && mac == AidenApprovalCardMac.SHELL && body?.format == AidenApprovalCardTextFormat.COMMAND
+            if (!plainWords && (obj.containsKey("explanation") || obj.containsKey("tags"))) throw AidenBotUxContractException("card.explanation")
+            val explanation = obj["explanation"]?.let { raw ->
+                BotUxJson.text(raw, "card.explanation", MAX_EXPLANATION).also { if (!isPlainLine(it)) throw AidenBotUxContractException("card.explanation") }
+            }
+            val tags = obj["tags"]?.let { raw ->
+                BotUxJson.array(raw, "card.tags", MAX_TAGS).map { tagRaw ->
+                    val tag = BotUxJson.obj(tagRaw, "card.tag", setOf("label", "tone"))
+                    AidenApprovalCardTag(
+                        label = BotUxJson.text(tag["label"], "card.tag.label", MAX_TAG_LABEL),
+                        tone = BotUxJson.member(tag["tone"], "card.tag.tone", AidenApprovalCardTagTone.entries) { it.wire }
+                    )
+                }.also { if (it.isEmpty()) throw AidenBotUxContractException("card.tags") }
+            }
             return AidenApprovalCard(
                 kind = kind,
-                mac = obj["mac"]?.let { BotUxJson.member(it, "card.mac", AidenApprovalCardMac.entries) { m -> m.wire } },
+                mac = mac,
                 title = BotUxJson.text(obj["title"], "card.title", MAX_TITLE),
                 arguments = BotUxJson.array(obj["arguments"], "card.arguments", MAX_ARGUMENTS).map { raw ->
                     val argument = BotUxJson.obj(raw, "card.argument", setOf("key", "value"))
@@ -173,7 +212,7 @@ data class AidenApprovalCard(
                         value = BotUxJson.text(argument["value"], "card.argument.value", MAX_VALUE)
                     )
                 },
-                body = obj["body"]?.let { parseText(it, "card.body") },
+                body = body,
                 previous = obj["previous"]?.let { parseText(it, "card.previous") },
                 rows = obj["rows"]?.let { raw ->
                     BotUxJson.array(raw, "card.rows", MAX_ROWS).map { rowRaw ->
@@ -188,8 +227,28 @@ data class AidenApprovalCard(
                     BotUxJson.array(raw, "card.notes", MAX_NOTES).map { BotUxJson.text(it, "card.note", MAX_NOTE) }
                 },
                 buttons = buttons,
-                allowOnMac = obj["allowOnMac"]?.let { BotUxJson.text(it, "card.allowOnMac", MAX_ALLOW_ON_MAC) }
+                allowOnMac = obj["allowOnMac"]?.let { BotUxJson.text(it, "card.allowOnMac", MAX_ALLOW_ON_MAC) },
+                explanation = explanation,
+                tags = tags
             )
+        }
+
+        /**
+         * One trimmed line with single spaces and no control, zero-width or direction-changing
+         * characters, as the host's `commandExplanation` makes it.
+         */
+        internal fun isPlainLine(value: String): Boolean {
+            if (value != value.trim() || value.contains("  ")) return false
+            var index = 0
+            while (index < value.length) {
+                val point = value.codePointAt(index)
+                index += Character.charCount(point)
+                if (point == 0x20) continue
+                if (Character.isWhitespace(point) || Character.isSpaceChar(point)) return false
+                if (point <= 0x1F || point in 0x7F..0x9F || point in 0x200B..0x200F || point in 0x2028..0x202E ||
+                    point in 0x2060..0x2069 || point == 0xFEFF) return false
+            }
+            return true
         }
 
         private fun parseText(element: JsonElement, field: String): AidenApprovalCardText {

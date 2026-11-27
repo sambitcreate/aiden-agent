@@ -183,6 +183,7 @@ export class GoalLoop {
     if (!created.ok) throw new GoalLoopError(created.message);
     const previous = this.goals.get(chatId);
     this.stopReview(chatId);
+    this.cancelWatchdog(chatId);
     if (previous?.status === "active") this.reportSettled(previous, "cleared");
     // A command goal sends no objective message: its first check runs now if
     // the chat is idle, or when the current answer ends, and the round after
@@ -294,22 +295,37 @@ export class GoalLoop {
    * its settling runs the loop as any round's does. Undefined with no active goal.
    */
   async noticeRound(chatId: string, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult | undefined> {
-    if (this.stopped || this.goals.get(chatId)?.status !== "active") return undefined;
+    const before = this.goals.get(chatId);
+    if (this.stopped || before?.status !== "active") return undefined;
     // The news is newer than what a look under way read: its review is
     // dropped (its verdict would be stale) and this round's settling is looked at.
     this.dropLook(chatId);
+    // Capture the exact revision after dropLook(), which may synchronously
+    // restore an uncounted round, so a same-goal pause/resume across the await
+    // cannot look active under a stale notice.
+    const fenced = this.goals.get(chatId);
+    if (this.stopped || fenced?.id !== before.id || fenced.status !== "active") return undefined;
+    const expected: GoalRef = { id: fenced.id, revision: fenced.revision };
+    const currentIfFenced = (): GoalRecordV1 | undefined => {
+      if (this.stopped) return undefined;
+      const current = this.goals.get(chatId);
+      if (current?.id !== expected.id || current.revision !== expected.revision || current.status !== "active") {
+        return undefined;
+      }
+      return current;
+    };
     let context: OwedTurnContext | undefined;
     try {
       context = this.contexts.get(chatId) ?? (await this.deps.fallbackContext(chatId));
     } catch (error) {
       // The notice is still saved, as one no round could answer.
       this.deps.log("A keep-going notice round could not read the chat.", error);
-      if (this.goals.get(chatId)?.status !== "active") return undefined;
+      if (!currentIfFenced()) return undefined;
       this.relookAfterNotice(chatId);
       return { kind: "unavailable", reason: "The round could not start." };
     }
-    const latest = this.goals.get(chatId);
-    if (latest?.status !== "active") return undefined;
+    const latest = currentIfFenced();
+    if (!latest) return undefined;
     if (!context) {
       this.relookAfterNotice(chatId);
       return { kind: "unavailable", reason: "The chat has no model yet." };
@@ -337,7 +353,7 @@ export class GoalLoop {
     if (result.kind !== "started") {
       const restored = compareAndSetGoal(this.goals.get(chatId), counted, (current) => goalRoundNotStarted(current, latest.rounds, this.deps.now()));
       if (restored.ok && restored.goal !== this.goals.get(chatId)) this.write(restored.goal);
-      this.relookAfterNotice(chatId);
+      if (restored.ok) this.relookAfterNotice(chatId);
     }
     return result;
   }

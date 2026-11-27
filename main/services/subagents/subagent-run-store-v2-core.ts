@@ -3,9 +3,10 @@ import { isDeepStrictEqual, TextDecoder } from "node:util";
 import {
   isSafeSubagentIdentifier,
   parseSubagentRunSnapshotV2,
-  subagentProjectionNoticesAreMonotonic,
+  sameSubagentRunSnapshotIdentity,
+  SUBAGENT_V2_ACTIVE_STATES,
+  subagentRunSnapshotProgresses,
   type SubagentRunSnapshotV2,
-  type SubagentRunStateV2,
 } from "../../../renderer/shared/subagent-runs.js";
 import {
   createSubagentAuthorityV2,
@@ -57,12 +58,6 @@ const STORE_VERSION = 2 as const;
 const MIGRATION_ADAPTER_VERSION = 1 as const;
 const MAX_NATIVE_GENERATION_CONFLICT_RETRIES = 1;
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-const ACTIVE_STATES = new Set<SubagentRunStateV2>([
-  "queued",
-  "starting",
-  "running",
-  "needs_attention",
-]);
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export interface NativeSubagentPrivateRunManifestV2 {
@@ -472,61 +467,12 @@ function parseDurableContents(contents: Buffer): MutableSubagentRunDatabaseV2 {
   return database;
 }
 
-function stableIdentity(left: SubagentRunSnapshotV2, right: SubagentRunSnapshotV2): boolean {
-  return (
-    left.runId === right.runId &&
-    left.groupId === right.groupId &&
-    left.generationId === right.generationId &&
-    left.childId === right.childId &&
-    left.chatId === right.chatId &&
-    left.workspaceId === right.workspaceId &&
-    left.role === right.role &&
-    left.label === right.label &&
-    left.taskPreview === right.taskPreview &&
-    left.startedAt === right.startedAt &&
-    left.modelId === right.modelId &&
-    left.providerId === right.providerId &&
-    left.thinkingLevel === right.thinkingLevel &&
-    left.modelSelection === right.modelSelection &&
-    left.parentRunId === right.parentRunId &&
-    left.retryOfRunId === right.retryOfRunId &&
-    left.depth === right.depth &&
-    left.execution === right.execution &&
-    left.context === right.context &&
-    left.authorityRevision === right.authorityRevision
-  );
-}
-
-function validProgression(existing: SubagentRunSnapshotV2, next: SubagentRunSnapshotV2): boolean {
-  const existingMilestones = existing.milestones ?? [];
-  const nextMilestones = next.milestones ?? [];
-  if (
-    !ACTIVE_STATES.has(existing.state) ||
-    next.updatedAt < existing.updatedAt ||
-    next.turns < existing.turns ||
-    next.tools < existing.tools ||
-    next.tokens < existing.tokens ||
-    nextMilestones.length < existingMilestones.length ||
-    existingMilestones.some((milestone, index) => nextMilestones[index] !== milestone) ||
-    !subagentProjectionNoticesAreMonotonic(
-      existing.projectionNotices,
-      next.projectionNotices,
-      !ACTIVE_STATES.has(next.state),
-    )
-  ) {
-    return false;
-  }
-  if (existing.state === "queued") return true;
-  if (existing.state === "starting") return next.state !== "queued";
-  return next.state !== "queued" && next.state !== "starting";
-}
-
 function newestFirst(values: readonly SubagentRunSnapshotV2[]): SubagentRunSnapshotV2[] {
   return [...values].sort((left, right) => right.updatedAt - left.updatedAt || right.revision - left.revision || left.runId.localeCompare(right.runId));
 }
 
 function interrupt(snapshot: SubagentRunSnapshotV2, now: number): SubagentRunSnapshotV2 {
-  if (!ACTIVE_STATES.has(snapshot.state)) return snapshot;
+  if (!SUBAGENT_V2_ACTIVE_STATES.has(snapshot.state)) return snapshot;
   if (snapshot.revision >= Number.MAX_SAFE_INTEGER) {
     throw new Error("Active subagent V2 evidence cannot be reconciled losslessly.");
   }
@@ -827,9 +773,9 @@ export function createSubagentRunStoreV2(
             if (
               !existingSnapshot ||
               !existingManifest ||
-              !stableIdentity(existingSnapshot, run.snapshot) ||
+              !sameSubagentRunSnapshotIdentity(existingSnapshot, run.snapshot) ||
               !isDeepStrictEqual(existingManifest, manifest) ||
-              !validProgression(existingSnapshot, run.snapshot)
+              !subagentRunSnapshotProgresses(existingSnapshot, run.snapshot)
             ) {
               throw new Error("Background lifecycle identity or progression changed.");
             }
@@ -952,14 +898,14 @@ export function createSubagentRunStoreV2(
           if (existingIndex >= 0) {
             const existing = database.snapshots[existingIndex]!;
             const existingManifest = database.manifests.find(({ runId }) => runId === snapshot.runId)!;
-            if (!stableIdentity(existing, snapshot) || !isDeepStrictEqual(existingManifest, manifest)) {
+            if (!sameSubagentRunSnapshotIdentity(existing, snapshot) || !isDeepStrictEqual(existingManifest, manifest)) {
               throw new Error("Subagent V2 run identity or authority cannot change.");
             }
             if (snapshot.revision <= existing.revision) {
               if (isDeepStrictEqual(snapshot, existing)) return undefined;
               throw new Error("Subagent V2 run revisions must increase monotonically.");
             }
-            if (!validProgression(existing, snapshot)) throw new Error("Subagent V2 lifecycle cannot move backward.");
+            if (!subagentRunSnapshotProgresses(existing, snapshot)) throw new Error("Subagent V2 lifecycle cannot move backward.");
           } else if (
             database.snapshots.length +
               runReservations.size -

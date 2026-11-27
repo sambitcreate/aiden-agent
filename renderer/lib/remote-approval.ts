@@ -1,4 +1,5 @@
 import type { ApprovalPrompt, RemoteApprovalPrompt } from "./ipc.js";
+import { parseCommandReading } from "../shared/command-reading.js";
 
 export function mergeRemoteApproval(
   current: ApprovalPrompt[],
@@ -15,6 +16,10 @@ export function mergeRemoteApproval(
     canAllow: remote.canAllow,
     ...(remote.canAllow && remote.scopes ? { scopes: remote.scopes } : {}),
     ...(remote.details ? { details: remote.details } : {}),
+    ...(() => {
+      const reading = parseCommandReading(remote.reading);
+      return reading ? { reading } : {};
+    })(),
     source: "remote",
   }];
 }

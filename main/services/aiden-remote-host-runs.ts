@@ -1,3 +1,4 @@
+import { parseCommandReading } from "../../renderer/shared/command-reading.js";
 import type { ServerResponse } from "node:http";
 import { approvalCardAllows, buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
 import {
@@ -184,7 +185,16 @@ function ownRecord(value: unknown): Record<string, unknown> | undefined {
  * holding `schedule:cards` and `schedule:read` (contract revision 39): it adds
  * the display-only `schedule` card to scheduled-task approvals.
  */
-export type RunProjection = "full" | "observer" | "phone" | "phone-schedule" | "phone-cards" | "phone-schedule-cards";
+export type RunProjection =
+  | "full"
+  | "observer"
+  | "phone"
+  | "phone-schedule"
+  | "phone-cards"
+  | "phone-schedule-cards"
+  // Revision 69: a card holder that also reads a shell card's plain words.
+  | "phone-cards-words"
+  | "phone-schedule-cards-words";
 
 function projectPayload(
   type: string,
@@ -193,7 +203,8 @@ function projectPayload(
 ): Record<string, unknown> {
   if (type !== "approval_required") return payload;
   // "Allow in this workspace" is answered only on the host, for every reader.
-  const { scopes: hostScopes, ...rest } = payload;
+  // A command's plain words reach a reader only inside its card.
+  const { scopes: hostScopes, reading: _reading, ...rest } = payload;
   const offered = remoteOfferedScopes(hostScopes);
   const remote: Record<string, unknown> = offered ? { ...rest, scopes: offered } : rest;
   if (projection === "full") return remote;
@@ -201,7 +212,7 @@ function projectPayload(
   if (projection === "observer") return scopes === undefined ? summary : { ...summary, scopes };
   // The phone projection matches the phone's own stream approvals: a summary,
   // whether it may allow from the phone, and allow scopes only when it may.
-  const card = projection.endsWith("-cards") ? runApprovalCard(payload) : undefined;
+  const card = projection.includes("-cards") ? runApprovalCard(payload, projection.endsWith("-words")) : undefined;
   const canAllow = card ? approvalCardAllows(card) : phoneMayAllow(payload);
   // A card holder is offered exactly the scopes its card's buttons offer.
   const cardScopes = card && Array.isArray(scopes)
@@ -222,9 +233,11 @@ function projectPayload(
  * journaled payload with the one card model. Details too large to journal
  * leave a deny-only card.
  */
-function runApprovalCard(payload: Record<string, unknown>): ApprovalCard {
+function runApprovalCard(payload: Record<string, unknown>, plainWords = false): ApprovalCard {
   const offered = remoteOfferedScopes(payload.scopes);
+  const reading = plainWords ? parseCommandReading(payload.reading) : undefined;
   return buildApprovalCard({
+    ...(reading ? { reading, plainWords: true } : {}),
     toolName: typeof payload.toolName === "string" ? payload.toolName : "tool",
     summary: typeof payload.summary === "string" ? payload.summary : "",
     canAllow: payload.canAllow !== false,
@@ -239,7 +252,10 @@ export function runProjectionForDevice(device: AidenRemoteHostRunDevice): RunPro
   if (isPhoneRunDevice(device)) {
     const schedule = device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read");
     const cards = device.capabilities.has("approval:cards");
-    return schedule ? (cards ? "phone-schedule-cards" : "phone-schedule") : cards ? "phone-cards" : "phone";
+    const words = cards && device.capabilities.has("approval:plain-words");
+    return schedule
+      ? (words ? "phone-schedule-cards-words" : cards ? "phone-schedule-cards" : "phone-schedule")
+      : words ? "phone-cards-words" : cards ? "phone-cards" : "phone";
   }
   return device.capabilities.has("runs:control") ? "full" : "observer";
 }

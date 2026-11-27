@@ -48,6 +48,7 @@ export type SubagentRetryPreparationAdapterV2 = (
 interface ControlBinding {
   chatId: string;
   workspaceId: string;
+  generationId: string;
   ownerDocumentId: string;
   authorityRevision: number;
   updatedAt: number;
@@ -189,6 +190,25 @@ export class SubagentControlMainV2 {
       },
       runId,
     ).state;
+  }
+
+  /**
+   * Where a run with a live control binding belongs, for main-process readers
+   * that authorize the chat themselves (the late-join history read). Owner
+   * document and authority revision stay private. `terminal` is true once the
+   * run has finished; its binding may linger until it is evicted.
+   */
+  trackedRun(
+    runId: string,
+  ): { chatId: string; workspaceId: string; generationId: string; terminal: boolean } | undefined {
+    const binding = this.bindings.get(runId);
+    if (!binding) return undefined;
+    return {
+      chatId: binding.chatId,
+      workspaceId: binding.workspaceId,
+      generationId: binding.generationId,
+      terminal: binding.terminal,
+    };
   }
 
   /**
@@ -337,6 +357,7 @@ export class SubagentControlMainV2 {
     this.bindings.set(snapshot.runId, {
       chatId: snapshot.chatId,
       workspaceId: snapshot.workspaceId,
+      generationId: snapshot.generationId,
       ownerDocumentId,
       authorityRevision: snapshot.authorityRevision,
       updatedAt: snapshot.updatedAt,
