@@ -1,6 +1,7 @@
 import type { ChatUiVisualV1 } from "./aiden-ui/types.js";
 import { parseChatUiVisualV1 } from "./aiden-ui/visual.js";
 import { isCanonicalRasterImageMimeType, MAX_INLINE_IMAGE_BYTES } from "./attachment-contract.js";
+import { decodedBase64Bytes } from "./base64.js";
 import {
   HTML_ARTIFACT_MIME_TYPE,
   MAX_HTML_ARTIFACT_BYTES,
@@ -132,35 +133,6 @@ function hasExactKeys(value: Record<string, unknown>, keys: ReadonlySet<string>)
   return ownKeys.length === keys.size && ownKeys.every((key) => keys.has(key));
 }
 
-function decodedBase64Bytes(value: string): number | undefined {
-  if (value.length === 0 || value.length % 4 !== 0 || value.length > MAX_BASE64_CHARS) {
-    return undefined;
-  }
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
-  const body = value.slice(0, value.length - padding);
-  if (!/^[A-Za-z0-9+/]*$/u.test(body) || !/^={0,2}$/u.test(value.slice(body.length))) {
-    return undefined;
-  }
-  const finalValue = base64Value(value.charCodeAt(body.length - 1));
-  if (
-    finalValue === undefined ||
-    (padding === 2 && (finalValue & 15) !== 0) ||
-    (padding === 1 && (finalValue & 3) !== 0)
-  ) {
-    return undefined;
-  }
-  return (value.length / 4) * 3 - padding;
-}
-
-function base64Value(code: number): number | undefined {
-  if (code >= 65 && code <= 90) return code - 65;
-  if (code >= 97 && code <= 122) return code - 71;
-  if (code >= 48 && code <= 57) return code + 4;
-  if (code === 43) return 62;
-  if (code === 47) return 63;
-  return undefined;
-}
-
 function parseChatImageArtifactV1(artifact: Record<string, unknown>): ChatImageArtifactV1 | undefined {
   if (
     !hasExactKeys(artifact, IMAGE_ARTIFACT_KEYS) ||
@@ -187,7 +159,7 @@ function parseChatImageArtifactV1(artifact: Record<string, unknown>): ChatImageA
     (attachment.size as number) < 1 ||
     (attachment.size as number) > MAX_INLINE_IMAGE_BYTES ||
     typeof attachment.data !== "string" ||
-    decodedBase64Bytes(attachment.data) !== attachment.size
+    decodedBase64Bytes(attachment.data, MAX_BASE64_CHARS) !== attachment.size
   ) {
     return undefined;
   }
