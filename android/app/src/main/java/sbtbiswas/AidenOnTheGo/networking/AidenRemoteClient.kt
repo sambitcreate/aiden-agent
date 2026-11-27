@@ -111,6 +111,9 @@ class AidenRemoteClient(
         explicitNulls = false
     }
 
+    private inline fun <reified T> decode(bytes: ByteArray): T =
+        json.decodeFromString(String(bytes, Charsets.UTF_8))
+
     private val httpClient: OkHttpClient = customOkHttpClient ?: createOkHttpClient(
         serverSpkiSha256 = "",
         trust = null
@@ -594,9 +597,7 @@ class AidenRemoteClient(
         resp.workspaces
     }
 
-    suspend fun workspace(id: String): AidenWorkspace = executeRequest("/workspaces/$id") { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    suspend fun workspace(id: String): AidenWorkspace = executeRequest("/workspaces/$id") { bytes -> decode(bytes) }
 
     suspend fun createWorkspace(
         create: AidenWorkspaceCreate,
@@ -607,9 +608,7 @@ class AidenRemoteClient(
         bodyJson = json.encodeToString(create),
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(201)
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     suspend fun updateWorkspace(
         id: String,
@@ -620,9 +619,7 @@ class AidenRemoteClient(
         method = "PATCH",
         ifMatchRevision = revision,
         bodyJson = json.encodeToString(patch)
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     suspend fun appControls(chatId: String, panelId: String): AidenAppControlSnapshot = executeRequest("/chats/$chatId/controls/$panelId") { bytes ->
         json.decodeFromString<AidenAppControlSnapshot>(String(bytes, Charsets.UTF_8)).also { require(it.isWireSafe) { "Invalid controls response" } }
@@ -638,9 +635,7 @@ class AidenRemoteClient(
 
     suspend fun createProvider(input: AidenProviderCreation, idempotencyKey: UUID): AidenProviderCreationReceipt =
         executeRequest("/providers", method = "POST", idempotencyKey = idempotencyKey,
-            acceptedStatus = setOf(201), bodyJson = json.encodeToString(input)) { bytes ->
-            json.decodeFromString(String(bytes, Charsets.UTF_8))
-        }
+            acceptedStatus = setOf(201), bodyJson = json.encodeToString(input)) { bytes -> decode(bytes) }
 
     /** Revision 47: the chat's or Bot's spending limit, or `spending: null` without one. */
     override suspend fun spending(owner: AidenSpendingOwner): AidenSpendingStatus =
@@ -699,9 +694,7 @@ class AidenRemoteClient(
     }
 
     suspend fun memorySettings(): AidenMemorySettings =
-        executeRequest("/memory/settings") { bytes ->
-            json.decodeFromString(String(bytes, Charsets.UTF_8))
-        }
+        executeRequest("/memory/settings") { bytes -> decode(bytes) }
 
     suspend fun updateMemorySettings(revision: String, enabled: Boolean): AidenMemorySettings =
         executeRequest(
@@ -709,9 +702,7 @@ class AidenRemoteClient(
             method = "PATCH",
             ifMatchRevision = revision,
             bodyJson = json.encodeToString(AidenMemorySettingsMutation(enabled = enabled))
-        ) { bytes ->
-            json.decodeFromString(String(bytes, Charsets.UTF_8))
-        }
+        ) { bytes -> decode(bytes) }
 
     suspend fun removeWorkspace(id: String, revision: String) =
         executeRequest<Unit>(
@@ -728,9 +719,7 @@ class AidenRemoteClient(
 
     suspend fun browserChildren(location: String, cursor: String? = null): AidenBrowserPage {
         val query = if (cursor != null) "?location=$location&cursor=$cursor" else "?location=$location"
-        return executeRequest("/workspace-browser/children$query") { bytes ->
-            json.decodeFromString(String(bytes, Charsets.UTF_8))
-        }
+        return executeRequest("/workspace-browser/children$query") { bytes -> decode(bytes) }
     }
 
     suspend fun createWorkspaceSelection(location: String): AidenWorkspaceSelection =
@@ -739,9 +728,7 @@ class AidenRemoteClient(
             method = "POST",
             bodyJson = json.encodeToString(BrowserSelectionRequest(location = location)),
             acceptedStatus = setOf(201)
-        ) { bytes ->
-            json.decodeFromString(String(bytes, Charsets.UTF_8))
-        }
+        ) { bytes -> decode(bytes) }
 
     // --- Chats ---
     suspend fun chats(workspaceId: String? = null): List<AidenChat> {
@@ -924,9 +911,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(201),
         botScope = AidenBotPrivateResponseScope.ChatProjection
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     suspend fun updateChat(
         id: String,
@@ -938,9 +923,7 @@ class AidenRemoteClient(
         ifMatchRevision = revision,
         bodyJson = json.encodeToString(ChatUpdateRequest(title = title)),
         botScope = AidenBotPrivateResponseScope.ChatProjection
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     suspend fun removeChat(id: String, revision: String) =
         executeRequest<Unit>(
@@ -1032,9 +1015,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         bodyJson = json.encodeToString(ChatMoveRequest(workspaceId = workspaceId)),
         botScope = AidenBotPrivateResponseScope.ChatProjection
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     /**
      * Revision 53 (`chat:new-worktree`, with `git:write`): the Mac makes a worktree named from
@@ -1138,9 +1119,7 @@ class AidenRemoteClient(
     suspend fun cancelForkSummary(chatId: String): AidenChatForkSummaryCancel = executeRequest(
         "/chats/$chatId/fork-summary/cancel",
         method = "POST"
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     private suspend fun forkSummaryChatAction(chatId: String, action: String): AidenChat = executeRequest(
         "/chats/$chatId/fork-summary/$action",
@@ -1181,9 +1160,7 @@ class AidenRemoteClient(
             headers = headers,
             acceptedStatus = setOf(201),
             customBody = AidenProgressRequestBody(body, contentType.toMediaType(), onProgress)
-        ) { bytes ->
-            json.decodeFromString(String(bytes, Charsets.UTF_8))
-        }
+        ) { bytes -> decode(bytes) }
     }
 
     suspend fun removeAttachment(chatId: String, attachmentId: String) =
@@ -1407,19 +1384,13 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202),
         botScope = AidenBotPrivateResponseScope.ChatProjection
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
-    suspend fun streamStatus(id: String): AidenStreamStatus = executeRequest("/streams/$id") { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    suspend fun streamStatus(id: String): AidenStreamStatus = executeRequest("/streams/$id") { bytes -> decode(bytes) }
 
     suspend fun streamStatus(chatId: String, streamId: String): AidenStreamStatus = streamStatus(streamId)
 
-    suspend fun streamApproval(id: String): AidenStreamApprovalSnapshot = executeRequest("/streams/$id/approval") { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    suspend fun streamApproval(id: String): AidenStreamApprovalSnapshot = executeRequest("/streams/$id/approval") { bytes -> decode(bytes) }
 
     suspend fun pendingApproval(chatId: String, streamId: String): AidenStreamPendingApproval? =
         streamApproval(streamId).approval
@@ -1433,9 +1404,7 @@ class AidenRemoteClient(
         retryConnectionFailure = false,
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     suspend fun cancelTurn(chatId: String, turnId: String) {
         cancelStream(turnId)
@@ -1454,9 +1423,7 @@ class AidenRemoteClient(
         retryConnectionFailure = false,
         bodyJson = json.encodeToString(input),
         idempotencyKey = idempotencyKey
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     suspend fun respondToApproval(
         id: String,
@@ -1469,9 +1436,7 @@ class AidenRemoteClient(
         retryConnectionFailure = false,
         bodyJson = json.encodeToString(AidenApprovalRequest.of(decision, scope)),
         idempotencyKey = idempotencyKey
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     suspend fun respondToApproval(
         chatId: String,
@@ -2714,9 +2679,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         bodyJson = json.encodeToString(upload),
         botScope = AidenBotPrivateResponseScope.Root("botAvatarMetadata")
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     suspend fun deleteBotAvatar(botId: String, revision: String): AidenBotDetail = executeRequest(
         "/bots/$botId/avatar",
@@ -2855,9 +2818,7 @@ class AidenRemoteClient(
         ifMatchRevision = revision,
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    ) { bytes -> decode(bytes) }
 
     suspend fun scheduledRuns(taskId: String): List<AidenScheduledRun> = executeRequest(
         "/scheduled-tasks/$taskId/runs"
@@ -2880,11 +2841,11 @@ class AidenRemoteClient(
 
     suspend fun readAloudStatus(chatId: String? = null): AidenReadAloudStatus = executeRequest(
         if (chatId == null) "/read-aloud" else "/chats/$chatId/read-aloud"
-    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+    ) { bytes -> decode(bytes) }
 
     suspend fun startReadAloud(chatId: String, request: AidenReadAloudStart): AidenReadAloudJob = executeRequest(
         "/chats/$chatId/read-aloud", method = "POST", bodyJson = json.encodeToString(request), retryConnectionFailure = false
-    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+    ) { bytes -> decode(bytes) }
 
     suspend fun stopReadAloud(chatId: String, requestId: String): Unit = executeRequest(
         "/chats/$chatId/read-aloud/stop", method = "POST", bodyJson = json.encodeToString(AidenReadAloudStop(requestId)), retryConnectionFailure = false
@@ -2892,28 +2853,26 @@ class AidenRemoteClient(
 
     suspend fun readAloudAudio(chatId: String, jobId: String, segment: Int, offset: Int): AidenReadAloudAudio = executeRequest(
         "/chats/$chatId/read-aloud/audio/$jobId/$segment/$offset"
-    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+    ) { bytes -> decode(bytes) }
 
-    suspend fun speechStatus(): AidenSpeechStatus = executeRequest("/speech") { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    suspend fun speechStatus(): AidenSpeechStatus = executeRequest("/speech") { bytes -> decode(bytes) }
 
     suspend fun selectSpeechModel(modelId: String): AidenSpeechStatus = executeRequest(
         "/speech",
         method = "PATCH",
         bodyJson = json.encodeToString(AidenSpeechSelectionRequest(modelId))
-    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+    ) { bytes -> decode(bytes) }
 
     suspend fun downloadSpeechModel(modelId: String): AidenSpeechStatus = executeRequest(
         "/speech/models/$modelId/download",
         method = "POST",
         acceptedStatus = setOf(202)
-    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+    ) { bytes -> decode(bytes) }
 
     suspend fun cancelSpeechModelDownload(modelId: String): AidenSpeechStatus = executeRequest(
         "/speech/models/$modelId/download",
         method = "DELETE"
-    ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+    ) { bytes -> decode(bytes) }
 
     suspend fun transcribeSpeech(pcmBase64: String, modelId: String): AidenSpeechTranscription {
         val (body, compressed) = withContext(Dispatchers.Default) {
@@ -2934,7 +2893,7 @@ class AidenRemoteClient(
             bodyBytes = compressed,
             headers = if (compressed != null) mapOf("Content-Encoding" to "gzip") else emptyMap(),
             requestTimeoutSeconds = 120
-        ) { bytes -> json.decodeFromString(String(bytes, Charsets.UTF_8)) }
+        ) { bytes -> decode(bytes) }
     }
 
     // --- Files & Git ---
@@ -3176,17 +3135,13 @@ class AidenRemoteClient(
     }
 
     // --- Models & Usage ---
-    suspend fun modelCatalog(): AidenModelCatalog = executeRequest("/models") { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
-    }
+    suspend fun modelCatalog(): AidenModelCatalog = executeRequest("/models") { bytes -> decode(bytes) }
 
     suspend fun usage(range: String = "30d"): AidenUsageSummary {
         if (!listOf("7d", "30d", "90d", "1y", "all").contains(range)) {
             throw AidenRemoteClientException.InvalidResponse()
         }
-        return executeRequest("/usage?range=$range") { bytes ->
-            json.decodeFromString(String(bytes, Charsets.UTF_8))
-        }
+        return executeRequest("/usage?range=$range") { bytes -> decode(bytes) }
     }
 
     // --- Simulators (contract revision 26, `simulators:mobile`) ---
@@ -3201,9 +3156,7 @@ class AidenRemoteClient(
         return executeRequest(
             "/simulators$query",
             maximumResponseBytes = AidenRemoteProtocol.MAX_JSON_BODY_BYTES
-        ) { bytes ->
-            json.decodeFromString<AidenSimulatorListing>(String(bytes, Charsets.UTF_8))
-        }
+        ) { bytes -> decode(bytes) }
     }
 
     /** Boots the device when needed, which can take tens of seconds. */
