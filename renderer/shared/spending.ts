@@ -7,6 +7,7 @@
 
 import { isAcpHarnessProvider } from "./acp-harness.js";
 import { resolveProviderDeployment, type ProviderDeployment } from "./provider-deployment.js";
+import { isTimestamp as time } from "../../main/shared/guards.js";
 
 /** The amounts the owner can pick, in US dollars. */
 export const SPENDING_LIMIT_PRESETS_USD = [1, 2, 5, 10, 25, 50, 100, 250, 500] as const;
@@ -144,10 +145,6 @@ export function spendingState(spentUsd: number, allowedUsd: number): SpendingSta
 
 function amount(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= SPENDING_LIMIT_MAX_USD * 100;
-}
-
-function time(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 /** Strict parse of a status from main or a host; anything malformed is dropped. */

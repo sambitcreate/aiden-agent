@@ -9,6 +9,7 @@ import {
   parseSubagentHistoryDetailV1,
   type SubagentHistoryDetailV1,
 } from "./subagent-runs.js";
+import { isFiniteTimestamp as finiteTimestamp } from "../../main/shared/guards.js";
 
 /**
  * One helper's conversation, saved beside its run record: the task it was
@@ -95,10 +96,6 @@ function hasOnlyKeys(
     required.every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
     keys.every((key) => required.includes(key) || optional.includes(key))
   );
-}
-
-function finiteTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function revisionNumber(value: unknown): value is number {

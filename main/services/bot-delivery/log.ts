@@ -15,7 +15,7 @@ import path from "node:path";
 import { botSessionDirectory, createKeyedSerial } from "../bot-routine-notes.js";
 import { botIdFromDirectoryName } from "../bot-runtime/harness-host.js";
 import { writeJsonAtomic } from "../durable-fs.js";
-import { isRecord } from "../../shared/guards.js";
+import { isRecord, timestampOf as timestamp } from "../../shared/guards.js";
 
 export const BOT_DELIVERIES_FILE = "deliveries.json";
 /** Newest rows kept per Bot; older rows fall off as new ones arrive. */
@@ -118,10 +118,6 @@ const STATUSES: ReadonlySet<string> = new Set<BotDeliveryRow["status"]>([
   "failed",
   "info",
 ]);
-
-function timestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
 
 function optionalText(value: unknown, limit: number): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= limit ? value : undefined;

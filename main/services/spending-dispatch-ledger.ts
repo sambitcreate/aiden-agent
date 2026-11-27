@@ -1,6 +1,7 @@
 // Private provider receipts. Amounts and dispatch identities are saved in one
 // document so a crash cannot publish a charge without its deduplication fence.
 import { parseSpendingDocument, type SpendingDocument, type SpendingOwner, type SpendingOwnerScope } from "./spending-core.js";
+import { isTimestamp as time } from "../shared/guards.js";
 
 export const SPENDING_DISPATCH_LIMITS = { receipts: 20_000, scopes: 16, bytes: 32 * 1024 * 1024 } as const;
 
@@ -57,9 +58,6 @@ function id(value: unknown): value is string {
 }
 function amount(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1e9;
-}
-function time(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 function scope(value: unknown): SpendingOwnerScope {
   if (!object(value) || !["chat", "bot"].includes(String(value.kind)) || !id(value.id) ||
