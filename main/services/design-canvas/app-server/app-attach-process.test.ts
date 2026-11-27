@@ -85,7 +85,7 @@ async function harness(t: test.TestContext) {
     const shell = spawn("/bin/sh", ["-c", `${line} >/dev/null 2>&1 & echo $!`], { cwd, stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     shell.stdout.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
-    await new Promise((resolve) => shell.once("exit", resolve));
+    await new Promise((resolve) => shell.once("close", resolve));
     const pid = Number(out.trim());
     assert.ok(Number.isInteger(pid) && pid > 1, `a pid from the shell: ${out}`);
     return pid;
@@ -322,7 +322,7 @@ test(
     const shell = spawn("/bin/sh", ["-c", `${line} >/dev/null 2>&1 & echo $!`], { cwd: h.web, stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     shell.stdout.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
-    await new Promise((resolve) => shell.once("exit", resolve));
+    await new Promise((resolve) => shell.once("close", resolve));
     const pid = Number(out.trim());
     assert.ok(Number.isInteger(pid) && pid > 1, `a pid from the shell: ${out}`);
     // After the exec its command line no longer carries the marker, so it's killed by pid.
@@ -387,7 +387,7 @@ for (const mode of ["cwd", "marker"] as const) {
       const shell = spawn("/bin/sh", ["-c", `${line} >/dev/null 2>&1 & echo $!`], { cwd: h.web, stdio: ["ignore", "pipe", "ignore"] });
       let out = "";
       shell.stdout.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
-      await new Promise((resolve) => shell.once("exit", resolve));
+      await new Promise((resolve) => shell.once("close", resolve));
       const pid = Number(out.trim());
       assert.ok(Number.isInteger(pid) && pid > 1, `a pid from the shell: ${out}`);
       t.after(() => {
@@ -400,14 +400,16 @@ for (const mode of ["cwd", "marker"] as const) {
       const look = async () => (await readJobSockets(new Map(), defaultSocketReaderDeps(), new Map([["attach:web", pid]]))).get("attach:web");
       const recheck = async () => {
         const read = await look();
-        assert.ok(read?.ok, "the watch's socket look succeeds");
+        if (!read?.ok) return { ok: false as const, reason: `the watch's socket look failed: ${read?.reason}` };
         return recheckAttached({ holder: pid, subtree: read.rows!.map((row) => row.pid), workspacePath: h.workspace, appRoot: "apps/web" }, deps());
       };
       assert.deepEqual(await recheck(), { ok: true }, "before the exec, the tick keeps it");
       await writeFile(trigger, "");
+      // A failed look (a `reason`, as when the exec lands between macOS's two environment reads) is no verdict:
+      // the watch looks again next tick, and so does this.
       const verdict = await eventually(async () => {
         const result = await recheck();
-        return result.ok ? undefined : result;
+        return result.ok || "reason" in result ? undefined : result;
       }, "the re-check to refuse the exec'd holder");
       assert.deepEqual(verdict, { ok: false, problem: "attach-not-in-app" });
       // The exec'd program is settled once its script runs; then its identity is what the watch bound.
@@ -424,3 +426,52 @@ for (const mode of ["cwd", "marker"] as const) {
     },
   );
 }
+
+test(
+  "a same-name exec in place that lands between macOS's two environment reads is a failed look, and the next look refuses it as outside the app",
+  { skip: skip || (process.platform !== "darwin" ? "macOS reads the environment with two ps calls" : PYTHON ? false : "needs a python3 to exec in place with the socket kept") },
+  async (t) => {
+    const h = await harness(t);
+    const port = await defaultOsPort();
+    const trigger = path.join(h.outside, "exec-mid-read");
+    const marker = `--aiden-attach-test=${path.basename(path.dirname(h.workspace))}`;
+    const line = [PYTHON!, "-c", SAME_NAME_EXEC, PYTHON!, String(port), trigger, "cwd", h.outside, BACKGROUND_JOB_MARKER, marker].map(shellQuote).join(" ");
+    const shell = spawn("/bin/sh", ["-c", `${line} >/dev/null 2>&1 & echo $!`], { cwd: h.web, stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    shell.stdout.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
+    await new Promise((resolve) => shell.once("close", resolve));
+    const pid = Number(out.trim());
+    assert.ok(Number.isInteger(pid) && pid > 1, `a pid from the shell: ${out}`);
+    t.after(() => {
+      if (alive(pid)) process.kill(pid, "SIGKILL");
+    });
+    await eventually(async () => {
+      const result = await checkAttach({ workspacePath: h.workspace, appRoot: "apps/web", port, pid }, deps());
+      return result.ok ? result : undefined;
+    }, "the holder to listen and pass the check");
+    // The holder execs right after the `ps -E` read and before the plain `ps`: this look reads its folder
+    // in the app, then two commands that disagree.
+    const real = defaultSocketReaderDeps();
+    let armed = true;
+    const reader = {
+      ...real,
+      exec: async (file: string, args: readonly string[], limits: { timeoutMs: number; maxBuffer: number }) => {
+        const result = await real.exec(file, args, limits);
+        if (armed && file === "ps" && args.includes("-E")) {
+          armed = false;
+          await writeFile(trigger, "");
+          await eventually(async () => {
+            const shown = await real.exec("ps", ["-ww", "-o", "command=", "-p", String(pid)], limits);
+            return shown.ok && shown.stdout.includes("time.sleep(60)") && !shown.stdout.includes("socket");
+          }, "the exec to replace the holder's command");
+        }
+        return result;
+      },
+    };
+    const input = { holder: pid, subtree: [pid], workspacePath: h.workspace, appRoot: "apps/web" };
+    const torn = await recheckAttached(input, deps({ reader }));
+    assert.equal(armed, false, "the look read the environment");
+    assert.ok(!torn.ok && "reason" in torn, `a failed look, not a verdict: ${JSON.stringify(torn)}`);
+    assert.deepEqual(await recheckAttached(input, deps()), { ok: false, problem: "attach-not-in-app" }, "the next tick's look");
+  },
+);
