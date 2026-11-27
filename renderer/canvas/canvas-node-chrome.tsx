@@ -16,7 +16,8 @@ export function CanvasNodeChrome({
   /** Drawn in place of the plain title text, for a title that can be edited. */
   titleSlot?: React.ReactNode;
   selected: boolean;
-  status?: string;
+  /** Quiet text after the title, such as a page's size; a live app frame adds its path and labels. */
+  status?: React.ReactNode;
   toolbar?: React.ReactNode;
   /** Fill the node's box and give the body no padding, for content drawn edge to edge. */
   flush?: boolean;
@@ -38,7 +39,7 @@ export function CanvasNodeChrome({
     >
       <div data-canvas-chrome-header className="flex min-h-9 items-center gap-2 px-3">
         {titleSlot ?? <span className="min-w-0 flex-1 truncate text-strong text-primary">{title}</span>}
-        {status ? <span className="shrink-0 text-secondary">{status}</span> : null}
+        {status ? <span className="flex shrink-0 items-center gap-2 text-secondary">{status}</span> : null}
         {toolbar ? <div className="nodrag flex shrink-0 items-center gap-1">{toolbar}</div> : null}
       </div>
       <div className={cn("min-h-0 flex-1", !flush && "px-3 pb-3")}>{children}</div>

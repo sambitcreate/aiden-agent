@@ -36,6 +36,7 @@ export type DesignFramePatch = Partial<
     | "dark"
     | "tweaks"
     | "tweakVersions"
+    | "colorScheme"
   >
 >;
 
@@ -52,6 +53,10 @@ export type DesignNodeContextValue = {
   /** The frame to focus once it mounts (a note the person just added). */
   autoFocusId: string | null;
   enter(id: string): void;
+  /** Leaves `id` if it is the entered frame (a live app's Esc), and gives the keys back to the canvas. */
+  leave(id: string): void;
+  /** Opens a link a live app frame tried to follow in Aiden's browser panel (S53). */
+  openInBrowser(url: string): void;
   markMissing(id: string, version: number): void;
   remove(id: string): void;
   /** Edits one frame; a key set to undefined is taken off. `record` adds an undo step. */

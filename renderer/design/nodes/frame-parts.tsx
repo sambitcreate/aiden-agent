@@ -14,14 +14,18 @@ const CAPTURE_FALLBACK_MS = 1000;
 export function DesignNodeResizer({
   selected,
   minSize = DESIGN_CANVAS_LIMITS.minSize,
+  keepAspectRatio = false,
 }: {
   selected: boolean;
   /** The smallest width and height the frame's kind keeps (`designMinSize`). */
   minSize?: number;
+  /** A live app frame keeps its viewport's shape; the canvas recomputes the box from the new scale. */
+  keepAspectRatio?: boolean;
 }) {
   return (
     <NodeResizer
       isVisible={selected}
+      keepAspectRatio={keepAspectRatio}
       minWidth={minSize}
       minHeight={minSize}
       maxWidth={DESIGN_CANVAS_LIMITS.maxSize}
@@ -61,6 +65,22 @@ export function MissingFrame({
       </Button>
     </div>
   );
+}
+
+/**
+ * The element's on-screen rectangle when it is wholly inside the canvas (so a
+ * capture holds only it), else null.
+ */
+export function rectOnCanvas(element: HTMLElement | null): DOMRect | null {
+  const rect = element?.getBoundingClientRect();
+  if (!element || !rect) return null;
+  const canvas = element.closest(".studio-canvas")?.getBoundingClientRect() ?? {
+    left: 0,
+    top: 0,
+    right: window.innerWidth,
+    bottom: window.innerHeight,
+  };
+  return visibleWithin(rect, canvas) ? rect : null;
 }
 
 function visibleWithin(rect: DOMRect, bounds: { left: number; top: number; right: number; bottom: number }) {

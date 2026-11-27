@@ -104,15 +104,16 @@ import {
   type IsChatLive,
 } from "../../../renderer/shared/design-canvas/chat-pages.js";
 import {
+  APP_DEFAULT_VIEWPORT,
   APP_FRAME_LIMITS,
   appFrameBox,
+  appResizeScale,
   appRouteFrom,
   fitAppScale,
   isAppScale,
   isAppViewportSide,
   roundAppScale,
 } from "../../../renderer/shared/design-canvas/app-frame.js";
-import { DESIGN_FRAME_HEADER_PX } from "../../../renderer/shared/design-canvas/app-frame.js";
 import type { DesignAppCandidate, DesignAppStatus } from "../../../renderer/shared/design-app.js";
 import { designPageTweakNames } from "./inspect.js";
 import { claimWithRoom } from "./lazy-claim.js";
@@ -136,7 +137,6 @@ const PLACED_KINDS: readonly PlacedKind[] = ["file", "image", "note", "group", "
 const LIVE_PLACED_KINDS: readonly PlacedKind[] = [...PLACED_KINDS, "app"];
 const APP_PLACE_SENTENCE =
   " kind app shows a route of the workspace's running web app live (appRoot, route; viewport width and height, default 1280 × 800, at scale 0.5); design_app starts the app.";
-const APP_DEFAULT_VIEWPORT = { width: 1280, height: 800 } as const;
 const APP_DEFAULT_SCALE = 0.5;
 
 /** Default boxes, matching the canvas's Add menu and drawing tools. A text box's height follows its lines; a page's follows its design width. */
@@ -926,14 +926,6 @@ function appRoute(value: unknown): string {
   return route;
 }
 
-/** An app frame's scale after a corner resize: the aspect stays, so the width (else the height) decides it. */
-function appResizeScale(frame: DesignFrame, w: number | undefined, h: number | undefined): number {
-  const viewport = frame.viewport ?? APP_DEFAULT_VIEWPORT;
-  const raw = w !== undefined ? w / viewport.width : (h! - DESIGN_FRAME_HEADER_PX) / viewport.height;
-  const scale = Math.min(APP_FRAME_LIMITS.maxScale, Math.max(APP_FRAME_LIMITS.minScale, roundAppScale(raw)));
-  return fitAppScale(viewport, scale, DESIGN_CANVAS_LIMITS.maxSize);
-}
-
 export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[] {
   const appsOn = deps.designLive === true && deps.apps !== undefined;
   const placedKinds = appsOn ? LIVE_PLACED_KINDS : PLACED_KINDS;
@@ -1661,7 +1653,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               };
               // A live app frame keeps its aspect: a corner resize changes how its viewport is drawn (D15).
               if (current.kind === "app" && (w !== undefined || h !== undefined)) {
-                const scale = appResizeScale(current, w, h);
+                const scale = appResizeScale(current.viewport, w, h, DESIGN_CANVAS_LIMITS.maxSize);
                 next = { ...next, scale, ...appFrameBox(current.viewport ?? APP_DEFAULT_VIEWPORT, scale) };
               }
               if (colorScheme !== undefined) next = { ...next, colorScheme };

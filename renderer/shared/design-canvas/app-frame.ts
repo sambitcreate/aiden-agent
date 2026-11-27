@@ -124,6 +124,26 @@ export function fitAppScale(viewport: { width: number; height: number }, scale: 
   return fitted;
 }
 
+/** The viewport an app frame is drawn at when it names none. */
+export const APP_DEFAULT_VIEWPORT = { width: 1280, height: 800 } as const;
+
+/**
+ * An app frame's scale after a corner resize to `w` × `h` (D15, S62): the
+ * aspect stays, so the width (else the height, less the title row) decides
+ * it, rounded to 4 decimals, kept in range and inside `maxSize`.
+ */
+export function appResizeScale(
+  viewport: { width: number; height: number } | undefined,
+  w: number | undefined,
+  h: number | undefined,
+  maxSize: number,
+): number {
+  const shown = viewport ?? APP_DEFAULT_VIEWPORT;
+  const raw = w !== undefined ? w / shown.width : ((h ?? 0) - DESIGN_FRAME_HEADER_PX) / shown.height;
+  const scale = Math.min(APP_FRAME_LIMITS.maxScale, Math.max(APP_FRAME_LIMITS.minScale, roundAppScale(raw)));
+  return fitAppScale(shown, scale, maxSize);
+}
+
 /** The iframe's `name`: the frame id and a one-use mount token (D2). Throws for an id it can't carry. */
 export function appFrameName(frameId: string, mountToken: string): string {
   if (!FRAME_ID.test(frameId)) throw new Error("This frame id can't name a live app frame.");

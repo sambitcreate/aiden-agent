@@ -368,6 +368,14 @@ import type {
   WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
 import type { DesignCanvas, DesignViewport } from "../shared/design-canvas/schema";
+import {
+  DESIGN_APP_FRAME_CHANNEL,
+  DESIGN_APP_FRAME_MOUNT_CHANNEL,
+  parseDesignAppFrameEvent,
+  parseDesignAppFrameMountResult,
+  type DesignAppFrameEvent,
+  type DesignAppFrameMountResult,
+} from "../shared/design-canvas/app-frame-events";
 import type { DesignChatView } from "../shared/design-canvas/view";
 import { invoke, onNotification } from "./ipc-bridge";
 import {
@@ -2904,6 +2912,19 @@ export const designCanvasApi = {
   /** A PNG data URL of the canvas region, or null when it is not on screen. */
   answerDesignCanvasSnapshot: (requestId: string, dataUrl: string | null) =>
     invoke<boolean>("designCanvas:snapshotAnswer", requestId, dataUrl),
+  /**
+   * Before a live app frame's iframe exists (Phase 3a, D2): main records the
+   * frame and a fresh one-use token, and answers the origin to frame. The
+   * renderer never names a URL; an unknown answer reads as `unavailable`.
+   */
+  mountDesignAppFrame: (chatId: string, frameId: string, mountToken: string): Promise<DesignAppFrameMountResult> =>
+    invoke<unknown>(DESIGN_APP_FRAME_MOUNT_CHANNEL, chatId, { frameId, mountToken }).then(parseDesignAppFrameMountResult),
+  /** A live app frame's blocked count, refused navigation or suppressed dialog, from main. Malformed events are dropped. */
+  onDesignAppFrame: (handler: (event: DesignAppFrameEvent) => void) =>
+    onNotification<unknown>(DESIGN_APP_FRAME_CHANNEL, (payload) => {
+      const event = parseDesignAppFrameEvent(payload);
+      if (event) handler(event);
+    }),
 };
 
 /** Design mode's live apps (Phase 2b): the dev servers Aiden runs for a chat's workspace. */

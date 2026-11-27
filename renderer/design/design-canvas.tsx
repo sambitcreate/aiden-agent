@@ -10,7 +10,7 @@ import { EmptyState, toast } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { noteDesignCanvasView } from "../lib/design-mode";
-import { designCanvasApi } from "../lib/ipc";
+import { browserApi, designCanvasApi } from "../lib/ipc";
 import { addPage, deletePage, duplicatePage, movePage, renamePage } from "../shared/design-canvas/pages";
 import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
 import type { DesignExportFormat } from "../shared/design-canvas/frame-export";
@@ -106,7 +106,7 @@ export default function DesignCanvas({
       </div>
     );
   }
-  return <LoadedDesignCanvas chatId={chatId} doc={canvas.doc} canvas={canvas} view={view} />;
+  return <LoadedDesignCanvas chatId={chatId} workspaceId={workspaceId} doc={canvas.doc} canvas={canvas} view={view} />;
 }
 
 type CanvasHandle = ReturnType<typeof useDesignCanvas>;
@@ -153,11 +153,13 @@ const FOCUS_WAIT_MS = 3_000;
 
 function LoadedDesignCanvas({
   chatId,
+  workspaceId,
   doc,
   canvas,
   view,
 }: {
   chatId: string;
+  workspaceId: string;
   doc: CanvasDocument;
   canvas: CanvasHandle;
   view: DesignViewHandle;
@@ -826,7 +828,7 @@ function LoadedDesignCanvas({
           setAutoFocusId(frame.id);
           return true;
         }
-        if (!frame || (frame.kind !== "file" && frame.kind !== "artifact")) return false;
+        if (!frame || (frame.kind !== "file" && frame.kind !== "artifact" && frame.kind !== "app")) return false;
         if (frame.kind === "file" && missing.get(frame.id) === frameVersionOf(frame)) return false;
         setEntered(frame.id);
         return true;
@@ -984,7 +986,7 @@ function LoadedDesignCanvas({
       const bounds = { ...instance.getNodesBounds([presentedId]) };
       // A page, artifact or image is shown without its title row (design-canvas.css).
       const kind = latestDoc.current.frames.find((frame) => frame.id === presentedId)?.kind;
-      if ((kind === "file" || kind === "artifact" || kind === "image") && bounds.height > DESIGN_FRAME_HEADER_PX) {
+      if ((kind === "file" || kind === "artifact" || kind === "image" || kind === "app") && bounds.height > DESIGN_FRAME_HEADER_PX) {
         bounds.y += DESIGN_FRAME_HEADER_PX;
         bounds.height -= DESIGN_FRAME_HEADER_PX;
       }
@@ -1192,6 +1194,16 @@ function LoadedDesignCanvas({
       frameVersionOf,
       autoFocusId,
       enter: setEntered,
+      leave: (id) => {
+        setEntered((current) => (current === id ? null : current));
+        // The page's Esc left the frame; the next key is the canvas's.
+        wrapper.current?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
+      },
+      openInBrowser: (url) => {
+        void browserApi.command(workspaceId, { action: "open_link", url }).catch(() => {
+          toast.error("The Aiden browser couldn't open this link.");
+        });
+      },
       markMissing: (id, version) =>
         setMissing((current) => (current.get(id) === version ? current : new Map(current).set(id, version))),
       remove: (id) => removeFrames([id]),
@@ -1218,6 +1230,7 @@ function LoadedDesignCanvas({
     }),
     [
       chatId,
+      workspaceId,
       grant,
       live,
       entered,

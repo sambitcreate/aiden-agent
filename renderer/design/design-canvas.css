@@ -136,13 +136,15 @@ main:has(.design-presenting) {
    its place (the view is fitted below it) but is not drawn. */
 .design-presenting .react-flow__node-file [data-canvas-chrome-header],
 .design-presenting .react-flow__node-artifact [data-canvas-chrome-header],
-.design-presenting .react-flow__node-image [data-canvas-chrome-header] {
+.design-presenting .react-flow__node-image [data-canvas-chrome-header],
+.design-presenting .react-flow__node-app [data-canvas-chrome-header] {
   visibility: hidden;
 }
 
 .design-presenting .react-flow__node-file [data-canvas-chrome],
 .design-presenting .react-flow__node-artifact [data-canvas-chrome],
-.design-presenting .react-flow__node-image [data-canvas-chrome] {
+.design-presenting .react-flow__node-image [data-canvas-chrome],
+.design-presenting .react-flow__node-app [data-canvas-chrome] {
   background: transparent;
   box-shadow: none;
 }

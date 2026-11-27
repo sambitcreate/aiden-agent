@@ -1290,6 +1290,7 @@
         "renderer/design/frame-snapshots.test.ts",
         "renderer/design/nodes/file-node.test.tsx",
         "renderer/design/nodes/app-node.test.tsx",
+        "renderer/design/app-frame-messages.test.tsx",
         "renderer/design/design-canvas.test.tsx",
         "renderer/components/chat-sidebar-scope.test.tsx",
         "renderer/components/chat-top-bar-design.test.tsx",
