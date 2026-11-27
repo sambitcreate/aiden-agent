@@ -20,6 +20,7 @@ import {
   selectDesignCanvasView,
   useDesignCanvas,
 } from "./use-design-canvas";
+import { applyNodeChanges, gestureEdit } from "./canvas-adapter-core";
 
 type Controller = ReturnType<typeof useDesignCanvas>;
 type SaveReply =
@@ -1635,4 +1636,33 @@ test("a save answer that names only the stored page marks still shows them, keep
   await tick(800);
   assert.equal(controller.doc?.pages[1]?.namedFor, "chat-1");
   assert.deepEqual(controller.doc?.chatPages, { "chat-1": "p2" });
+});
+
+// ── 3c (S89): one undo step per edge drag ──
+
+test("an edge drag whose first change rounds to the same viewport is still one undo step", () => {
+  const app: DesignFrame = { id: "app", kind: "app", title: "Pricing", pageId: "page-1", x: 0, y: 0, w: 320, h: 236, createdBy: "person", appRoot: ".", route: "/pricing", viewport: { width: 1280, height: 800 }, scale: 0.25 };
+  const modes = new Map([["app", "right" as const]]);
+  const gesture = { current: false };
+  let state = reduceDesignCanvasSync(createInitialDesignCanvasSyncState(), { type: "load_succeeded", doc: canvas(3, note("before"), app) }).state;
+  const edit = (mutate: (doc: DesignCanvas) => DesignCanvas, record: boolean) => {
+    state = reduceDesignCanvasSync(state, { type: "change", mutate, recordHistory: record }).state;
+  };
+  const drag = (width: number, resizing: boolean) => {
+    const edits = [{ type: "dimensions" as const, id: "app", dimensions: { width, height: 236 }, resizing, setAttributes: true }];
+    const step = gestureEdit(gesture, edits, (doc) => applyNodeChanges(doc, edits, modes));
+    edit(step.mutate, step.record);
+  };
+  const widthNow = () => state.local!.frames.find((frame) => frame.id === "app")!.viewport!.width;
+  // An earlier step of the person's own, which the drag's undo must not take instead.
+  edit(moveTo("before", 500), true);
+  // 320.1 at scale 0.25 rounds back to 1280: a change that changes nothing.
+  drag(320.1, true);
+  drag(250, true);
+  drag(250, false);
+  assert.equal(widthNow(), 1000);
+  state = reduceDesignCanvasSync(state, { type: "undo" }).state;
+  assert.equal(widthNow(), 1280, "one undo puts the drag back");
+  assert.equal(state.local!.frames.find((frame) => frame.id === "before")!.x, 500, "and leaves the earlier step");
+  assert.equal(gesture.current, false, "the gesture ended");
 });

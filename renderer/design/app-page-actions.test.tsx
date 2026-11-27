@@ -66,6 +66,61 @@ test("a Trash whose revision never reaches the canvas shows a toast without Undo
   assert.deepEqual(undone, []);
 });
 
+/** The hook over a canvas the test moves on, as the Trash's revision comes back. */
+function trashHarness() {
+  installBotTestIpc({
+    "designCanvas:appPageTrash": () => ({ trashed: "src/routes/pricing.tsx", route: "/pricing", removed: ["app-1"], revision: 9 }),
+  });
+  render(<Toaster />);
+  const latestDoc: { current: DesignCanvas } = { current: { ...emptyDesignCanvas(), revision: 8, frames: [app] } };
+  const undone: number[] = [];
+  const hook = renderHook(({ doc }: { doc: DesignCanvas }) =>
+    useAppPageActions({ chatId: "chat-1", doc, latestDoc, flush: async () => true, undo: () => undone.push(1), queueOnFrame: () => true, focusCanvas: () => undefined }),
+  { initialProps: { doc: latestDoc.current } });
+  const show = (doc: DesignCanvas) => {
+    latestDoc.current = doc;
+    hook.rerender({ doc });
+  };
+  return { ...hook, show, undone, latestDoc };
+}
+
+test("the Trash's Undo undoes it while the canvas still shows the Trash step", async () => {
+  const { result, show, undone } = trashHarness();
+  act(() => result.current.trashAppPage("app-1"));
+  await settle();
+  show({ ...emptyDesignCanvas(), revision: 9, frames: [] });
+  await settle();
+  const button = await screen.findByRole("button", { name: "Undo" });
+  act(() => button.click());
+  assert.deepEqual(undone, [1]);
+});
+
+test("a Trash the canvas first shows inside a later revision gets no Undo", async () => {
+  const { result, show, undone } = trashHarness();
+  act(() => result.current.trashAppPage("app-1"));
+  await settle();
+  // Another chat's save landed first: the canvas takes in 8 to 10, so the Trash is no step of its own.
+  show({ ...emptyDesignCanvas(), revision: 10, frames: [] });
+  await settle();
+  assert.ok(await screen.findByText(/Moved src\/routes\/pricing\.tsx to the Trash\. Press (⌘Z|Ctrl\+Z) to undo\./u));
+  assert.equal(screen.queryByRole("button", { name: "Undo" }), null);
+  assert.deepEqual(undone, []);
+});
+
+test("the toast's Undo undoes nothing once the canvas has moved on", async () => {
+  const { result, show, undone } = trashHarness();
+  act(() => result.current.trashAppPage("app-1"));
+  await settle();
+  show({ ...emptyDesignCanvas(), revision: 9, frames: [] });
+  await settle();
+  const button = await screen.findByRole("button", { name: "Undo" });
+  // The person's own edit since: ⌘Z would take that first.
+  show({ ...emptyDesignCanvas(), revision: 9, frames: [{ ...app, id: "note", kind: "note", text: "x" }] });
+  act(() => button.click());
+  assert.deepEqual(undone, []);
+  assert.ok(await screen.findByText(/The canvas changed since the Trash\. Press (⌘Z|Ctrl\+Z) to undo it\./u));
+});
+
 test("Ask Aiden's copy note names the page's first variant", () => {
   assert.equal(firstVariantPath("/pricing?plan=pro"), "/pricing-v2");
   assert.equal(firstVariantPath("/pricing-v3/"), "/pricing-v2");

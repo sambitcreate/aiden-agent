@@ -1910,6 +1910,14 @@ test("3c: a view of a variant joins the root's set and group", async (t) => {
   assert.equal(doc.frames.filter((frame) => frame.kind === "group").length, 1, "no second group");
 });
 
+test("3c: a view of a page variant shows that variant's own page, in the root's set", async (t) => {
+  const { invoke, store } = await pickerFixture(t);
+  await seedFrames(store, seededApp(), seededApp({ id: "app-2", x: 780, route: "/pricing-v2", title: "/pricing-v2", label: "v2", scale: 0.25, variantOf: "app-1" }));
+  const answer = (await invoke("designCanvas:addAppView", "chat-1", { frameId: "app-2", device: "phone" })) as { placed: string };
+  const view = ((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames.find((frame) => frame.id === answer.placed)!;
+  assert.deepEqual([view.route, view.title, view.variantOf, view.scale], ["/pricing-v2", "/pricing-v2", "app-1", 0.25]);
+});
+
 test("3c: a locked original or group answers locked, a gone or non-app frame not-found, a full page full", async (t) => {
   const { invoke, store, broadcasts, reported } = await pickerFixture(t);
   const note: DesignFrame = { id: "n", kind: "note", title: "n", text: "n", x: 0, y: 0, w: 10, h: 10, pageId: "page-1", createdBy: "person" };
@@ -2006,6 +2014,8 @@ async function pageFixture(
     trash?: boolean;
     chats?: Record<string, DesignCanvasChat>;
     pageFs?: Parameters<typeof registerDesignCanvasHandlers>[0]["pageFs"];
+    /** Runs as the handler reads the app list, after its first permission check. */
+    onSnapshot?: () => void;
   },
 ) {
   const workspace = await pageWorkspace(t, setup.files);
@@ -2026,13 +2036,10 @@ async function pageFixture(
       enabled: () => setup.live ?? true,
       registry: () => null,
       apps: {
-        snapshot: async (workspaceId) => ({
-          workspaceId,
-          target: "single",
-          apps: [],
-          candidates: [{ appRoot: fixtureRoot, ...(framework ? { framework } : {}), frameworkLabel: "TanStack Router" }],
-          chosen: [],
-        }),
+        snapshot: async (workspaceId) => {
+          setup.onSnapshot?.();
+          return snapshotOf(workspaceId);
+        },
         appForOrigin: () => undefined,
       },
       onAppFrameAdded: (width) => reported.push(width),
@@ -2048,6 +2055,16 @@ async function pageFixture(
     },
   });
   return { ...result, workspace, trashed, reported, outcomes, access };
+
+  function snapshotOf(workspaceId: string): DesignAppsSnapshot {
+    return {
+          workspaceId,
+          target: "single",
+          apps: [],
+          candidates: [{ appRoot: fixtureRoot, ...(framework ? { framework } : {}), frameworkLabel: "TanStack Router" }],
+          chosen: [],
+    };
+  }
 }
 
 const pageApp = (overrides: Partial<DesignFrame> = {}): DesignFrame => seededApp({ x: 0, y: 0, ...overrides });
@@ -2213,12 +2230,16 @@ test("3c: a copy edited before the rollback is kept, and the reply says so", asy
 
 test("3c: appPageVariant refuses and writes nothing", async (t) => {
   const big = Buffer.alloc(512 * 1024 + 1, 0x20);
+  // At the size limit already: the TanStack rewrite's three more bytes would take the copy past it.
+  const literal = Buffer.from("export const Route = createFileRoute('/pricing')({})\n");
+  const atLimit = Buffer.concat([literal, Buffer.alloc(512 * 1024 - literal.length, 0x20)]);
   const cases: Array<{ name: string; files: Record<string, string | Buffer>; frame?: Partial<DesignFrame>; framework?: null; permission?: "none" | "read-only"; want: string }> = [
     { name: "dynamic", files: { "src/routes/blog.$slug.tsx": PLAIN_PAGE }, frame: { route: "/blog/hello" }, want: "dynamic" },
     { name: "layout", files: { "src/routes/blog.tsx": PLAIN_PAGE, "src/routes/blog.$slug.tsx": PLAIN_PAGE }, frame: { route: "/blog" }, want: "layout" },
     { name: "relative-imports", files: { "src/routes/pricing/route.tsx": 'import Card from "./card";\nexport default Card;\n', "src/routes/pricing/-card.tsx": "" }, want: "relative-imports" },
     { name: "route-literal", files: { "src/routes/pricing.tsx": "export const Route = createFileRoute('/elsewhere')({})\n" }, want: "route-literal" },
     { name: "too-large", files: { "src/routes/pricing.tsx": big }, want: "too-large" },
+    { name: "too-large after the rewrite", files: { "src/routes/pricing.tsx": atLimit }, want: "too-large" },
     { name: "read-only", files: { "src/routes/pricing.tsx": PLAIN_PAGE }, permission: "none", want: "read-only" },
     { name: "config-router", files: { "src/routes/pricing.tsx": PLAIN_PAGE }, framework: null, want: "config-router" },
     { name: "no-file", files: { "src/routes/about.tsx": PLAIN_PAGE }, want: "no-file" },
@@ -2239,6 +2260,27 @@ test("3c: appPageVariant refuses and writes nothing", async (t) => {
   }
 });
 
+test("3c: appPageVariant checks the permission again inside the file's lock, and writes nothing once it is gone", async (t) => {
+  for (const permission of ["none", "read-only"] as const) {
+    const spy = refusingFs();
+    const state: { flip?: () => void } = {};
+    const { invoke, store, access, reported } = await pageFixture(t, {
+      files: { "src/routes/pricing.tsx": PLAIN_PAGE },
+      pageFs: spy.pageFs,
+      onSnapshot: () => state.flip?.(),
+    });
+    // Taken away after the first check, while the owner walk and read are under way.
+    state.flip = () => {
+      access.permission = permission;
+    };
+    await seedFrames(store, pageApp());
+    assert.deepEqual(await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "read-only" }, permission);
+    assert.deepEqual(spy.touched, [], `${permission}: nothing written`);
+    assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames.map((frame) => frame.id), ["app-1"]);
+    assert.deepEqual(reported, []);
+  }
+});
+
 test("3c: appPageTrash moves the single owning file to the Trash and removes its frames across the workspace", async (t) => {
   const { invoke, store, workspace, trashed, broadcasts } = await pageFixture(t, {
     files: { "src/routes/pricing.tsx": PLAIN_PAGE, "src/routes/about.tsx": PLAIN_PAGE },
@@ -2253,6 +2295,18 @@ test("3c: appPageTrash moves the single owning file to the Trash and removes its
   assert.deepEqual(doc.frames.map((frame) => frame.id), ["about"]);
   assert.deepEqual([...(doc.removedAppRoutes ?? [])].sort(), [appRouteKey(".", "/pricing"), appRouteKey(".", "/pricing?plan=pro")].sort());
   assert.equal(broadcasts[broadcasts.length - 1]?.step, `app-page-trash:${answer.revision}`);
+});
+
+test("3c: appPageTrash fits a variant set's group to what is left", async (t) => {
+  const { invoke, store } = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE, "src/routes/pricing-v2.tsx": PLAIN_PAGE } });
+  const group: DesignFrame = { id: "g", kind: "group", title: "/pricing", pageId: "page-1", x: -40, y: -40, w: 2000, h: 600, createdBy: "aiden" };
+  await seedFrames(store, group, pageApp({ groupId: "g" }), pageApp({ id: "app-2", x: 1300, route: "/pricing-v2", title: "/pricing-v2", variantOf: "app-1", groupId: "g" }));
+  assert.ok("trashed" in ((await invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-2" })) as object));
+  const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const app = doc.frames.find((frame) => frame.id === "app-1")!;
+  const box = doc.frames.find((frame) => frame.id === "g")!;
+  assert.ok(box.x + box.w < 1300, "no longer reaching over the trashed frame's place");
+  assert.ok(box.x <= app.x && box.x + box.w >= app.x + app.w, "still around the root");
 });
 
 test("3c: appPageTrash refuses a locked frame on any page before trashing", async (t) => {

@@ -10,6 +10,7 @@ import { EmptyState, toast } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { noteDesignCanvasView } from "../lib/design-mode";
+import { returnFocus } from "../lib/focus-return";
 import { browserApi, designCanvasApi } from "../lib/ipc";
 import { addPage, deletePage, duplicatePage, movePage, renamePage } from "../shared/design-canvas/pages";
 import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
@@ -23,6 +24,7 @@ import type { DesignCanvas as CanvasDocument, DesignConnectorEnd, DesignFrame } 
 import {
   applyNodeChanges,
   duplicateFrames,
+  gestureEdit,
   nodesFromCanvas,
   placeFrame,
   presentedFrameIds,
@@ -473,9 +475,17 @@ function LoadedDesignCanvas({
   const textEdits = usePageTextEdits({ chatId, doc, pageWindow, queueComment: comments.queueOnElement, flush, reload: reloadPath });
   // 3c (S93, S95, S96): the person's actions on a live app frame's page.
   const { designLive } = useAppCapabilities();
-  const focusCanvas = React.useCallback(() => {
-    const region = wrapper.current?.querySelector<HTMLElement>(".studio-canvas");
-    requestAnimationFrame(() => region?.focus({ preventScroll: true }));
+  const focusCanvas = React.useCallback((options?: { unlessMoved?: boolean }) => {
+    requestAnimationFrame(() => {
+      const host = wrapper.current;
+      if (options?.unlessMoved) {
+        // Focus the person moved out of the canvas meanwhile (into the composer, say) stays there.
+        const active = document.activeElement;
+        const lost = !active || active === document.body || !active.isConnected || host?.contains(active) === true;
+        if (!lost) return;
+      }
+      returnFocus([host?.querySelector<HTMLElement>(".studio-canvas")], { preventScroll: true, region: null });
+    });
   }, []);
   const pageActions = useAppPageActions({ chatId, doc, latestDoc, flush, undo, queueOnFrame: comments.queueOnFrame, focusCanvas });
   forgetTextEdits.current = textEdits.forget;
@@ -605,27 +615,14 @@ function LoadedDesignCanvas({
     const dropped = edits.flatMap((entry) =>
       entry.type === "position" && entry.dragging === false ? [entry.id] : [],
     );
-    // One undo step per drag or resize, taken when it starts.
-    const flags = edits.map((entry) =>
-      entry.type === "position" ? entry.dragging : entry.type === "dimensions" ? entry.resizing : undefined,
-    );
-    let record = true;
-    if (flags.includes(true)) {
-      record = !gesture.current;
-      gesture.current = true;
-    } else if (flags.includes(false)) {
-      record = !gesture.current;
-      gesture.current = false;
-    }
     // A snapshot: a replay after a save conflict must resize as the drag did, after the modes are gone.
     const modes = resizeModes.current.size > 0 ? new Map(resizeModes.current) : undefined;
-    change(
-      (current) => {
-        const next = applyNodeChanges(current, edits, modes);
-        return dropped.length > 0 ? regroupFrames(next, dropped) : next;
-      },
-      { record },
-    );
+    // One undo step per drag or resize, taken by its first change that alters the canvas.
+    const step = gestureEdit(gesture, edits, (current) => {
+      const next = applyNodeChanges(current, edits, modes);
+      return dropped.length > 0 ? regroupFrames(next, dropped) : next;
+    });
+    change(step.mutate, { record: step.record });
     // xyflow's last change of a resize is its `resizing: false` one (S89).
     for (const entry of edits) {
       if (entry.type !== "dimensions" || entry.resizing !== false || !resizeModes.current.delete(entry.id)) continue;

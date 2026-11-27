@@ -143,6 +143,10 @@ test("More lists the four actions, and Add view at width offers the devices and 
     items.map((item) => item.textContent?.replace(/⌘D|⌫|Ctrl\+D|Backspace/gu, "").trim()),
     ["Add view at width", "Duplicate page as variant", "Move page file to Trash…", "Remove from canvas"],
   );
+  // Assistive tech announces the same shortcut the row shows.
+  const duplicate = screen.getByRole("menuitem", { name: /Duplicate page as variant/u });
+  const shown = duplicate.textContent?.includes("⌘D") ? "Meta+D" : duplicate.textContent?.includes("Ctrl+D") ? "Control+D" : "none shown";
+  assert.equal(duplicate.getAttribute("aria-keyshortcuts"), shown);
   fireEvent.click(screen.getByRole("menuitem", { name: /Duplicate page as variant/u }));
   assert.deepEqual(calls, ["duplicate"]);
 

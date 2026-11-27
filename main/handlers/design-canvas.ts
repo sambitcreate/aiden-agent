@@ -38,7 +38,7 @@ import {
 } from "../../renderer/shared/design-canvas/text-edit.js";
 import { canvasView, parseDesignViewState } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { parseDesignChatView, type DesignChatView } from "../../renderer/shared/design-canvas/view.js";
-import { placeFrame } from "../../renderer/shared/design-canvas/placement.js";
+import { placeFrame, refitGroups } from "../../renderer/shared/design-canvas/placement.js";
 import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
 import { isWorkspaceArtifactWorkspaceId } from "../../renderer/shared/workspace-artifacts.js";
 import { ARTIFACT_FRAME_BOX } from "../services/design-canvas/artifact-frames.js";
@@ -957,13 +957,14 @@ export function registerDesignCanvasHandlers<Event>(deps: {
             outcome = { error: "not-found" };
             throw UNCHANGED;
           }
+          // The view joins the root's set, but shows the chosen frame's own page (a page variant's is not the root's).
           const original = variantRootOf(doc, frame);
-          const scale = fitAppScale(size.viewport, original.scale ?? APP_DEFAULT_SCALE, DESIGN_CANVAS_LIMITS.maxSize);
+          const scale = fitAppScale(size.viewport, frame.scale ?? original.scale ?? APP_DEFAULT_SCALE, DESIGN_CANVAS_LIMITS.maxSize);
           const placed = placeAppVariant(doc, original, {
             id: newId(),
             groupId: newId(),
-            title: original.title,
-            route: original.route ?? "/",
+            title: frame.title,
+            route: frame.route ?? "/",
             viewport: size.viewport,
             scale,
             label: size.label,
@@ -1126,13 +1127,20 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         const rewritten = rewriteTanstackLiteral(read.bytes, from, to);
         if ("refused" in rewritten) return { error: "route-literal" };
         bytes = rewritten.bytes;
+        // A longer literal can take the copy past what its own undo (and a rollback) may read back.
+        if (bytes.length > DESIGN_SOURCE_MAX_BYTES) return { error: "too-large" };
       }
-      if (!(await stillFraming(chat.id, workspaceId))) return { error: "unavailable" };
       const file = workspaceRelPath(appRoot, candidate.appRelPath);
       const absolute = path.resolve(real, file);
-      const result = await withFileLock(absolute, () =>
-        writeConfinedFile(real, file, bytes, read.mode, { create: candidate.newFolder !== undefined, ...(deps.pageFs ? { fs: deps.pageFs } : {}) }),
-      );
+      // Every gate again under the file's lock, as the Trash does: the walk and read above took time.
+      const result = await withFileLock(absolute, async () => {
+        if (!(await stillFraming(chat.id, workspaceId))) return { ok: false as const, refused: "unavailable" as const };
+        const folder = await writableWorkspace(chat);
+        if (folder === "read-only") return { ok: false as const, refused: "read-only" as const };
+        if (folder === null || folder.real !== real) return { ok: false as const, refused: "unavailable" as const };
+        return writeConfinedFile(real, file, bytes, read.mode, { create: candidate.newFolder !== undefined, ...(deps.pageFs ? { fs: deps.pageFs } : {}) });
+      });
+      if ("refused" in result) return { error: result.refused };
       if (!result.ok) {
         // Taken on disk (a case-insensitive clash, or a concurrent copy): the next number.
         if (result.reason === "exists") continue;
@@ -1208,6 +1216,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       digest: pageDigest(copy.bytes),
       frameId: result.placed,
       state: "present",
+      revision: saved.revision,
       ...(copy.createdFolder ? { newFolder: true as const } : {}),
     });
     if (await stillFraming(chat.id, workspaceId)) {
@@ -1256,11 +1265,15 @@ export function registerDesignCanvasHandlers<Event>(deps: {
           }
           removed = frames.map((entry) => entry.id);
           const gone = new Set(removed);
-          return syncConnectors({
-            ...latest,
-            frames: latest.frames.filter((entry) => !gone.has(entry.id)),
-            comments: commentsWithoutFrames(latest.comments, gone),
-          });
+          // A set's group is fitted to what is left, as canvas_remove does.
+          return refitGroups(
+            syncConnectors({
+              ...latest,
+              frames: latest.frames.filter((entry) => !gone.has(entry.id)),
+              comments: commentsWithoutFrames(latest.comments, gone),
+            }),
+            frames.map((entry) => entry.groupId),
+          );
         },
         {
           workspaceId,
@@ -1320,6 +1333,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       digest: pageDigest(bytes.bytes),
       frameIds: removed,
       state: "trashed",
+      revision: saved.revision,
     });
     return { trashed: file, route: frame.route ?? "/", removed, revision: saved.revision };
   });

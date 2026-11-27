@@ -1231,6 +1231,29 @@ test("3c: Trash dims the page's frames at once and puts them back on failure", a
   assert.equal(screen.getByRole("group", { name: "Pro" }).hasAttribute("aria-busy"), false);
 });
 
+test("3c: a Trash that lands after the person moved on leaves their focus where it is", async (t) => {
+  render(<Toaster />);
+  // A field outside the canvas, as the chat composer is.
+  const message = document.createElement("textarea");
+  document.body.append(message);
+  t.after(() => message.remove());
+  let answer: (value: unknown) => void = () => undefined;
+  const { region } = await mountLiveApp(canvasWith(liveAppFrame()), {
+    "designCanvas:appPageTrash": () => new Promise((resolve) => (answer = resolve)),
+  });
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await openMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Move page file to Trash…" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Move to Trash" }));
+  await waitFor(() => assert.equal(document.activeElement, region), SAVE_WAIT);
+  // While main trashes the file, the person starts writing a message.
+  act(() => message.focus());
+  await act(async () => answer({ trashed: "src/routes/pricing.tsx", route: "/pricing", removed: ["app-1"], revision: 3 }));
+  await nextTask();
+  await nextTask();
+  assert.equal(document.activeElement, message);
+});
+
 test("3c: the Trash toast's Undo waits for the canvas to show the Trash, then undoes that step; focus is on the canvas", async () => {
   render(<Toaster />);
   const server = serverCanvas({ ...canvasWith(sticky("n1", "Note"), liveAppFrame()), revision: 1 });

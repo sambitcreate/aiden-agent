@@ -116,6 +116,19 @@ test("React Router: flatRoutes() walks files; a literal routes.ts is a config ro
   assert.equal(config?.configRouter, true);
   assert.equal(config?.files.size, 0);
 
+  // Flat routes under a prefix, or beside explicit routes, aren't served where the files say: a config router too.
+  for (const routes of [
+    'export default [prefix("admin", [...(await flatRoutes())])] satisfies RouteConfig;\n',
+    'export default [route("pricing", "routes/alt.tsx"), ...(await flatRoutes())] satisfies RouteConfig;\n',
+    'export default [layout("routes/shell.tsx", [...(await flatRoutes())])] satisfies RouteConfig;\n',
+  ]) {
+    const mixed = await workspace(t, { "app/routes.ts": routes, "app/routes/pricing.tsx": "" });
+    const walkedMixed = await routeFiles(routeFs(), mixed, ".", "react-router");
+    assert.deepEqual([walkedMixed?.configRouter, walkedMixed?.files.size], [true, 0], routes);
+  }
+  const spread = await workspace(t, { "app/routes.ts": "export default [...(await flatRoutes())] satisfies RouteConfig;\n", "app/routes/pricing.tsx": "" });
+  assert.equal((await routeFiles(routeFs(), spread, ".", "react-router"))?.configRouter, false, "a lone spread is still flat");
+
   const code = await workspace(t, { "app/routes.ts": "export default makeRoutes();\n", "app/routes/pricing.tsx": "" });
   assert.equal((await routeFiles(routeFs(), code, ".", "react-router"))?.configRouter, true);
 
@@ -248,4 +261,17 @@ test("writeConfinedFile writes wx, never over a file, and removes a folder it ma
   });
   assert.deepEqual(failing, { ok: false, reason: "io" });
   assert.equal(await exists(path.join(root, "app/pricing-v4")), false);
+});
+
+test("a new page's folder already taken under another case, or by a file, is a taken slot", async (t) => {
+  const root = await workspace(t, { "app/Pricing-v2/page.tsx": "theirs", "app/pricing-v3": "a file, not a folder" });
+  // A case-insensitive volume (APFS) finds `pricing-v2` and names it by its real case, as native realpath does.
+  const caseOnly = { realpath: async (target: string) => (await realpath(target)).replace(/pricing-v2$/u, "Pricing-v2") };
+  const clashing = await writeConfinedFile(root, "app/pricing-v2/page.tsx", Buffer.from("copy"), 0o644, { create: true, fs: { ...caseOnly, lstat: async (target) => lstat(target.replace(/pricing-v2$/u, "Pricing-v2")) } });
+  assert.deepEqual(clashing, { ok: false, reason: "exists" });
+  assert.deepEqual(await writeConfinedFile(root, "app/pricing-v3/page.tsx", Buffer.from("copy"), 0o644, { create: true }), { ok: false, reason: "exists" });
+  // check-aiden-rules: allow no-source-grep-test reads a page file in a temp workspace, not Aiden source
+  assert.equal(await readFile(path.join(root, "app/Pricing-v2/page.tsx"), "utf8"), "theirs");
+  // Not for a folder the path only passes through: that one is still a refusal.
+  assert.deepEqual(await writeConfinedFile(root, "app/pricing-v3/deeper/page.tsx", Buffer.from("copy"), 0o644, { create: true }), { ok: false, reason: "io" });
 });

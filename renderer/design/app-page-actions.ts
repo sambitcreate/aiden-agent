@@ -122,7 +122,8 @@ export function useAppPageActions({
   flush(): Promise<boolean>;
   undo(): void;
   queueOnFrame(frameId: string, note: string): boolean;
-  focusCanvas(): void;
+  /** Puts focus on the canvas; `unlessMoved` leaves focus the person moved out of the canvas. */
+  focusCanvas(options?: { unlessMoved?: boolean }): void;
 }): {
   addAppView(id: string, size: AppViewSize): void;
   duplicateAppPage(id: string): void;
@@ -199,10 +200,24 @@ export function useAppPageActions({
 
   const showTrashToast = React.useCallback(
     (file: string, withUndo: boolean) => {
-      if (withUndo) toast(`Moved ${file} to the Trash.`, { action: { label: "Undo", onClick: () => undo() } });
-      else toast(`Moved ${file} to the Trash. Press ${isMacPlatform() ? "⌘Z" : "Ctrl+Z"} to undo.`);
+      const key = isMacPlatform() ? "⌘Z" : "Ctrl+Z";
+      if (!withUndo) {
+        toast(`Moved ${file} to the Trash. Press ${key} to undo.`);
+        return;
+      }
+      // The canvas as it shows the Trash step: any change since (an edit, another chat's save) may be the step ⌘Z takes first.
+      const shown = latestDoc.current;
+      toast(`Moved ${file} to the Trash.`, {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            if (latestDoc.current === shown) undo();
+            else toast(`The canvas changed since the Trash. Press ${key} to undo it.`);
+          },
+        },
+      });
     },
-    [undo],
+    [latestDoc, undo],
   );
 
   const trashAppPage = React.useCallback(
@@ -241,16 +256,18 @@ export function useAppPageActions({
           refuse(id, result.error, "trash");
           return;
         }
-        // The frames are gone from the canvas; focus stays with it, so ⌘Z works at once.
+        // The frames are gone from the canvas; focus stays with it, so ⌘Z works at once, unless the person moved on.
         undim();
-        focusCanvas();
+        focusCanvas({ unlessMoved: true });
         if (pendingTrash.current) clearTimeout(pendingTrash.current.timer);
-        if ((latestDoc.current?.revision ?? -1) >= result.revision) {
+        const shownRevision = latestDoc.current?.revision ?? -1;
+        if (shownRevision >= result.revision) {
+          // Only a canvas at exactly the Trash's revision took it in as its own step; a later one carried it in with another change.
           pendingTrash.current = null;
-          showTrashToast(result.trashed, true);
+          showTrashToast(result.trashed, shownRevision === result.revision);
           return;
         }
-        // Undo always undoes the Trash step: it's offered only once the canvas shows that step.
+        // Undo always undoes the Trash step: it's offered only once the canvas shows that step, as its own.
         const timer = setTimeout(() => {
           if (pendingTrash.current?.timer !== timer) return;
           pendingTrash.current = null;
@@ -267,7 +284,7 @@ export function useAppPageActions({
     if (!pending || doc.revision < pending.revision) return;
     clearTimeout(pending.timer);
     pendingTrash.current = null;
-    showTrashToast(pending.file, true);
+    showTrashToast(pending.file, doc.revision === pending.revision);
   }, [doc.revision, showTrashToast]);
 
   React.useEffect(

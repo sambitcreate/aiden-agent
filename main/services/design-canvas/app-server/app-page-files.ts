@@ -62,7 +62,8 @@ export async function routeFiles(
       if (config === "refused") return result(true);
       if (config !== "missing") {
         const parsed = parseReactRouterConfig(config);
-        if (!parsed || "routes" in parsed) return result(true);
+        // Only flat routes alone map a file to its route; under a prefix or beside other calls, it's the config's.
+        if (!parsed || "routes" in parsed || parsed.mixed) return result(true);
       }
     }
     const relPaths = await conventionFiles(fs, root, convention, budget, undefined);
@@ -145,7 +146,14 @@ const DEFAULT_PAGE_FS: PageFileFs = {
   writeFile: (file, bytes, mode) => writeFile(file, bytes, { flag: "wx", mode }),
 };
 
-type TargetRefusal = { ok: false; reason: "outside" | "link" | "io" };
+type TargetRefusal = { ok: false; reason: "outside" | "link" | "io" | "exists" };
+
+/** Whether `real` is `parent` with only its last name in another case. */
+function caseOnlyRename(parent: string, real: string): boolean {
+  const name = path.basename(parent);
+  const realName = path.basename(real);
+  return path.dirname(real) === path.dirname(parent) && realName !== name && realName.toLowerCase() === name.toLowerCase();
+}
 
 function isWorkspaceRelPath(value: string): boolean {
   if (typeof value !== "string" || value.length === 0 || value.includes("\\") || value.includes("\0") || value.startsWith("/")) return false;
@@ -160,7 +168,9 @@ const errorCode = (error: unknown) => (error as NodeJS.ErrnoException)?.code;
  * and must be a real folder; the file itself must not be a link; and the
  * parent's real path must be its own path, inside the workspace. With
  * `create`, a missing parent (only the last folder) is made with one
- * non-recursive `mkdir`, and removed again if a later check refuses.
+ * non-recursive `mkdir`, and removed again if a later check refuses. That
+ * last folder already taken, by a file or by a folder in another case on a
+ * case-insensitive volume, is `exists`, as a taken file name is.
  *
  * `absolute` is `path.resolve(workspaceReal, workspaceRelPath)`, the key
  * callers lock with `withFileLock`.
@@ -205,7 +215,8 @@ export async function confinedTarget(
       }
     }
     if (info.isSymbolicLink()) return refuse("link");
-    if (!info.isDirectory()) return refuse("io");
+    // A new page's own folder already there as a file is a taken name, like the file itself would be.
+    if (!info.isDirectory()) return refuse(options.create && index === folders.length - 1 ? "exists" : "io");
   }
   const absolute = path.resolve(workspaceReal, workspaceRelPath);
   try {
@@ -216,6 +227,8 @@ export async function confinedTarget(
   const parent = path.dirname(absolute);
   try {
     const real = await fs.realpath(parent);
+    // A case-insensitive volume finds `pricing-v2` as another page's `Pricing-v2`: a taken name, not a link.
+    if (options.create && !createdFolder && folders.length > 0 && caseOnlyRename(parent, real)) return refuse("exists");
     if (real !== parent || !isPathInside(workspaceReal, real)) return refuse("link");
   } catch {
     return refuse("io");

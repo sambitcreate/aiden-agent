@@ -217,7 +217,9 @@ test("parseReactRouterConfig: depth cap, flat routes and code it can't read", ()
   assert.deepEqual(parseReactRouterConfig('import { flatRoutes } from "@react-router/fs-routes";\nexport default flatRoutes() satisfies RouteConfig;'), {
     flat: true,
   });
-  assert.deepEqual(parseReactRouterConfig('export default [route("/", "home.tsx"), ...(await flatRoutes())] satisfies RouteConfig;'), { flat: true });
+  assert.deepEqual(parseReactRouterConfig('export default [route("/", "home.tsx"), ...(await flatRoutes())] satisfies RouteConfig;'), { flat: true, mixed: true });
+  assert.deepEqual(parseReactRouterConfig('export default [...prefix("admin", [...(await flatRoutes())])] satisfies RouteConfig;'), { flat: true, mixed: true });
+  assert.deepEqual(parseReactRouterConfig("export default [...(await flatRoutes())] satisfies RouteConfig;"), { flat: true });
   assert.equal(parseReactRouterConfig("export default pages.map((page) => route(page, `routes/${page}.tsx`)) satisfies RouteConfig;"), null);
   assert.equal(parseReactRouterConfig("const routes = [index('a.tsx')];\nexport default routes;"), null);
   assert.equal(parseReactRouterConfig('export default [route(name, "x.tsx")];'), null);

@@ -25,7 +25,7 @@ import {
   PopoverContent,
 } from "../components/ui";
 import { returnFocus } from "../lib/focus-return";
-import { prettyAccelerator } from "../shared/keybindings";
+import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { APP_DEVICE_NAMES, APP_DEVICES, isAppDevice, type AppDevice } from "../shared/design-canvas/app-devices";
 import { APP_DEFAULT_VIEWPORT, APP_FRAME_LIMITS, isAppViewportSide } from "../shared/design-canvas/app-frame";
 import type { DesignFrame } from "../shared/design-canvas/schema";
@@ -290,7 +290,7 @@ export function AppMoreMenu({
               <DropdownMenuItem onSelect={() => open("custom")}>Custom…</DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
-          <DropdownMenuItem disabled={locked} aria-keyshortcuts="Meta+D" onSelect={onDuplicate}>
+          <DropdownMenuItem disabled={locked} aria-keyshortcuts={ariaKeyShortcut("Command+D")} onSelect={onDuplicate}>
             <span className="flex-1">Duplicate page as variant</span>
             <span aria-hidden className="text-tertiary">
               {prettyAccelerator("Command+D")}

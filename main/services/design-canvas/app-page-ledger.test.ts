@@ -11,7 +11,7 @@ import { PAGE_LEDGER_LIMIT, PageFileLedger, pageDigest, type PageFileOutcome, ty
 const ROOT = "/work";
 
 /** A fake workspace: a map of absolute path to bytes, a Trash, and a log of what ran inside which lock. */
-function harness(options: { canAct?: () => boolean } = {}) {
+function harness(options: { canAct?: () => boolean; trashGate?: () => Promise<void> } = {}) {
   const files = new Map<string, Buffer>();
   const trashed: string[] = [];
   const written: string[] = [];
@@ -33,6 +33,7 @@ function harness(options: { canAct?: () => boolean } = {}) {
       return bytes ? { ok: true, bytes, mode: 0o644 } : { ok: false, reason: "missing" };
     },
     trash: async (absolute) => {
+      await options.trashGate?.();
       log.push(`trash ${absolute}`);
       files.delete(absolute);
       trashed.push(absolute);
@@ -68,6 +69,7 @@ function copyRecord(overrides: Partial<PageLedgerRecord> = {}): PageLedgerRecord
     digest: pageDigest(data),
     frameId: "copy-frame",
     state: "present",
+    revision: 1,
     ...overrides,
   } as PageLedgerRecord;
 }
@@ -87,13 +89,20 @@ function trashRecord(overrides: Partial<PageLedgerRecord> = {}): PageLedgerRecor
     digest: pageDigest(data),
     frameIds: ["about-1", "about-2"],
     state: "trashed",
+    revision: 1,
     ...overrides,
   } as PageLedgerRecord;
 }
 
+/** Each save is a newer revision than the last, and than every record's (1). */
+let nextRevision = 10;
 function docWith(...ids: string[]): DesignCanvas {
+  return docAt(nextRevision++, ...ids);
+}
+
+function docAt(revision: number, ...ids: string[]): DesignCanvas {
   const frames: DesignFrame[] = ids.map((id) => ({ id, kind: "note", title: id, text: id, x: 0, y: 0, w: 10, h: 10, pageId: "page-1", createdBy: "person" }));
-  return { ...emptyDesignCanvas(), frames };
+  return { ...emptyDesignCanvas(), revision, frames };
 }
 
 const COPY_FILE = path.resolve(ROOT, "src/routes/pricing-v2.tsx");
@@ -246,4 +255,66 @@ test("saves reconcile in the order they committed", async () => {
   await Promise.all([first, second]);
   assert.deepEqual(log.filter((line) => !line.startsWith("lock") && !line.startsWith("unlock")), [`trash ${COPY_FILE}`, `write ${COPY_FILE}`]);
   assert.ok(files.has(COPY_FILE));
+});
+
+// ── Only saves newer than a record's own revision act on it ──
+
+test("a save committed before the Trash never puts the trashed file back", async () => {
+  const { ledger, files, written, outcomes } = harness();
+  // The Trash committed revision 7; a save from revision 6 (its frames still there) reconciles after it is recorded.
+  ledger.record(trashRecord({ revision: 7, frameIds: ["about-1"] }));
+  await ledger.reconcile("ws-1", "chat-1", docAt(6, "about-1"), []);
+  assert.deepEqual([written, outcomes], [[], []]);
+  assert.equal(files.has(TRASH_FILE), false);
+  assert.equal(ledger.list("ws-1")[0]?.state, "trashed");
+  // The person's undo, a later save, still puts it back.
+  await ledger.reconcile("ws-1", "chat-1", docAt(8, "about-1"), []);
+  assert.deepEqual(written, [TRASH_FILE]);
+});
+
+test("a save committed before the copy neither trashes the copy nor forgets it", async () => {
+  const { ledger, files, trashed } = harness();
+  const record = copyRecord({ revision: 7 });
+  files.set(COPY_FILE, record.bytes);
+  ledger.record(record);
+  // Revision 6 has no copy frame, and even undid an earlier placement of the same route.
+  await ledger.reconcile("ws-1", "chat-1", docAt(6), [COPY_KEY]);
+  assert.deepEqual(trashed, []);
+  assert.equal(ledger.list("ws-1")[0]?.state, "present", "kept for the copy's own undo");
+  await ledger.reconcile("ws-1", "chat-1", docAt(8), [COPY_KEY]);
+  assert.deepEqual(trashed, [COPY_FILE], "the undo of the copy itself still trashes it");
+});
+
+test("an action's own revision moves forward, so an older save can't turn it back", async () => {
+  const { ledger, files, written } = harness();
+  const record = copyRecord();
+  files.set(COPY_FILE, record.bytes);
+  ledger.record(record);
+  await ledger.reconcile("ws-1", "chat-1", docAt(20), [COPY_KEY]);
+  assert.equal(ledger.list("ws-1")[0]?.state, "trashed");
+  // A save from before that undo (the frame still there) arrives late: the copy isn't written back.
+  await ledger.reconcile("ws-1", "chat-1", docAt(19, "copy-frame"), []);
+  assert.deepEqual(written, []);
+  await ledger.reconcile("ws-1", "chat-1", docAt(21, "copy-frame"), []);
+  assert.deepEqual(written, [COPY_FILE], "a newer redo still does");
+});
+
+test("a record replaced while an earlier action waits is left to its replacement", async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const { ledger, files, written } = harness({ trashGate: () => gate });
+  const copy = copyRecord();
+  files.set(COPY_FILE, copy.bytes);
+  ledger.record(copy);
+  ledger.record(trashRecord({ frameIds: ["about-1"] }));
+  // Save 32 undoes the copy (its trash waits) and shows about.tsx's frame.
+  const run = ledger.reconcile("ws-1", "chat-1", docAt(32, "about-1"), [COPY_KEY]);
+  await new Promise((resolve) => setImmediate(resolve));
+  // Meanwhile the record of a newer Trash of about.tsx (revision 31) lands, with other bytes.
+  const newer = bytes("export default function About() { return 2; }\n");
+  ledger.record(trashRecord({ revision: 31, frameIds: ["about-1"], bytes: newer, digest: pageDigest(newer) }));
+  release();
+  await run;
+  assert.deepEqual(written, [TRASH_FILE], "written once, from the newer record");
+  assert.deepEqual(files.get(TRASH_FILE), newer);
 });

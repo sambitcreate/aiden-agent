@@ -482,6 +482,8 @@ const STATEMENT_STARTS = new Set(["export", "import", "const", "let", "var", "fu
 class ConfigReader {
   routes: string[] = [];
   flat = false;
+  /** Anything beside or around the flat routes: a prefix, layout, index or route call. */
+  mixed = false;
   position = 0;
   constructor(private readonly tokens: TsToken[]) {}
 
@@ -598,11 +600,15 @@ class ConfigReader {
 
   private element(prefix: readonly string[], depth: number): boolean {
     if (this.take("...", "punct")) {
-      if (this.peek()?.value === "prefix") return this.prefixCall(prefix, depth);
+      if (this.peek()?.value === "prefix") {
+        this.mixed = true;
+        return this.prefixCall(prefix, depth);
+      }
       if (!this.flatCall()) return false;
       this.flat = true;
       return true;
     }
+    this.mixed = true;
     if (this.peek()?.value === "prefix" && this.peek()?.kind === "id") return this.prefixCall(prefix, depth);
     const name = this.peek();
     if (name?.kind !== "id" || this.peek(1)?.value !== "(") return false;
@@ -629,8 +635,13 @@ class ConfigReader {
   }
 }
 
-/** A literal `app/routes.ts` (`index()`, `route()`, `layout()`, `prefix()` calls with string literals) as patterns; `{flat: true}` for `flatRoutes()`; null for any other code. */
-export function parseReactRouterConfig(text: string): { routes: string[] } | { flat: true } | null {
+/**
+ * A literal `app/routes.ts` (`index()`, `route()`, `layout()`, `prefix()`
+ * calls with string literals) as patterns; `{flat: true}` for `flatRoutes()`,
+ * with `mixed` when other calls sit beside or around it (so a file's route is
+ * not just its name); null for any other code.
+ */
+export function parseReactRouterConfig(text: string): { routes: string[] } | { flat: true; mixed?: true } | null {
   const tokens = scanTsTokens(text);
   if (!tokens) return null;
   let start = -1;
@@ -645,7 +656,8 @@ export function parseReactRouterConfig(text: string): { routes: string[] } | { f
   reader.position = start;
   if (tokens[start]?.value !== "[") return reader.flatDefault() && reader.endsExport() ? { flat: true } : null;
   if (!reader.array([], 0) || !reader.endsExport()) return null;
-  return reader.flat ? { flat: true } : { routes: reader.routes };
+  if (!reader.flat) return { routes: reader.routes };
+  return reader.mixed ? { flat: true, mixed: true } : { flat: true };
 }
 
 // ---- The merge with canvas.json (S81) ----

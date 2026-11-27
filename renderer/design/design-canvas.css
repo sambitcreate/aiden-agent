@@ -6,7 +6,7 @@
   border: 0;
   border-radius: 2px;
   background: var(--color-background);
-  box-shadow: var(--shadow-control);
+  box-shadow: var(--elevation-control);
 }
 
 .studio-canvas .react-flow__resize-control.design-resize-line {
@@ -240,7 +240,7 @@ main:has(.design-presenting) {
   padding: 4px 8px;
   border-radius: var(--radius-menu);
   background: var(--surface-popover);
-  box-shadow: var(--shadow-popover);
+  box-shadow: var(--elevation-popover);
   color: var(--text-primary);
   white-space: nowrap;
 }

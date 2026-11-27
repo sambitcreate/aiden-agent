@@ -4,8 +4,10 @@
 // away again. Memory only, per workspace, newest 16 kept; one record per
 // file. It acts only on a signal it can read exactly in a committed save
 // (a frame gone with its route in that save's `undoneRoutes`, or a frame
-// back), only inside the file's lock, and only while `canAct` still holds.
-// Anything else forgets the record and leaves the file alone.
+// back), only for a save newer than the record's own revision (so a save
+// queued from before the action can't undo it), only inside the file's lock,
+// and only while `canAct` still holds. Anything else forgets the record and
+// leaves the file alone.
 
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -32,6 +34,12 @@ type RecordBase = {
   bytes: Buffer;
   mode: number;
   digest: string;
+  /**
+   * The canvas revision of the save that made this record's state: the
+   * action's own commit, then each undo or redo the ledger followed. Only a
+   * later save acts on it, so a save queued from before can't turn it back.
+   */
+  revision: number;
 };
 
 /** Duplicate page as variant's copy. `newFolder` is set when the copy needed its folder made, so a trash may remove it once empty. */
@@ -109,22 +117,33 @@ export class PageFileLedger {
     if (index >= 0) list[index] = next;
   }
 
+  /** Whether `record` is still the one kept for its file (not replaced, dropped or pushed out). */
+  private live(record: PageLedgerRecord): boolean {
+    return (this.records.get(record.workspaceId) ?? []).includes(record);
+  }
+
   private async apply(workspaceId: string, chatId: string, doc: DesignCanvas, undone: ReadonlySet<string>): Promise<void> {
     const ids = new Set(doc.frames.map((frame) => frame.id));
-    for (const record of [...(this.records.get(workspaceId) ?? [])]) {
-      if (record.chatId !== chatId) continue;
+    const seen = new Set<PageLedgerRecord>();
+    // Re-read the list after every action: a record kept meanwhile (a newer action on the same file) is read too, and one replaced is not.
+    for (;;) {
+      const record = (this.records.get(workspaceId) ?? []).find((entry) => entry.chatId === chatId && !seen.has(entry));
+      if (!record) return;
+      seen.add(record);
+      // A save committed no later than the record's own state can't speak for it.
+      if (doc.revision <= record.revision) continue;
       if (record.kind === "copy") {
         const present = ids.has(record.frameId);
         if (record.state === "present" && !present) {
           // Only the person's undo of the placement takes the copy away; their own removal keeps it.
-          if (undone.has(appRouteKey(record.appRoot, record.route))) await this.trashCopy(record);
+          if (undone.has(appRouteKey(record.appRoot, record.route))) await this.trashCopy(record, doc.revision);
           else this.drop(record);
         } else if (record.state === "trashed" && present) {
-          await this.writeBack(record);
+          await this.writeBack(record, doc.revision);
         }
       } else {
         const back = record.frameIds.some((id) => ids.has(id));
-        if (record.state === "trashed" && back) await this.writeBack(record);
+        if (record.state === "trashed" && back) await this.writeBack(record, doc.revision);
         // A redo of the Trash removes the frames again but never trashes the file again (S96).
         else if (record.state === "restored" && !back) this.drop(record);
       }
@@ -139,9 +158,11 @@ export class PageFileLedger {
    * Inside the file's lock: the gate, then (for a file that should be there)
    * the confined target, then `act`. A refused gate or target forgets the
    * record. A write confines itself, since its folder may need making again.
+   * A record replaced while it waited for the lock is left to its replacement.
    */
   private async locked(record: PageLedgerRecord, existing: boolean, act: (absolute: string) => Promise<void>): Promise<void> {
     await this.deps.lock(this.absolute(record), async () => {
+      if (!this.live(record)) return;
       if (!(await this.deps.canAct(record.chatId, record.workspaceId, record.workspaceRoot).catch(() => false))) {
         this.drop(record);
         return;
@@ -164,7 +185,7 @@ export class PageFileLedger {
     this.deps.notify({ chatId: record.chatId, file: record.file, failed, reason });
   }
 
-  private trashCopy(record: PageCopyRecord): Promise<void> {
+  private trashCopy(record: PageCopyRecord, revision: number): Promise<void> {
     return this.locked(record, true, async (absolute) => {
       const read = await this.deps.read(absolute).catch((): ReadResult => ({ ok: false, reason: "io" }));
       if (!read.ok) {
@@ -184,12 +205,12 @@ export class PageFileLedger {
         return;
       }
       if (record.newFolder) await this.deps.removeEmptyFolder(path.dirname(absolute)).catch(() => undefined);
-      this.replace(record, { ...record, state: "trashed" });
+      this.replace(record, { ...record, state: "trashed", revision });
       this.deps.notify({ chatId: record.chatId, file: record.file, done: "trash" });
     });
   }
 
-  private writeBack(record: PageLedgerRecord): Promise<void> {
+  private writeBack(record: PageLedgerRecord, revision: number): Promise<void> {
     return this.locked(record, false, async () => {
       const create = record.kind === "copy" && record.newFolder === true;
       const written = await this.deps
@@ -199,7 +220,7 @@ export class PageFileLedger {
         this.fail(record, "restore", written.reason === "exists" ? "exists" : "io");
         return;
       }
-      this.replace(record, record.kind === "copy" ? { ...record, state: "present" } : { ...record, state: "restored" });
+      this.replace(record, record.kind === "copy" ? { ...record, state: "present", revision } : { ...record, state: "restored", revision });
       this.deps.notify({ chatId: record.chatId, file: record.file, done: "restore" });
     });
   }

@@ -251,6 +251,43 @@ export function applyNodeChanges(
  * are unlocked. All or nothing: a copy that would pass the frame limit
  * returns `doc` unchanged.
  */
+/**
+ * One undo step per drag or resize. The first change of a gesture that alters
+ * the canvas records the step (a first change that rounds back to the same
+ * document records nothing, so the next one must); later changes join it, and
+ * the gesture's last change ends it. `gesture` is the canvas's own flag.
+ */
+export function gestureEdit(
+  gesture: { current: boolean },
+  edits: readonly NodeChange<DesignNode>[],
+  mutate: (doc: DesignCanvas) => DesignCanvas,
+): { record: boolean; mutate: (doc: DesignCanvas) => DesignCanvas } {
+  const flags = edits.map((entry) =>
+    entry.type === "position" ? entry.dragging : entry.type === "dimensions" ? entry.resizing : undefined,
+  );
+  if (flags.includes(true)) {
+    if (gesture.current) return { record: false, mutate };
+    // The gesture starts with the first change that alters the canvas, the
+    // first time it runs (a save conflict replays the same change later).
+    let first = true;
+    return {
+      record: true,
+      mutate: (doc) => {
+        const next = mutate(doc);
+        if (first && next !== doc) gesture.current = true;
+        first = false;
+        return next;
+      },
+    };
+  }
+  if (flags.includes(false)) {
+    const record = !gesture.current;
+    gesture.current = false;
+    return { record, mutate };
+  }
+  return { record: true, mutate };
+}
+
 export function duplicateFrames(
   doc: DesignCanvas,
   ids: string[],
