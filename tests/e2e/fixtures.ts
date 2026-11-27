@@ -217,6 +217,8 @@ type AidenE2eOptions = {
   workspaceSeed: boolean;
   /** Extra variables for the app process, such as experimental feature flags. */
   appEnvironment: Record<string, string>;
+  /** Extra test-only Chromium switches for the app process, before the app path. */
+  appArgs: string[];
   /**
    * Routes OpenRouter to a loopback fake and provides a test-only image-generation
    * key via env (the image registry never reads the chat OPENROUTER_API_KEY).
@@ -1118,10 +1120,11 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
   portableConfigSeed: ["lmstudio", { option: true }],
   workspaceSeed: [false, { option: true }],
   appEnvironment: [{}, { option: true }],
+  appArgs: [[], { option: true }],
   fakeOpenRouter: [false, { option: true }],
   isolatedKeychain: [false, { option: true }],
   aiden: async (
-    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment, fakeOpenRouter, isolatedKeychain },
+    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment, appArgs, fakeOpenRouter, isolatedKeychain },
     use,
     testInfo,
   ) => {
@@ -1215,6 +1218,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           "--force-renderer-accessibility",
           "--force-prefers-reduced-motion=reduce",
           `--user-data-dir=${testUserDataDir}`,
+          ...appArgs,
           REPOSITORY_ROOT,
         ];
         const launchedApp = await electron.launch({
