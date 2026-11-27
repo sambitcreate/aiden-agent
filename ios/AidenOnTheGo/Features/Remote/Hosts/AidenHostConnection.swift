@@ -330,13 +330,16 @@ final class AidenHostConnection {
     /// Existing pairings predate the progress opt-in field. Upgrade them only
     /// after the authenticated server advertises the matching feature. A
     /// failed additive negotiation is non-fatal and leaves progress hidden.
+    /// A `/server` answer for another instance is not: the connection goes
+    /// offline, as on the first check, and this returns false.
+    @discardableResult
     func negotiateProgressCapabilitiesIfNeeded(
         server: AidenServer,
         client: AidenRemoteClient,
         attempt: Int,
         over route: ConnectRoute = .interactive
-    ) async {
-        guard isCurrent(attempt: attempt) else { return }
+    ) async -> Bool {
+        guard isCurrent(attempt: attempt) else { return true }
         var requested: [AidenRemoteCapability] = []
         if server.supportsChatTasks { requested.append(.tasksRead) }
         if server.supportsChatAgents { requested.append(.agentsRead) }
@@ -347,26 +350,31 @@ final class AidenHostConnection {
         if server.supportsBotCards { requested.append(.botCards) }
         if server.offersBotActivity { requested.append(.botActivity) }
         if server.features.contains("chat-ui-panels-enabled-v1") { requested.append(contentsOf: [.appControlsRead, .appControlsRespond]) }
-        guard !requested.isEmpty, let installation = savedInstallation else { return }
+        guard !requested.isEmpty, let installation = savedInstallation else { return true }
         let missing = requested.filter {
             !installation.deviceCapabilities.contains($0)
                 || installation.serverCapabilities?.contains($0) != true
         }
-        guard !missing.isEmpty else { return }
+        guard !missing.isEmpty else { return true }
         do {
             let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: missing)
-            guard isCurrent(attempt: attempt) else { return }
+            guard isCurrent(attempt: attempt) else { return true }
             let refreshedServer = try await client.server()
-            guard isCurrent(attempt: attempt), refreshedServer.instanceId == instanceId else { return }
+            guard isCurrent(attempt: attempt) else { return true }
+            guard refreshedServer.instanceId == instanceId else {
+                await record(AidenRemoteContractError.invalidPairingExchange, over: route)
+                return false
+            }
             try delegate?.hostConnection(self, didNegotiate: negotiatedCapabilities, confirmedBy: refreshedServer)
             self.server = refreshedServer
         } catch let error where aidenIsCancellation(error) {
-            return
+            return true
         } catch {
             // Feature discovery and the device-capability update are additive;
             // older Macs remain connected with the existing feature set.
             await handleRevocationDuringNegotiation(error, attempt: attempt, over: route)
         }
+        return true
     }
 
     // MARK: Writes from the owner
@@ -542,9 +550,9 @@ final class AidenHostConnection {
         self.server = server
         applyWorkspaceSnapshot(workspaces)
         await refreshDeviceIdentity(using: client, currentName: server.deviceName)
-        await negotiateProgressCapabilitiesIfNeeded(server: server, client: client, attempt: attempt, over: route)
+        guard await negotiateProgressCapabilitiesIfNeeded(server: server, client: client, attempt: attempt, over: route) else { return }
         for capabilities in Self.capabilitiesAskedForAlone {
-            await negotiateCapabilityAloneIfNeeded(capabilities, client: client, attempt: attempt, over: route)
+            guard await negotiateCapabilityAloneIfNeeded(capabilities, client: client, attempt: attempt, over: route) else { return }
         }
     }
 
@@ -617,32 +625,38 @@ final class AidenHostConnection {
         client: AidenRemoteClient,
         attempt: Int,
         over route: ConnectRoute
-    ) async {
+    ) async -> Bool {
         guard isCurrent(attempt: attempt),
               let server = self.server, server.instanceId == instanceId,
               let first = capabilities.first, server.serverCapabilities?.contains(first) == true,
               let installation = savedInstallation else {
-            return
+            return true
         }
         let missing = capabilities.filter {
             server.serverCapabilities?.contains($0) == true && !installation.hasNegotiatedAccess(to: $0)
         }
-        guard !missing.isEmpty else { return }
+        guard !missing.isEmpty else { return true }
         do {
             let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: missing)
-            guard isCurrent(attempt: attempt) else { return }
+            guard isCurrent(attempt: attempt) else { return true }
             let refreshedServer = try await client.server()
-            guard isCurrent(attempt: attempt), refreshedServer.instanceId == instanceId else { return }
+            guard isCurrent(attempt: attempt) else { return true }
+            guard refreshedServer.instanceId == instanceId else {
+                // Another instance answered: stop, as the first check does.
+                await record(AidenRemoteContractError.invalidPairingExchange, over: route)
+                return false
+            }
             try delegate?.hostConnection(self, didNegotiate: negotiatedCapabilities, confirmedBy: refreshedServer)
             self.server = refreshedServer
         } catch let error where aidenIsCancellation(error) {
-            return
+            return true
         } catch {
             // A Mac without the route, or a refusal (400 or 404), keeps the
             // grants the device already has: hand-offs stay on the Mac, and
             // scheduled-task approvals keep the summary card.
             await handleRevocationDuringNegotiation(error, attempt: attempt, over: route)
         }
+        return true
     }
 
     private func handleRevocationDuringNegotiation(_ error: Error, attempt: Int, over route: ConnectRoute) async {

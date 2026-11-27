@@ -5377,6 +5377,75 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    /// A `/server` answer for another instance after a grant call stops the
+    /// connection, as the first check does: it goes offline, keeps the pairing,
+    /// saves none of the grants and asks for nothing more.
+    @MainActor
+    func testAForeignServerAnswerAfterAGrantCallTakesTheConnectionOffline() async throws {
+        // After the progress batch, and after a grant asked for alone.
+        for afterProgressBatch in [true, false] {
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-own", deviceId: "device-own", credential: "credential-own"),
+                trust: makeSystemTrust(),
+                name: "Own Mac"
+            )
+            let session = makeSession()
+            var serverRequests = 0
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    serverRequests += 1
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": serverRequests == 1 ? "instance-own" : "instance-other",
+                        "name": "Own Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": ["server:read", "workspace:read"],
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read", "bot:handoffs"],
+                        "features": afterProgressBatch ? ["chat-tasks-v1"] : [],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-09-14T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    let granted = ["server:read", "workspace:read"] + asked
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+
+            let label = afterProgressBatch ? "after the progress batch" : "after a grant asked for alone"
+            guard case .offline = coordinator.connectionState else {
+                return XCTFail("\(label): expected offline, got \(coordinator.connectionState)")
+            }
+            XCTAssertEqual(accepts, [afterProgressBatch ? ["tasks:read"] : ["bot:handoffs"]], "\(label): nothing more is asked for")
+            let reloaded = AidenInstallationStore(keychain: keychain)
+            XCTAssertEqual(reloaded.installations.map(\.id), ["instance-own"], "\(label): the pairing stays")
+            let installation = try XCTUnwrap(reloaded.activeInstallation)
+            XCTAssertFalse(installation.deviceCapabilities.contains(.tasksRead), label)
+            XCTAssertFalse(installation.deviceCapabilities.contains(.botHandoffs), label)
+        }
+    }
+
     /// Contract revision 37: `bot:handoffs` is asked for alone, after the
     /// progress batch, so a Mac that refuses the name (a 400 for the whole
     /// request) cannot cost the device the batch's grants.
