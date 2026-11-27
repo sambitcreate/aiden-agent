@@ -732,9 +732,13 @@ export async function portHolders(
 /**
  * What `processEnvironmentMarks` read: the pids whose starting environment
  * carries the prefix, and the ones it couldn't read. `gone` are the
- * unreadable ones that had exited by the end of the read.
+ * unreadable ones that had exited by the end of the read; `changed` are the
+ * unreadable ones whose command changed between macOS's two reads (an
+ * `exec` in place mid-read), so the read says nothing about what runs now.
  */
-export type EnvironmentMarks = { ok: true; marked: Set<number>; unreadable: Set<number>; gone: Set<number> } | { ok: false; reason: string };
+export type EnvironmentMarks =
+  | { ok: true; marked: Set<number>; unreadable: Set<number>; gone: Set<number>; changed: Set<number> }
+  | { ok: false; reason: string };
 
 /**
  * Which of these processes started with an environment entry beginning
@@ -745,14 +749,16 @@ export type EnvironmentMarks = { ok: true; marked: Set<number>; unreadable: Set<
  * Apple's platform binaries (and a process with an empty environment), whose
  * two lines then match, so those are unreadable. A process that left between
  * the reads is unreadable too, and `gone` when the later, plain `ps` no
- * longer shows it (Linux: when it no longer exists).
+ * longer shows it (Linux: when it no longer exists). One both reads show but
+ * running different commands exec'd between them: unreadable, and `changed`.
  */
 export async function processEnvironmentMarks(pids: readonly number[], prefix: string, deps: SocketReaderDeps): Promise<EnvironmentMarks> {
   const wanted = [...new Set(pids)].filter((pid) => Number.isSafeInteger(pid) && pid > 1);
   const marked = new Set<number>();
   const unreadable = new Set<number>();
   const gone = new Set<number>();
-  if (!wanted.length) return { ok: true, marked, unreadable, gone };
+  const changed = new Set<number>();
+  if (!wanted.length) return { ok: true, marked, unreadable, gone, changed };
   if (wanted.length > MAX_SCAN_PIDS) return { ok: false, reason: "too many processes" };
   if (deps.platform === "linux") {
     for (const pid of wanted) {
@@ -764,7 +770,7 @@ export async function processEnvironmentMarks(pids: readonly number[], prefix: s
         if (!deps.processExists(pid)) gone.add(pid);
       }
     }
-    return { ok: true, marked, unreadable, gone };
+    return { ok: true, marked, unreadable, gone, changed };
   }
   if (deps.platform === "darwin") {
     const list = wanted.join(",");
@@ -792,12 +798,14 @@ export async function processEnvironmentMarks(pids: readonly number[], prefix: s
       if (line === undefined || command === undefined || !line.startsWith(command) || line.length === command.length) {
         unreadable.add(pid);
         if (command === undefined) gone.add(pid);
+        // `ps -E` prints the command and then the environment, so a line that doesn't start with the command ran another one.
+        else if (line !== undefined && !line.startsWith(command)) changed.add(pid);
         continue;
       }
       // Fail closed: an argument that only looks like the entry counts as one.
       if (line.slice(command.length).split(/\s+/u).some((entry) => entry.startsWith(prefix))) marked.add(pid);
     }
-    return { ok: true, marked, unreadable, gone };
+    return { ok: true, marked, unreadable, gone, changed };
   }
   return { ok: false, reason: "unsupported platform" };
 }
