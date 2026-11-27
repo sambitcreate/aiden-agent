@@ -15,6 +15,7 @@ import {
   foregroundCommandName,
   parseForegroundState,
   parseProcStatCpuMs,
+  readForegroundState,
   type ForegroundState,
 } from "./terminal.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
@@ -1376,6 +1377,46 @@ test("Linux /proc stat reads as the process's CPU time", () => {
   assert.equal(parseProcStatCpuMs(`4242 (my (odd) shell) ${rest}`), 1500);
   assert.equal(parseProcStatCpuMs("4242 (zsh"), null);
   assert.equal(parseProcStatCpuMs("4242 (zsh) S 1"), null);
+});
+
+test("the foreground state comes from ps, with Linux CPU time from /proc", async () => {
+  const row = " 4242  4242  4242 Ss+  00:00:01";
+  const procStat = "4242 (bash) S 1 4242 4242 34816 4242 4194304 1000 0 0 0 125 25 0 0 20 0 1 0 100 0 0";
+  const errno = (code: string) => Object.assign(new Error(code), { code });
+  const io = (platform: NodeJS.Platform, ps: string | null, stat: () => Promise<string>) => ({
+    platform,
+    ps: async () => ps,
+    procStat: async (pid: number) => {
+      assert.equal(pid, 4242);
+      return stat();
+    },
+  });
+  const linuxState = { group: 4242, running: false, children: 0 };
+
+  // macOS ps counts hundredths, so it answers alone.
+  const mac = await readForegroundState(4242, io("darwin", " 4242 4242 4242 S+ 0:00.50", () => {
+    throw new Error("/proc read on macOS");
+  }));
+  assert.deepEqual(mac, { group: 4242, running: false, children: 0, cpuMs: 500 });
+  assert.deepEqual(await readForegroundState(4242, io("linux", row, async () => procStat)), { ...linuxState, cpuMs: 1500 });
+  // An unreadable /proc leaves CPU time unknown; the rest of the reading stands.
+  assert.deepEqual(await readForegroundState(4242, io("linux", row, async () => Promise.reject(errno("EACCES")))), {
+    ...linuxState,
+    cpuMs: null,
+  });
+  // A shell that exited after ps ran is gone: its stale reading must not say busy.
+  for (const code of ["ENOENT", "ESRCH"]) {
+    const busyRow = " 4242  4242  4242 R+  00:00:01";
+    assert.equal(await readForegroundState(4242, io("linux", busyRow, async () => Promise.reject(errno(code)))), null);
+  }
+  // ps failed, or the shell is not in its table.
+  assert.equal(await readForegroundState(4242, io("linux", null, async () => procStat)), null);
+  assert.equal(await readForegroundState(4242, io("linux", " 1 1 0 Ss 0:00.00", async () => procStat)), null);
+});
+
+test("the system ps answers for a process that is gone as unknown", async () => {
+  // A pid above any kernel's limit: the real ps runs and lists no such process.
+  assert.equal(await readForegroundState(2 ** 31 - 1), null);
 });
 
 test("a closed PTY reads as idle instead of throwing", async (t) => {

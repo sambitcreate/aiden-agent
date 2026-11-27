@@ -218,27 +218,48 @@ export function parseProcStatCpuMs(stat: string): number | null {
   return Number.isFinite(ticks) ? ticks * PROC_STAT_TICK_MS : null;
 }
 
-function readForegroundState(shellPid: number): Promise<ForegroundState | null> {
-  return new Promise((resolve) => {
-    execFile(
-      "ps",
-      // Separate -o flags: a comma list with `=` headers is not portable to BSD ps.
-      ["-A", "-o", "pid=", "-o", "pgid=", "-o", "tpgid=", "-o", "stat=", "-o", "time="],
-      { timeout: FOREGROUND_GROUP_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
-      (error, stdout) => {
-        const state = error ? null : parseForegroundState(stdout, shellPid);
-        if (!state || process.platform !== "linux") {
-          resolve(state);
-          return;
-        }
-        // Linux ps counts whole seconds, too coarse for the confirm wait.
-        void fs
-          .readFile(`/proc/${shellPid}/stat`, "utf8")
-          .then(parseProcStatCpuMs, () => null)
-          .then((cpuMs) => resolve({ ...state, cpuMs }));
-      },
-    );
-  });
+/** What `readForegroundState` reads from the system. */
+export interface ForegroundStateIo {
+  platform: NodeJS.Platform;
+  /** The `ps` table described at `parseForegroundState`, or null when ps failed. */
+  ps: () => Promise<string | null>;
+  /** Linux `/proc/<pid>/stat`; rejects with the read's errno. */
+  procStat: (pid: number) => Promise<string>;
+}
+
+const systemForegroundStateIo: ForegroundStateIo = {
+  platform: process.platform,
+  ps: () =>
+    new Promise((resolve) => {
+      execFile(
+        "ps",
+        // Separate -o flags: a comma list with `=` headers is not portable to BSD ps.
+        ["-A", "-o", "pid=", "-o", "pgid=", "-o", "tpgid=", "-o", "stat=", "-o", "time="],
+        { timeout: FOREGROUND_GROUP_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
+        (error, stdout) => resolve(error ? null : stdout),
+      );
+    }),
+  procStat: (pid) => fs.readFile(`/proc/${pid}/stat`, "utf8"),
+};
+
+/** Errors that mean the process itself is gone, not that its file is unreadable. */
+const PROCESS_GONE_CODES = new Set(["ENOENT", "ESRCH"]);
+
+export async function readForegroundState(
+  shellPid: number,
+  io: ForegroundStateIo = systemForegroundStateIo,
+): Promise<ForegroundState | null> {
+  const output = await io.ps();
+  const state = output === null ? null : parseForegroundState(output, shellPid);
+  if (!state || io.platform !== "linux") return state;
+  // Linux ps counts whole seconds, too coarse for the confirm wait.
+  try {
+    return { ...state, cpuMs: parseProcStatCpuMs(await io.procStat(shellPid)) };
+  } catch (error) {
+    // The shell exited after ps ran, so that reading is stale.
+    if (PROCESS_GONE_CODES.has((error as NodeJS.ErrnoException).code ?? "")) return null;
+    return { ...state, cpuMs: null };
+  }
 }
 
 function terminalId(): string {
