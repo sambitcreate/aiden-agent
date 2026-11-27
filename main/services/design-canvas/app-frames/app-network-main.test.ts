@@ -553,6 +553,56 @@ test("a local server two workspaces' frames both reach keeps its worker and its 
   assert.deepEqual(await service.list(), []);
 });
 
+test("a workspace that reaches a local server while another workspace's end is still clearing keeps that server's worker", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-sw-race-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const cleared: string[] = [];
+  let hold: Promise<void> | null = null;
+  let clearing!: () => void;
+  const service = createAppServiceWorkerOrigins({
+    file: path.join(dir, "origins.json"),
+    session: {
+      clearStorageData: async ({ origin }) => {
+        if (hold) {
+          clearing();
+          await hold;
+        }
+        cleared.push(origin);
+      },
+    },
+  });
+  const SECOND = "http://127.0.0.1:5174";
+  const SHARED = "http://127.0.0.1:4321";
+  const workspaceOf: Record<string, string> = { [ORIGIN]: "ws-1", [SECOND]: "ws-2" };
+  const s = setup({
+    serviceWorkers: service,
+    isAppOrigin: (origin) => origin in workspaceOf,
+    appForOrigin: (origin) => (workspaceOf[origin] ? { workspaceId: workspaceOf[origin]!, appRoot: "." } : undefined),
+  });
+  const one = s.admit(7, "f1", ORIGIN);
+  const two = s.admit(8, "f2", SECOND);
+  s.request({ url: `${SHARED}/login`, frame: one, webContentsId: 1, resourceType: "subFrame" });
+  await service.list();
+  cleared.length = 0; // the startup clear
+
+  // ws-1 ends; its first clear is still in flight when ws-2's frame reaches the same server.
+  let release!: () => void;
+  hold = new Promise<void>((resolve) => (release = resolve));
+  const started = new Promise<void>((resolve) => (clearing = resolve));
+  const ending = s.network!.forgetWorkspace("ws-1");
+  await started;
+  hold = null;
+  s.request({ url: `${SHARED}/login`, frame: two, webContentsId: 1, resourceType: "subFrame" });
+  release();
+  await ending;
+  assert.deepEqual(cleared, [ORIGIN], "the server ws-2 now uses keeps its worker");
+  assert.ok((await service.list()).includes(SHARED), "and stays listed");
+
+  await s.network!.forgetWorkspace("ws-2");
+  assert.deepEqual(new Set(cleared), new Set([ORIGIN, SECOND, SHARED]), "ws-2's end still clears it");
+  assert.deepEqual(await service.list(), []);
+});
+
 test("disposing removes every subscriber, so the session has no listener left", () => {
   const s = setup();
   s.network!.dispose();

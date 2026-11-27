@@ -423,13 +423,15 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
       const origins = workspaceOrigins.get(workspaceId);
       workspaceOrigins.delete(workspaceId);
       // An origin another workspace's frames also reached keeps its worker and
-      // its record: a session's worker is per origin, so clearing it now would
+      // its record: a session's worker is per origin, so clearing it would
       // pull it from under a page that is still live. It is cleared when the
-      // last workspace that reached it ends, or at the next start.
-      const stillOwned = new Set([...workspaceOrigins.values()].flatMap((set) => [...set]));
-      const ending = [...(origins ?? [])].filter((origin) => !stillOwned.has(origin));
+      // last workspace that reached it ends, or at the next start. Ownership
+      // is asked live, inside the serialized clear, so a workspace that reaches
+      // the origin while this clear waits keeps it too.
+      const owned = (origin: string) => [...workspaceOrigins.values()].some((set) => set.has(origin));
+      const ending = [...(origins ?? [])].filter((origin) => !owned(origin));
       if (ending.length === 0 || !deps.serviceWorkers) return;
-      await deps.serviceWorkers.clear(ending).catch(() => undefined);
+      await deps.serviceWorkers.clear(ending, owned).catch(() => undefined);
     },
     dispose() {
       for (const remove of removals.splice(0)) remove();
