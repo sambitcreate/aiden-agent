@@ -4376,6 +4376,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
     />
   );
 
+  const reasoningVisibilityControl = (
+    <ReasoningVisibilityControl
+      visible={showLocalModelReasoning}
+      disabled={modelChangeBlocked}
+      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
+    />
+  );
+
   return (
     <>
       <ScrollArea
@@ -4884,17 +4892,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
                   stopSetsEffort && !localReasoningVisibilitySupported ? undefined : stopSetsEffort ? (
-                    <ReasoningVisibilityControl
-                      visible={showLocalModelReasoning}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
-                    />
+                    reasoningVisibilityControl
                   ) : googleThinkingSupported ? (
                     <ThinkingControl
                       level={ownLevelIn(googleThinkingLevels) ?? googleThinkingLevel}
                       levels={googleThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabled={modelChangeBlocked}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeGoogleThinking(level)}
                     />
@@ -4903,7 +4907,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       providerLabel="Codex"
                       level={ownLevelIn(codexThinkingLevels) ?? codexThinkingLevel}
                       levels={codexThinkingLevels}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabled={modelChangeBlocked}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeCodexThinking(level)}
                     />
@@ -4913,7 +4917,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       level={ownLevelIn(anthropicThinkingLevels) ?? anthropicThinkingLevel}
                       levels={anthropicThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabled={modelChangeBlocked}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeAnthropicThinking(level)}
                     />
@@ -4924,16 +4928,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       levels={providerThinkingLevels}
                       canDisable={selectedProvider?.kind === "openai" && customModelThinkingLevels(thinkingMetadata?.overrides)
                         ? providerThinkingLevels.includes("off") : thinkingMetadata?.thinkingCanDisable !== false}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabled={modelChangeBlocked}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeProviderThinking(level)}
                     />
                   ) : localReasoningVisibilitySupported ? (
-                    <ReasoningVisibilityControl
-                      visible={showLocalModelReasoning}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
-                    />
+                    reasoningVisibilityControl
                   ) : undefined
                 }
                 contextMeter={
@@ -4941,15 +4941,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     <ContextMeter
                       onViewDetails={() => environmentPanel.showTools("context")}
                       pressure={contextPressure}
-                      compacting={
-                        contextCompactPending ||
-                        (displayedGenerationTimeline?.steps.some(
-                          (step) =>
-                            isToolStep(step) &&
-                            step.toolName === "compact_context" &&
-                            (step.status === "pending" || step.status === "running"),
-                        ) ?? false)
-                      }
+                      compacting={contextCompactPending || timelineCompacting}
                       recentlyCompacted={contextCompactedFlash}
                     />
                   )
