@@ -397,72 +397,32 @@ struct AidenBotProfileView: View {
                 }
 
                 if coordinator.botServer(on: machine)?.supportsBotOpenWork == true {
-                    NavigationLink {
+                    AidenBotProfileLinkRow(symbol: "checklist", title: "Open work") {
                         AidenBotOpenWorkView(coordinator: coordinator, machine: machine, botID: detail.id)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "checklist").foregroundStyle(palette.secondary).accessibilityHidden(true)
-                            Text("Open work").foregroundStyle(palette.foreground)
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
-                                .foregroundStyle(palette.secondary).accessibilityHidden(true)
-                        }
-                        .padding(16)
-                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .accessibilityElement(children: .combine)
                     }
-                    .buttonStyle(.plain).padding(.top, 8)
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
                 }
 
                 if coordinator.botServer(on: machine)?.supportsBotPeers == true {
-                    NavigationLink {
+                    AidenBotProfileLinkRow(symbol: "bubble.left.and.bubble.right", title: "Bot peers") {
                         AidenBotPeersView(coordinator: coordinator, machine: machine, botID: detail.id, botName: detail.name)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(palette.secondary).accessibilityHidden(true)
-                            Text("Bot peers").foregroundStyle(palette.foreground)
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(palette.secondary).accessibilityHidden(true)
-                        }
-                        .padding(16)
-                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .accessibilityElement(children: .combine)
-                    }.buttonStyle(.plain).padding(.top, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
                 }
 
                 if coordinator.botServer(on: machine)?.supportsBotRoutineModels == true {
-                    NavigationLink {
+                    AidenBotProfileLinkRow(symbol: "slider.horizontal.3", title: "Routine models") {
                         AidenBotRoutineModelDirectoryView(coordinator: coordinator, machine: machine, botID: detail.id)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "slider.horizontal.3").foregroundStyle(palette.secondary).accessibilityHidden(true)
-                            Text("Routine models").foregroundStyle(palette.foreground)
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
-                                .foregroundStyle(palette.secondary).accessibilityHidden(true)
-                        }
-                        .padding(16)
-                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .accessibilityElement(children: .combine)
                     }
                     .buttonStyle(.plain)
                     .padding(.top, 8)
                 }
 
                 if coordinator.botServer(on: machine)?.supportsBotWatches == true {
-                    NavigationLink {
+                    AidenBotProfileLinkRow(symbol: "bell.badge", title: "Watches") {
                         AidenBotWatchesView(coordinator: coordinator, machine: machine, botID: detail.id)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "bell.badge").foregroundStyle(palette.secondary).accessibilityHidden(true)
-                            Text("Watches").foregroundStyle(palette.foreground)
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
-                                .foregroundStyle(palette.secondary).accessibilityHidden(true)
-                        }
-                        .padding(16)
-                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .accessibilityElement(children: .combine)
                     }
                     .buttonStyle(.plain)
                     .padding(.top, 8)
@@ -601,26 +561,10 @@ struct AidenBotProfileView: View {
     }
 
     private func instructionsRow(_ detail: AidenBotDetail) -> some View {
-        NavigationLink {
+        AidenBotProfileLinkRow(symbol: "doc.text", title: "Instructions") {
             AidenBotInstructionsEditorView(initialText: detail.instructions, canSave: canWrite) { text in
                 startInstructionsSave(text)
             }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "doc.text")
-                    .foregroundStyle(palette.secondary)
-                    .accessibilityHidden(true)
-                Text("Instructions")
-                    .foregroundStyle(palette.foreground)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(palette.secondary)
-                    .accessibilityHidden(true)
-            }
-            .padding(16)
-            .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -977,4 +921,32 @@ struct AidenBotInstructionsEditorView: View {
 struct AidenBotPauseAttempt: Equatable {
     let pause: Bool
     let key: UUID
+}
+
+struct AidenBotProfileLinkRow<Destination: View>: View {
+    @Environment(\.aidenPalette) private var palette
+    let symbol: String
+    let title: LocalizedStringKey
+    @ViewBuilder let destination: () -> Destination
+
+    var body: some View {
+        NavigationLink(destination: destination) {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .foregroundStyle(palette.foreground)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+            }
+            .padding(16)
+            .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .combine)
+        }
+    }
 }

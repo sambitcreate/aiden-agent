@@ -38,16 +38,7 @@ enum AidenBotSessionWire {
 
     /// Submission ids: 1–64 ASCII letters, digits, `.`, `_`, `:` or `-`.
     static func validateSubmissionID(_ value: String, field: String) throws {
-        let scalars = Array(value.unicodeScalars)
-        guard (1...maxSubmissionIDLength).contains(scalars.count),
-              scalars.allSatisfy({ scalar in
-                  switch scalar.value {
-                  case 48...57, 65...90, 97...122, 46, 95, 58, 45: true
-                  default: false
-                  }
-              }) else {
-            throw AidenBotContractError.invalidField(field)
-        }
+        try AidenBotWire.validateIdentifier(value, field: field, maxLength: maxSubmissionIDLength)
     }
 
     static func validateEpoch(_ value: String) throws {
@@ -1103,16 +1094,7 @@ enum AidenRemoteIssueWire {
 
     /// The card and routine ids: the host's issue id grammar.
     static func validateID(_ value: String, field: String) throws {
-        let scalars = Array(value.unicodeScalars)
-        guard (1...maxIDLength).contains(scalars.count),
-              scalars.allSatisfy({ scalar in
-                  switch scalar.value {
-                  case 48...57, 65...90, 97...122, 46, 95, 58, 45: true
-                  default: false
-                  }
-              }) else {
-            throw AidenBotContractError.invalidField(field)
-        }
+        try AidenBotWire.validateIdentifier(value, field: field, maxLength: maxIDLength)
     }
 }
 
@@ -1649,8 +1631,8 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case let .partial(text): try fields.encode(text, forKey: .text)
         case let .entry(entry): try fields.encode(entry, forKey: .entry)
         case let .unknownEntry(type):
-            var entry = fields.nestedContainer(keyedBy: AidenBotDynamicCodingKey.self, forKey: .entry)
-            if let key = AidenBotDynamicCodingKey(stringValue: "type") { try entry.encode(type, forKey: key) }
+            var entry = fields.nestedContainer(keyedBy: AidenDynamicCodingKey.self, forKey: .entry)
+            if let key = AidenDynamicCodingKey(stringValue: "type") { try entry.encode(type, forKey: key) }
         case let .state(view): try view.encode(to: payload)
         case let .question(question): try fields.encode(question, forKey: .question)
         case let .approval(approval): try fields.encode(approval, forKey: .approval)
@@ -1722,7 +1704,7 @@ struct AidenBotSessionActionRequest: Codable, Equatable, Sendable {
     }
 
     func encode(to encoder: Encoder) throws {
-        _ = encoder.container(keyedBy: AidenBotDynamicCodingKey.self)
+        _ = encoder.container(keyedBy: AidenDynamicCodingKey.self)
     }
 }
 

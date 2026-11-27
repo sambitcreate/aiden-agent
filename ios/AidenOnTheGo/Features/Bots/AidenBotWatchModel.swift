@@ -129,32 +129,20 @@ final class AidenBotWatchModel {
         self.mayWrite = mayWrite
         self.draftStore = draftStore
         self.draftScope = draftScope
-        var retained: AidenBotWatchDraftStore.State?
-        var restored: AidenBotWatchAttempt?
-        var readFailed = false
-        var readErrorMessage: String?
-        if let draftStore, let draftScope {
-            do {
-                if let loaded = try draftStore.load(draftScope) {
-                    retained = loaded
-                    if let pending = loaded.pending, let pendingSince = loaded.pendingSince {
-                        restored = AidenBotWatchAttempt(mutation: pending, createdAt: pendingSince)
-                    }
-                }
-            } catch {
-                readFailed = true
-                readErrorMessage = "The saved watch draft couldn’t be read. Inspect watches on your computer before making changes."
-            }
-        }
-        self.mutation = AidenDurablePendingMutation(
-            restoredAttempt: restored,
-            storageReadFailed: readFailed
+        let restored = aidenRestoreBotControl(
+            load: { try draftStore.flatMap { store in try draftScope.flatMap { try store.load($0) } } },
+            attempt: { loaded -> AidenBotWatchAttempt? in
+                guard let pending = loaded.pending, let pendingSince = loaded.pendingSince else { return nil }
+                return AidenBotWatchAttempt(mutation: pending, createdAt: pendingSince)
+            },
+            readErrorMessage: "The saved watch draft couldn’t be read. Inspect watches on your computer before making changes."
         )
-        if let retained {
+        self.mutation = restored.mutation
+        if let retained = restored.state {
             draft = retained.draft
             baseline = retained.baseline
         }
-        if let readErrorMessage { message = readErrorMessage }
+        if let readErrorMessage = restored.message { message = readErrorMessage }
         isRestoring = false
     }
 

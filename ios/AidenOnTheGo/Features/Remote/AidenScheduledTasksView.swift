@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Observation
 import SwiftUI
@@ -97,9 +96,7 @@ actor AidenScheduledTaskCache {
     }
 
     private func file(instanceId: String) -> URL {
-        let digest = SHA256.hash(data: Data(instanceId.utf8))
-            .map { String(format: "%02x", $0) }.joined()
-        return root.appending(path: "\(digest).json")
+        root.appending(path: "\(aidenSHA256Hex(instanceId)).json")
     }
 }
 

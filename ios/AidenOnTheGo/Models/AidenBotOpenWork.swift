@@ -10,9 +10,7 @@ enum AidenOpenWorkWire {
         }
     }
     static func id(_ value: String) throws {
-        guard (1...160).contains(value.utf8.count), value.utf8.allSatisfy({
-            (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || [45, 46, 58, 95].contains($0)
-        }) else { throw AidenBotContractError.invalidField("Open work identity") }
+        try AidenBotWire.validateIdentifier(value, field: "Open work identity", maxLength: 160)
     }
     static func decimal(_ value: String) throws {
         guard (1...32).contains(value.utf8.count), value.first != "0",

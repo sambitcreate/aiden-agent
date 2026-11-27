@@ -462,29 +462,11 @@ struct AidenBotRouteView: View {
             }
         }
         .aidenConversationTabBar()
-        .toolbar {
-            if let onNext {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Next") {
-                        if holdsAttachments { isConfirmingNext = true } else { onNext() }
-                    }
-                    .accessibilityHint("Opens the next chat that needs you")
-                    .confirmationDialog(
-                        "Discard attachments?",
-                        isPresented: $isConfirmingNext,
-                        titleVisibility: .visible
-                    ) {
-                        Button("Discard attachments", role: .destructive, action: onNext)
-                        Button("Stay", role: .cancel) {}
-                    } message: {
-                        Text("They aren’t kept when you move to the next chat. Your message text is saved.")
-                    }
-                }
-            }
-        }
-        .onPreferenceChange(AidenChatHoldsAttachmentsKey.self) { holds in
-            holdsAttachments = holds
-        }
+        .aidenCatchUpNextToolbar(
+            onNext: onNext,
+            holdsAttachments: $holdsAttachments,
+            isConfirmingNext: $isConfirmingNext
+        )
         .task(id: loadID) {
             await model.load(coordinator: coordinator)
         }

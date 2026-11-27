@@ -102,7 +102,7 @@ enum AidenRemoteContractError: Error, Equatable {
     case invalidPairingExchange
 }
 
-private struct AidenDynamicCodingKey: CodingKey {
+struct AidenDynamicCodingKey: CodingKey {
     let stringValue: String
     let intValue: Int? = nil
 
@@ -709,6 +709,17 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "bot:peers"),
         Self(rawValue: "approval:plain-words"),
     ] + botUX
+
+    /// Additive progress capabilities a phone may advertise or adopt after initial pairing.
+    static let phoneProgressVocabulary: Set<Self> = Set<Self>([
+        .tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
+        .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
+        .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
+        .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
+        .botMessaging, .botAccessRequests, .botPlans, .botAllowed,
+        .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
+        .chatContinueInNewChat, .streamSnapshotReasons, .botNeedsYou, .approvalPlainWords, .chatAgentSlider,
+    ]).union(botUX)
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
     /// Bot session entries. It grants no authority.
@@ -4314,5 +4325,14 @@ extension AidenRemoteProtocol {
         let bytes = Array(value.utf8)
         guard (1...32).contains(bytes.count), (97...122).contains(bytes[0]) else { return false }
         return bytes.allSatisfy { (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }
+    }
+
+    /// ASCII letters, digits, `-`, `.`, `:` or `_`.
+    static func isSafeIdentifierScalar(_ scalar: Unicode.Scalar) -> Bool {
+        let code = scalar.value
+        return (48...57).contains(code) ||
+            (65...90).contains(code) ||
+            (97...122).contains(code) ||
+            code == 45 || code == 46 || code == 58 || code == 95
     }
 }

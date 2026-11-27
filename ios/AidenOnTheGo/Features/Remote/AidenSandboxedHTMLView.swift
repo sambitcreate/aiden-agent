@@ -565,3 +565,33 @@ private final class AidenTouchRecorder: UIGestureRecognizer, UIGestureRecognizer
         false
     }
 }
+
+extension View {
+    func aidenOpenLinkConfirmation(_ pendingLink: Binding<URL?>) -> some View {
+        modifier(AidenOpenLinkConfirmation(pendingLink: pendingLink))
+    }
+}
+
+private struct AidenOpenLinkConfirmation: ViewModifier {
+    @Environment(\.openURL) private var openURL
+    @Binding var pendingLink: URL?
+
+    func body(content: Content) -> some View {
+        content.alert(
+            "Open link?",
+            isPresented: Binding(
+                get: { pendingLink != nil },
+                set: { if !$0 { pendingLink = nil } }
+            ),
+            presenting: pendingLink
+        ) { link in
+            Button("Open") {
+                pendingLink = nil
+                openURL(link)
+            }
+            Button("Cancel", role: .cancel) { pendingLink = nil }
+        } message: { link in
+            Text(link.host() ?? link.absoluteString)
+        }
+    }
+}

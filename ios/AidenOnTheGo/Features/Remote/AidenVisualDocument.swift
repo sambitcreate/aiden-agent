@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import SwiftUI
 
@@ -216,7 +215,7 @@ actor AidenVisualDocumentCache {
                 appearance.scheme.rawValue,
                 appearance.theme.rawValue,
             ]
-            return AidenVisualDocumentCache.digest(parts.joined(separator: "\u{1f}")) + ".html"
+            return aidenSHA256Hex(parts) + ".html"
         }
     }
 
@@ -301,12 +300,8 @@ actor AidenVisualDocumentCache {
         try? fileManager.removeItem(at: instanceDirectory(instanceId))
     }
 
-    static func digest(_ value: String) -> String {
-        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-
     private func instanceDirectory(_ instanceId: String) -> URL {
-        root.appending(path: Self.digest(instanceId), directoryHint: .isDirectory)
+        root.appending(path: aidenSHA256Hex(instanceId), directoryHint: .isDirectory)
     }
 
     private struct Entry {

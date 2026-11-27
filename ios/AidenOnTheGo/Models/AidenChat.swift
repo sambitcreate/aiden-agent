@@ -784,7 +784,7 @@ struct AidenBrowserRecordingRecap: Codable, Equatable, Sendable {
     }
 
     init(from decoder: Decoder) throws {
-        let keys = try decoder.container(keyedBy: AidenChatForkAnyKey.self).allKeys
+        let keys = try decoder.container(keyedBy: AidenDynamicCodingKey.self).allKeys
         let values = try decoder.container(keyedBy: CodingKeys.self)
         guard Set(keys.map(\.stringValue)) == ["id", "mimeType", "durationMs", "sizeBytes"] else {
             throw DecodingError.dataCorruptedError(
@@ -2233,7 +2233,7 @@ struct AidenChatForkSummary: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        let allKeys = try decoder.container(keyedBy: AidenChatForkAnyKey.self).allKeys
+        let allKeys = try decoder.container(keyedBy: AidenDynamicCodingKey.self).allKeys
         guard allKeys.allSatisfy({ CodingKeys(stringValue: $0.stringValue) != nil }) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .state,
@@ -2345,13 +2345,6 @@ struct AidenChatForkLineage: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case chatId, messageId, position, at, summary
     }
-}
-
-private struct AidenChatForkAnyKey: CodingKey {
-    let stringValue: String
-    let intValue: Int? = nil
-    init?(stringValue: String) { self.stringValue = stringValue }
-    init?(intValue: Int) { nil }
 }
 
 /// Only for `before` forks: the chosen prompt to edit and resend in the fork.
@@ -2844,7 +2837,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     ) throws {
         guard !value.isEmpty,
               value.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength,
-              value.unicodeScalars.allSatisfy(Self.isSafeIdentifierScalar) else {
+              value.unicodeScalars.allSatisfy(AidenRemoteProtocol.isSafeIdentifierScalar) else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: values,
@@ -2854,7 +2847,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     }
 
     static func isValidIdentifier(_ value: String) -> Bool {
-        !value.isEmpty && value.utf8.count <= AidenRemoteProtocol.maxIdentifierLength && value.unicodeScalars.allSatisfy(isSafeIdentifierScalar)
+        !value.isEmpty && value.utf8.count <= AidenRemoteProtocol.maxIdentifierLength && value.unicodeScalars.allSatisfy(AidenRemoteProtocol.isSafeIdentifierScalar)
     }
 
     private static func isValidRevision(_ value: String) -> Bool {
@@ -2867,25 +2860,16 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     static func isValidCachedProjection(_ summary: AidenChatSummary) -> Bool {
         !summary.id.isEmpty
             && summary.id.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
-            && summary.id.unicodeScalars.allSatisfy(isSafeIdentifierScalar)
+            && summary.id.unicodeScalars.allSatisfy(AidenRemoteProtocol.isSafeIdentifierScalar)
             && !summary.workspaceId.isEmpty
             && summary.workspaceId.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
-            && summary.workspaceId.unicodeScalars.allSatisfy(isSafeIdentifierScalar)
+            && summary.workspaceId.unicodeScalars.allSatisfy(AidenRemoteProtocol.isSafeIdentifierScalar)
             && summary.title.unicodeScalars.count <= 1_024
             && !summary.revision.isEmpty
             && summary.revision.unicodeScalars.count <= AidenRemoteProtocol.maxIdentifierLength
             && summary.createdAt.timeIntervalSinceReferenceDate.isFinite
             && summary.updatedAt.timeIntervalSinceReferenceDate.isFinite
             && summary.updatedAt >= summary.createdAt
-    }
-
-    private static func isSafeIdentifierScalar(_ scalar: UnicodeScalar) -> Bool {
-        switch scalar.value {
-        case 45...46, 48...58, 65...90, 95, 97...122:
-            return true
-        default:
-            return false
-        }
     }
 
     private static func isBase64URLScalar(_ scalar: UnicodeScalar) -> Bool {

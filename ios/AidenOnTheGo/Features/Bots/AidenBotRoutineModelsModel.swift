@@ -42,23 +42,18 @@ final class AidenBotRoutineModelsModel {
         self.store = store; self.scope = scope
         let generation = scope.flatMap { store?.generation(for: $0) }
         self.storageGeneration = generation
-        var saved: AidenBotRoutineControlStore.State?
-        var readFailed = false
-        var readErrorMessage: String?
-        if let store, let scope {
-            do { saved = try store.load(scope) }
-            catch { readFailed = true; readErrorMessage = "This phone couldn’t read its saved model change. Inspect the computer before making changes." }
-        }
-        self.mutation = AidenDurablePendingMutation(
-            restoredAttempt: saved?.attempt,
-            storageReadFailed: readFailed,
+        let restored = aidenRestoreBotControl(
+            load: { try store.flatMap { s in try scope.flatMap { try s.load($0) } } },
+            attempt: { $0.attempt },
             storageGeneration: generation,
             currentStorageGeneration: scope.flatMap { capturedScope in
                 store.map { capturedStore in { capturedStore.generation(for: capturedScope) } }
-            }
+            },
+            readErrorMessage: "This phone couldn’t read its saved model change. Inspect the computer before making changes."
         )
-        if let saved { baseline = saved.baseline; draft = saved.draft }
-        if let readErrorMessage { message = readErrorMessage }
+        self.mutation = restored.mutation
+        if let saved = restored.state { baseline = saved.baseline; draft = saved.draft }
+        if let readErrorMessage = restored.message { message = readErrorMessage }
         restoring = false
     }
 

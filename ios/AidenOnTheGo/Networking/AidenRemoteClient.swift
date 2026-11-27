@@ -1545,23 +1545,29 @@ final class AidenRemoteClient: @unchecked Sendable {
         return components.string ?? url.absoluteString
     }
 
-    static func normalizeManualPairingCode(_ value: String) throws -> String {
-        guard value.unicodeScalars.allSatisfy({ scalar in
+    static let manualPairingCodeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+    private static let manualPairingCodeAlphabetBytes = Set(manualPairingCodeAlphabet.utf8)
+
+    static func isManualPairingCodeInput(_ value: String) -> Bool {
+        value.unicodeScalars.allSatisfy { scalar in
             scalar.isASCII && (scalar.value == 32 || scalar.value == 45
                 || (48...57).contains(scalar.value)
                 || (65...90).contains(scalar.value)
                 || (97...122).contains(scalar.value))
-        }) else {
+        }
+    }
+
+    static func normalizeManualPairingCode(_ value: String) throws -> String {
+        guard isManualPairingCodeInput(value) else {
             throw AidenManualPairingError.invalidCode
         }
         let normalized = value
             .replacingOccurrences(of: "-", with: "")
             .replacingOccurrences(of: " ", with: "")
             .uppercased()
-        let alphabet = Set("0123456789ABCDEFGHJKMNPQRSTVWXYZ".utf8)
         guard normalized.utf8.count == 20,
               normalized.unicodeScalars.allSatisfy({ $0.isASCII }),
-              normalized.utf8.allSatisfy(alphabet.contains) else {
+              normalized.utf8.allSatisfy(manualPairingCodeAlphabetBytes.contains) else {
             throw AidenManualPairingError.invalidCode
         }
         return normalized
@@ -1584,15 +1590,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     func updateDeviceCapabilities(
         accepts: [AidenRemoteCapability]
     ) async throws -> [AidenRemoteCapability] {
-        let allowed = Set([
-            AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
-            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
-            .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
-            .botMessaging, .botAccessRequests, .botPlans, .botAllowed,
-            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
-            .chatContinueInNewChat, .streamSnapshotReasons, .botNeedsYou, .approvalPlainWords, .chatAgentSlider,
-        ]).union(AidenRemoteCapability.botUX)
+        let allowed = AidenRemoteCapability.phoneProgressVocabulary
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
               Set(accepts).isSubset(of: allowed) else {
@@ -2559,6 +2557,28 @@ final class AidenRemoteClient: @unchecked Sendable {
         try await botSessionAction("stop", botId: botId, idempotencyKey: idempotencyKey)
     }
 
+    private func botReceipt<Receipt: Decodable, Body: Encodable>(
+        botId: String,
+        id: String,
+        validateID: ((String) throws -> Void)? = nil,
+        pathSuffix: [String],
+        body: Body,
+        idempotencyKey: UUID? = nil,
+        matches: (Receipt) -> Bool
+    ) async throws -> Receipt {
+        try validateBotIdentifier(botId)
+        try validateID?(id)
+        let receipt: Receipt = try await send(
+            method: "POST",
+            path: ["bots", botId] + pathSuffix,
+            body: body,
+            headers: idempotencyKey.map(idempotencyHeaders) ?? [:],
+            acceptedStatus: [200]
+        )
+        guard matches(receipt) else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
     /// Answers the Bot's waiting A–E question. The request UUID is the idempotency key,
     /// so a retried answer replays the same receipt.
     func answerBotQuestion(
@@ -2567,16 +2587,11 @@ final class AidenRemoteClient: @unchecked Sendable {
         request: AidenQuestionRespondRequest,
         idempotencyKey: UUID
     ) async throws -> AidenBotQuestionAnswerReceipt {
-        try validateBotIdentifier(botId)
-        let receipt: AidenBotQuestionAnswerReceipt = try await send(
-            method: "POST",
-            path: ["bots", botId, "questions", waitId, "answer"],
-            body: request,
-            headers: idempotencyHeaders(idempotencyKey),
-            acceptedStatus: [200]
-        )
-        guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
-        return receipt
+        try await botReceipt(
+            botId: botId, id: waitId,
+            pathSuffix: ["questions", waitId, "answer"],
+            body: request, idempotencyKey: idempotencyKey
+        ) { $0.waitId == waitId }
     }
 
     // MARK: Contract revision 61: Bot UX on phones
@@ -2584,57 +2599,47 @@ final class AidenRemoteClient: @unchecked Sendable {
     /// `bot:settings-changes`: Apply or Dismiss a held change, or Undo a receipt.
     /// No Idempotency-Key: the Mac serializes and compare-and-swaps each change.
     func respondBotSettingsChange(botId: String, changeId: String, decision: AidenBotSettingsChangeDecision) async throws -> AidenBotSettingsChangeReceipt {
-        try validateBotIdentifier(botId)
-        try validateSafeIdentifier(changeId, maximumScalars: 160)
-        let receipt: AidenBotSettingsChangeReceipt = try await send(
-            method: "POST", path: ["bots", botId, "settings-changes", changeId, "respond"],
-            body: AidenBotUXDecisionRequest(decision: decision), acceptedStatus: [200])
-        guard receipt.changeId == changeId else { throw AidenRemoteClientError.invalidResponse }
-        return receipt
+        try await botReceipt(
+            botId: botId, id: changeId, validateID: { try self.validateSafeIdentifier($0, maximumScalars: 160) },
+            pathSuffix: ["settings-changes", changeId, "respond"],
+            body: AidenBotUXDecisionRequest(decision: decision)
+        ) { $0.changeId == changeId }
     }
 
     /// `bot:suggestions`: Add or Not now on a suggested skill.
     func respondBotSkillProposal(botId: String, proposalId: String, decision: AidenBotSkillProposalDecision) async throws -> AidenBotSkillProposalReceipt {
-        try validateBotIdentifier(botId)
-        try validateSafeIdentifier(proposalId, maximumScalars: 160)
-        let receipt: AidenBotSkillProposalReceipt = try await send(
-            method: "POST", path: ["bots", botId, "skill-proposals", proposalId, "respond"],
-            body: AidenBotUXDecisionRequest(decision: decision), acceptedStatus: [200])
-        guard receipt.proposalId == proposalId else { throw AidenRemoteClientError.invalidResponse }
-        return receipt
+        try await botReceipt(
+            botId: botId, id: proposalId, validateID: { try self.validateSafeIdentifier($0, maximumScalars: 160) },
+            pathSuffix: ["skill-proposals", proposalId, "respond"],
+            body: AidenBotUXDecisionRequest(decision: decision)
+        ) { $0.proposalId == proposalId }
     }
 
     /// `bot:suggestions`: Keep or Not now on a proposed lesson.
     func respondBotLesson(botId: String, lessonId: String, decision: AidenBotLessonDecision) async throws -> AidenBotLessonReceipt {
-        try validateBotIdentifier(botId)
-        try validateSafeIdentifier(lessonId, maximumScalars: 160)
-        let receipt: AidenBotLessonReceipt = try await send(
-            method: "POST", path: ["bots", botId, "lessons", lessonId, "respond"],
-            body: AidenBotUXDecisionRequest(decision: decision), acceptedStatus: [200])
-        guard receipt.lessonId == lessonId else { throw AidenRemoteClientError.invalidResponse }
-        return receipt
+        try await botReceipt(
+            botId: botId, id: lessonId, validateID: { try self.validateSafeIdentifier($0, maximumScalars: 160) },
+            pathSuffix: ["lessons", lessonId, "respond"],
+            body: AidenBotUXDecisionRequest(decision: decision)
+        ) { $0.lessonId == lessonId }
     }
 
     /// `bot:suggestions`: Undo on a Learned line.
     func removeBotLesson(botId: String, lessonId: String) async throws -> AidenBotLessonReceipt {
-        try validateBotIdentifier(botId)
-        try validateSafeIdentifier(lessonId, maximumScalars: 160)
-        let receipt: AidenBotLessonReceipt = try await send(
-            method: "POST", path: ["bots", botId, "lessons", lessonId, "remove"],
-            body: AidenEmptyObject(), acceptedStatus: [200])
-        guard receipt.lessonId == lessonId else { throw AidenRemoteClientError.invalidResponse }
-        return receipt
+        try await botReceipt(
+            botId: botId, id: lessonId, validateID: { try self.validateSafeIdentifier($0, maximumScalars: 160) },
+            pathSuffix: ["lessons", lessonId, "remove"],
+            body: AidenEmptyObject()
+        ) { $0.lessonId == lessonId }
     }
 
     /// `bot:suggestions`: Undo on a Tidied memory line.
     func undoBotLearning(botId: String, changeId: String) async throws -> AidenBotLearningUndoReceipt {
-        try validateBotIdentifier(botId)
-        try validateSafeIdentifier(changeId, maximumScalars: 160)
-        let receipt: AidenBotLearningUndoReceipt = try await send(
-            method: "POST", path: ["bots", botId, "learning", changeId, "undo"],
-            body: AidenEmptyObject(), acceptedStatus: [200])
-        guard receipt.changeId == changeId, receipt.undone else { throw AidenRemoteClientError.invalidResponse }
-        return receipt
+        try await botReceipt(
+            botId: botId, id: changeId, validateID: { try self.validateSafeIdentifier($0, maximumScalars: 160) },
+            pathSuffix: ["learning", changeId, "undo"],
+            body: AidenEmptyObject()
+        ) { $0.changeId == changeId && $0.undone }
     }
 
     /// `approvals:settings`: the Mac's approval mode.
@@ -2671,13 +2676,11 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     /// Revision 56. A receipt acknowledges the operation; only the session feed settles its card.
     func respondBotPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, idempotencyKey: UUID) async throws -> AidenBotPlanRespondReceipt {
-        try validateBotIdentifier(botId)
-        try AidenBotHandoffWire.validateWaitID(planId)
-        let receipt: AidenBotPlanRespondReceipt = try await send(
-            method: "POST", path: ["bots", botId, "plans", planId, "respond"], body: request,
-            headers: idempotencyHeaders(idempotencyKey), acceptedStatus: [200])
-        guard receipt.planId == planId else { throw AidenRemoteClientError.invalidResponse }
-        return receipt
+        try await botReceipt(
+            botId: botId, id: planId, validateID: AidenBotHandoffWire.validateWaitID,
+            pathSuffix: ["plans", planId, "respond"],
+            body: request, idempotencyKey: idempotencyKey
+        ) { $0.planId == planId }
     }
 
     /// Answers an offered access choice. Only the opaque wait ID and choice leave the phone.
@@ -2699,17 +2702,11 @@ final class AidenRemoteClient: @unchecked Sendable {
         request: AidenBotHandoffAnswerRequest,
         idempotencyKey: UUID
     ) async throws -> AidenBotHandoffAnswerReceipt {
-        try validateBotIdentifier(botId)
-        try validateBotWaitIdentifier(waitId)
-        let receipt: AidenBotHandoffAnswerReceipt = try await send(
-            method: "POST",
-            path: ["bots", botId, "handoffs", waitId, "answer"],
-            body: request,
-            headers: idempotencyHeaders(idempotencyKey),
-            acceptedStatus: [200]
-        )
-        guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
-        return receipt
+        try await botReceipt(
+            botId: botId, id: waitId, validateID: validateBotWaitIdentifier,
+            pathSuffix: ["handoffs", waitId, "answer"],
+            body: request, idempotencyKey: idempotencyKey
+        ) { $0.waitId == waitId }
     }
 
     /// Asks the Mac to bring a hand-off (a sign-in) forward. It leaves the
@@ -2719,17 +2716,11 @@ final class AidenRemoteClient: @unchecked Sendable {
         waitId: String,
         idempotencyKey: UUID
     ) async throws -> AidenBotHandoffOpenOnMacReceipt {
-        try validateBotIdentifier(botId)
-        try validateBotWaitIdentifier(waitId)
-        let receipt: AidenBotHandoffOpenOnMacReceipt = try await send(
-            method: "POST",
-            path: ["bots", botId, "handoffs", waitId, "open-on-mac"],
-            body: AidenBotSessionActionRequest(),
-            headers: idempotencyHeaders(idempotencyKey),
-            acceptedStatus: [200]
-        )
-        guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
-        return receipt
+        try await botReceipt(
+            botId: botId, id: waitId, validateID: validateBotWaitIdentifier,
+            pathSuffix: ["handoffs", waitId, "open-on-mac"],
+            body: AidenBotSessionActionRequest(), idempotencyKey: idempotencyKey
+        ) { $0.waitId == waitId }
     }
 
     /// Contract revision 42 (`bot:issues`): carries out one action a card
@@ -4264,14 +4255,7 @@ final class AidenRemoteClient: @unchecked Sendable {
     private func validateSafeIdentifier(_ value: String, maximumScalars: Int) throws {
         guard !value.isEmpty,
               value.unicodeScalars.count <= maximumScalars,
-              value.unicodeScalars.allSatisfy({ scalar in
-                  switch scalar.value {
-                  case 48...57, 65...90, 97...122, 45, 46, 58, 95:
-                      return true
-                  default:
-                      return false
-                  }
-              }) else {
+              value.unicodeScalars.allSatisfy(AidenRemoteProtocol.isSafeIdentifierScalar) else {
             throw AidenRemoteClientError.invalidResponse
         }
     }

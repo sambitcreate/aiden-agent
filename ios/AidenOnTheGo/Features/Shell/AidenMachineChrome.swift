@@ -424,10 +424,6 @@ final class AidenOfflineNoticeDismissals {
         dismissed.insert(instanceId)
     }
 
-    func isDismissed(_ instanceId: String) -> Bool {
-        dismissed.contains(instanceId)
-    }
-
     /// The rows still to show.
     func shown(_ rows: [AidenMachineRoster.OfflineMachine]) -> [AidenMachineRoster.OfflineMachine] {
         rows.filter { !dismissed.contains($0.id) }

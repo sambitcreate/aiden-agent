@@ -36,31 +36,6 @@ enum AidenBotGeneratedAvatarPhase: Equatable {
     case failed
 }
 
-struct AidenBotGeneratedAvatarSessionIdentity: Equatable {
-    let instanceID: String?
-    let deviceID: String?
-    let connection: String
-    let capabilityRevision: String
-
-    /// `machine` is the Bot's own machine; nil follows the selected one.
-    @MainActor
-    init(coordinator: AidenRemoteCoordinator, machine: String?) {
-        let installation = coordinator.botInstallation(on: machine)
-        instanceID = installation?.id
-        deviceID = installation?.deviceId
-        switch coordinator.botConnectionState(on: machine) {
-        case .needsPairing: connection = "needs-pairing"
-        case .connecting: connection = "connecting"
-        case .connected: connection = "connected"
-        case .offline: connection = "offline"
-        }
-        capabilityRevision = [
-            installation?.deviceCapabilities.map(\.rawValue).sorted().joined(separator: ",") ?? "",
-            installation?.serverCapabilities?.map(\.rawValue).sorted().joined(separator: ",") ?? "legacy",
-        ].joined(separator: "|")
-    }
-}
-
 func aidenBotAvatarExpectedRevision(_ detail: AidenBotDetail) -> String {
     detail.avatar.asset?.assetRevision ?? detail.revision
 }

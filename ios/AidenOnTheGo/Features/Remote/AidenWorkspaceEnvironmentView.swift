@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Observation
 import SwiftUI
@@ -78,7 +77,7 @@ actor AidenWorkspaceEnvironmentCache {
 
     func purge(instanceId: String, knownWorkspaceIds: Set<String> = []) {
         let instanceDirectory = directory.appending(
-            path: instanceDigest(instanceId),
+            path: aidenSHA256Hex(instanceId),
             directoryHint: .isDirectory
         )
         try? FileManager.default.removeItem(at: instanceDirectory)
@@ -128,25 +127,13 @@ actor AidenWorkspaceEnvironmentCache {
     }
 
     private func file(instanceId: String, workspaceId: String) -> URL {
-        let digest = SHA256.hash(data: Data(workspaceId.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return directory
-            .appending(path: instanceDigest(instanceId), directoryHint: .isDirectory)
-            .appending(path: "\(digest).json")
-    }
-
-    private func instanceDigest(_ instanceId: String) -> String {
-        SHA256.hash(data: Data(instanceId.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
+        directory
+            .appending(path: aidenSHA256Hex(instanceId), directoryHint: .isDirectory)
+            .appending(path: "\(aidenSHA256Hex(workspaceId)).json")
     }
 
     private func legacyFile(instanceId: String, workspaceId: String) -> URL {
-        let digest = SHA256.hash(data: Data("\(instanceId)\u{0}\(workspaceId)".utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return directory.appending(path: "\(digest).json")
+        directory.appending(path: "\(aidenSHA256Hex("\(instanceId)\u{0}\(workspaceId)")).json")
     }
 }
 
@@ -757,7 +744,6 @@ private struct AidenWorkspaceHTMLPreviewPane: View {
     @Environment(\.aidenCodeTypography) private var codeTypography
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.openURL) private var openURL
     @State private var pendingLink: URL?
     @State private var failed = false
     @State private var reloadKey = 0
@@ -784,22 +770,7 @@ private struct AidenWorkspaceHTMLPreviewPane: View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(palette.canvas.ignoresSafeArea())
-            .alert(
-                "Open link?",
-                isPresented: Binding(
-                    get: { pendingLink != nil },
-                    set: { if !$0 { pendingLink = nil } }
-                ),
-                presenting: pendingLink
-            ) { link in
-                Button("Open") {
-                    pendingLink = nil
-                    openURL(link)
-                }
-                Button("Cancel", role: .cancel) { pendingLink = nil }
-            } message: { link in
-                Text(link.host() ?? link.absoluteString)
-            }
+            .aidenOpenLinkConfirmation($pendingLink)
     }
 
     @ViewBuilder
