@@ -17,7 +17,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldColors
@@ -79,28 +78,6 @@ fun aidenTextFieldColors(): TextFieldColors = TextFieldDefaults.colors(
     disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
     errorIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
 )
-
-/** Quiet circular toolbar action with a full accessibility-sized hit target. */
-@Composable
-fun AidenToolbarAction(
-    icon: ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val palette = AidenTheme.palette
-    IconButton(
-        onClick = onClick,
-        modifier = modifier.size(AidenUi.MinimumTouchTarget)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = palette.foreground,
-            modifier = Modifier.size(21.dp)
-        )
-    }
-}
 
 @Composable
 fun AidenSectionLabel(

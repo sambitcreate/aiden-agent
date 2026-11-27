@@ -123,10 +123,6 @@ fun aidenReduceMotion(): Boolean {
     return AidenMotion.isReducedMotion(configReduce, systemScale)
 }
 
-/** Alias of [aidenReduceMotion] kept for the Untitled call sites. */
-@Composable
-fun rememberAidenReduceMotion(): Boolean = aidenReduceMotion()
-
 /**
  * Adds a subtle, tactile scale compression on pointer down (0.96x).
  *

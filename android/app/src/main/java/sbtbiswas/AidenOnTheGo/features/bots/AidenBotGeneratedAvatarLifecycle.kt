@@ -6,21 +6,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,19 +16,14 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenBotAvatarUpload
 import sbtbiswas.AidenOnTheGo.models.AidenBotDetail
 import sbtbiswas.AidenOnTheGo.models.AidenBotSummary
-import sbtbiswas.AidenOnTheGo.models.AidenBotSemanticAvatar
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailureClassification
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.ui.res.stringResource
-import sbtbiswas.AidenOnTheGo.R
 
 sealed class AidenBotGeneratedAvatarError(val messageText: String) : Exception(messageText) {
     object SourceTooLarge : AidenBotGeneratedAvatarError("That image is too large. Choose another image.")
@@ -310,47 +290,6 @@ class AidenBotGeneratedAvatarModel(
         } catch (e: Exception) {
             _phase.value = AidenBotGeneratedAvatarPhase.FAILED
             _errorMessage.value = e.message ?: "Avatar revert failed"
-        }
-    }
-}
-
-@Composable
-fun AidenBotGeneratedAvatarLifecycleView(
-    model: AidenBotGeneratedAvatarModel,
-    semanticAvatar: AidenBotSemanticAvatar,
-    botName: String,
-    modifier: Modifier = Modifier
-) {
-    val phase by model.phase.collectAsStateWithLifecycle()
-    val error by model.errorMessage.collectAsStateWithLifecycle()
-
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // Upload and revert write to the desktop, so they show an in-place pending label.
-        val pendingLabel = when (phase) {
-            AidenBotGeneratedAvatarPhase.UPLOADING -> stringResource(R.string.bot_avatar_saving)
-            AidenBotGeneratedAvatarPhase.REVERTING -> stringResource(R.string.bot_avatar_restoring)
-            else -> null
-        }
-        if (pendingLabel != null) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
-            ) {
-                AidenActivityDot()
-                Text(pendingLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        if (error != null) {
-            Text(
-                text = error ?: "",
-                color = aidenBotErrorTextColor(),
-                style = MaterialTheme.typography.bodySmall
-            )
         }
     }
 }
