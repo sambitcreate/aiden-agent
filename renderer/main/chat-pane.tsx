@@ -387,6 +387,8 @@ import {
 import { useChatFind } from "../components/chat-find-bar";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
+const VISUAL_ARTIFACT_STAGING_UNAVAILABLE_MESSAGE =
+  "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.";
 
 /**
  * How long after the last text delta the activity row may keep saying
@@ -1495,9 +1497,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Reload Aiden before copying this chat.");
       }
       if (imageArtifactRecoveryUnavailable) {
-        throw new Error(
-          "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
-        );
+        throw new Error(VISUAL_ARTIFACT_STAGING_UNAVAILABLE_MESSAGE);
       }
       if (imageArtifactRecoveryPending) {
         throw new Error(
@@ -2410,9 +2410,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       readAloudRef.current?.stop();
       visualizeTurnRef.current = options?.visualize === true;
       if (imageArtifactRecoveryUnavailable) {
-        throw new Error(
-          "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
-        );
+        throw new Error(VISUAL_ARTIFACT_STAGING_UNAVAILABLE_MESSAGE);
       }
       if (imageArtifactRecoveryPending) {
         throw new Error(
@@ -4736,7 +4734,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 readinessSettingsSection={!chatReadinessMessage && modelReadinessMessage ? "providers" : undefined}
                 readinessMessage={
                   imageArtifactRecoveryUnavailable
-                    ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                    ? VISUAL_ARTIFACT_STAGING_UNAVAILABLE_MESSAGE
                     : imageArtifactRecoveryPending
                       ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
                       : readinessMessage
@@ -5095,7 +5093,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 error={
                   error ??
                   (imageArtifactRecoveryUnavailable
-                    ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                    ? VISUAL_ARTIFACT_STAGING_UNAVAILABLE_MESSAGE
                     : imageArtifactRecoveryPending
                       ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
                       : null)
