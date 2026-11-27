@@ -1423,6 +1423,11 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
       - m5: app frames draw their layout guide.
       - m6: double-clicking the blocked or error label doesn't enter the frame.
 
+19. **review-p3a-3 (2026-11-27).** Gemini's third review (`b1f9592de..e95acb97a`) found K1 clean and all ten review-p3a-2 fixes holding. It found three more, all verified and fixed test-first:
+    - M1: putting a frame back is bounded. A restore that leads straight out again, with no `ready` or route from the page in between, drops the last path and falls back to the frame's route. A third way out within 3 s stops the reloads. The frame then shows "This page leads outside the app." with **Reload**, which goes to the route. Each blocked load is still counted once, and the toast keeps its one id. Ways out spaced further apart are each put back.
+    - m1: leaving a frame moves focus to the canvas only when focus was in that frame (its iframe or the body). A frame that leaves by itself, because its app stopped or restarted, doesn't take focus from the composer or a panel.
+    - m2: an app frame's own `data:` or `blob:` page, which the window's `frame-src` refuses, is counted with no toast and put back. Only what `frame-src` allows (`about:blank`, `about:srcdoc`, loopback `http:` outside Aiden's ports, where a block means the page's own `frame-ancestors`) is left alone.
+
 ### Build status (2026-11-27)
 
 Built: Tasks 0–15. Task 11 was unblocked by the S75 decision (deviation 15), and Task 14's live-frames spec runs (deviation 17). K1 and S1/D1 were decided and built, and review-p3a-2's findings are fixed (deviation 18). **Open:** Task 5's frameless audit. The allowlist is empty, and it is checked against real traffic once live frames can load.
