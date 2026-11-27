@@ -68,7 +68,13 @@ export interface DesignCanvasGuardState {
   saving: boolean;
 }
 
-export type DesignCanvasLifecycle = "open" | "closing" | "disposed";
+/**
+ * `moved` is terminal: a save found the chat had left this workspace, so the
+ * session dropped its edits and history, stopped listening and ignores
+ * everything after. The flush is not complete (the edits never reached the
+ * store), yet nothing is left that the close guard should ask about.
+ */
+export type DesignCanvasLifecycle = "open" | "closing" | "disposed" | "moved";
 
 export type DesignCanvasTimer =
   | { readonly kind: "debounce"; readonly delayMs: number }
@@ -226,7 +232,7 @@ export function selectDesignCanvasView(state: DesignCanvasSyncState): DesignCanv
 }
 
 export function selectDesignCanvasGuard(state: DesignCanvasSyncState): DesignCanvasGuardState {
-  if (state.lifecycle === "disposed") return { dirty: false, saving: false };
+  if (state.lifecycle === "disposed" || state.lifecycle === "moved") return { dirty: false, saving: false };
   return {
     dirty: state.unsent.length > 0,
     saving: state.savePhase.kind === "saving",
@@ -234,8 +240,9 @@ export function selectDesignCanvasGuard(state: DesignCanvasSyncState): DesignCan
 }
 
 export function isDesignCanvasFlushComplete(state: DesignCanvasSyncState): boolean {
-  // A refused canvas is not kept as unsent edits, so `failed` says it too.
-  return state.local !== null && state.unsent.length === 0 && !state.failed;
+  // A refused canvas is not kept as unsent edits, so `failed` says it too, and
+  // edits a move dropped never reached the store either.
+  return state.lifecycle !== "moved" && state.local !== null && state.unsent.length === 0 && !state.failed;
 }
 
 /** The one Aiden reply that made every revision after `from` up to `to`, if one did. */
@@ -607,7 +614,7 @@ export function reduceDesignCanvasSync(
     }
 
     case "flush_requested": {
-      if (state.lifecycle === "disposed") return { state, effects: [] };
+      if (state.lifecycle === "disposed" || state.lifecycle === "moved") return { state, effects: [] };
       const effects: DesignCanvasSyncEffect[] = [];
       let next = state;
       if (next.timer !== null) {
@@ -617,10 +624,9 @@ export function reduceDesignCanvasSync(
       if (next.savePhase.kind === "saving") {
         return { state: { ...next, flushQueuedWhileSaving: true, debounceElapsedWhileSaving: false }, effects };
       }
+      // `debounceElapsedWhileSaving` is only set while saving and every settlement clears it.
       if (next.unsent.length > 0 && next.server && next.local) {
         next = startSaveTransition(next, { replayed: false, source: "flush", clearFlushQueue: true }, effects);
-      } else if (next.debounceElapsedWhileSaving) {
-        next = { ...next, debounceElapsedWhileSaving: false };
       }
       return { state: next, effects };
     }
@@ -656,11 +662,8 @@ export function reduceDesignCanvasSync(
           next = startSaveTransition(next, { replayed: false, source: "open", clearFlushQueue: false }, effects);
           return { state: next, effects };
         }
-        if (next.lifecycle === "open" && next.timer === null) {
-          const timer: DesignCanvasTimer = { kind: "debounce", delayMs: DESIGN_CANVAS_SAVE_DELAY_MS };
-          next = { ...next, timer };
-          effects.push({ type: "schedule_timer", timer });
-        }
+        // Otherwise the newer edits' own debounce is still running: every edit
+        // arms one, and one that fires during the save sets `debounceElapsedWhileSaving`.
         return { state: next, effects };
       }
 
@@ -748,24 +751,33 @@ export function reduceDesignCanvasSync(
       if (state.savePhase.kind !== "saving") return { state, effects: [] };
       // The chat left this workspace: its edits belong to a canvas it no
       // longer shows, so they are dropped and the canvas of the workspace it
-      // is in now opens instead.
+      // is in now opens instead. A session that is saving is open or closing.
       const effects: DesignCanvasSyncEffect[] = [];
-      let next: DesignCanvasSyncState = {
+      const dropped: DesignCanvasSyncState = {
         ...state,
         unsent: [],
         savePhase: { kind: "idle" },
+        failed: false,
         flushQueuedWhileSaving: false,
         debounceElapsedWhileSaving: false,
       };
-      if (next.timer !== null) {
-        next = { ...next, timer: null };
-        effects.push({ type: "cancel_timer" });
+      if (state.lifecycle === "closing") {
+        return { state: finishClosedSession(dropped, effects), effects };
       }
-      if (next.lifecycle === "closing") {
-        return { state: finishClosedSession(next, effects), effects };
-      }
-      if (next.lifecycle === "open") effects.push({ type: "moved", workspaceId: event.workspaceId });
-      return { state: next, effects };
+      // Sealed: nothing here may save, fetch or undo into the workspace the chat left.
+      if (state.timer !== null) effects.push({ type: "cancel_timer" });
+      effects.push({ type: "unsubscribe" }, { type: "finish" }, { type: "moved", workspaceId: event.workspaceId });
+      return {
+        state: {
+          ...dropped,
+          lifecycle: "moved",
+          timer: null,
+          history: EMPTY_HISTORY,
+          undonePages: new Set(),
+          unsettled: null,
+        },
+        effects,
+      };
     }
 
     case "save_failed": {
@@ -962,8 +974,11 @@ function createCanvasSync(
       } catch {
         event = { type: "save_failed" };
       }
-      dispatch(event);
-      if (inFlightPromise === current) inFlightPromise = null;
+      try {
+        dispatch(event);
+      } finally {
+        if (inFlightPromise === current) inFlightPromise = null;
+      }
     })();
     inFlightPromise = current;
   };
