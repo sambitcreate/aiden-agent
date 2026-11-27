@@ -98,20 +98,11 @@ function failure(job, reason) {
 export function evaluateRequiredGate(needs, changes) {
   const failures = [];
   let decisions;
-  if (typeof changes === "string") {
-    try {
-      decisions = parseChangedAreaDecisions(changes);
-    } catch (error) {
-      failures.push(failure("changes", error instanceof Error ? error.message : "changes-invalid"));
-      decisions = null;
-    }
-  } else {
-    try {
-      decisions = parseChangedAreaDecisions(changes);
-    } catch (error) {
-      failures.push(failure("changes", error instanceof Error ? error.message : "changes-invalid"));
-      decisions = null;
-    }
+  try {
+    decisions = parseChangedAreaDecisions(changes);
+  } catch (error) {
+    failures.push(failure("changes", error instanceof Error ? error.message : "changes-invalid"));
+    decisions = null;
   }
 
   if (!isRecord(needs)) {
