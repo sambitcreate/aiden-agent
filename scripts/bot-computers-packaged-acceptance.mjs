@@ -1,4 +1,4 @@
-/* global Buffer, console, process, setTimeout */
+/* global console, process, setTimeout */
 // Packaged Bot computers acceptance: owner Mac only (Apple silicon), never in CI.
 //
 //   AIDEN_BOT_COMPUTERS_ACCEPTANCE=1 npm run test:bot-computers:packaged -- \
@@ -49,6 +49,13 @@ import {
   pausedBy,
 } from "./bot-computers-packaged-acceptance-core.mjs";
 import {
+  argumentValue,
+  commandMatchesExecutable,
+  monitorChild,
+  readJsonRequest,
+  writeSse,
+} from "./packaged-acceptance-support.mjs";
+import {
   invalidateBotComputersAcceptanceReceipt,
   resolveBotComputersAcceptanceReceipt,
   writeBotComputersAcceptanceReceipt,
@@ -58,28 +65,11 @@ import { discoverPackagedApp, packagedArtifactIdentity, verifyMacPackage } from 
 const executeFile = promisify(execFile);
 const modulePath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
-const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 /** Set up can download about 20 GB and install macOS, so the whole run gets four hours. */
 const ACCEPTANCE_TIMEOUT_MS = 4 * 60 * 60 * 1_000;
 const STEP_TIMEOUT_MS = 10 * 60 * 1_000;
 const POLL_MS = 2_000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function argumentValue(name) {
-  const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] : undefined;
-}
-
-async function readJsonRequest(request) {
-  const chunks = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    bytes += chunk.length;
-    if (bytes > MAX_REQUEST_BYTES) throw new Error("Acceptance model request exceeded 64 MiB.");
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
 
 async function readJson(file) {
   try {
@@ -111,7 +101,7 @@ async function startAcceptanceModel({ capability, context, onTurn }) {
         await onTurn(answer).catch((error) => observationErrors.push(error instanceof Error ? error.message : String(error)));
       }
       response.writeHead(200, { "cache-control": "no-store", "content-type": "text/event-stream" });
-      for (const chunk of answer.chunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      for (const chunk of answer.chunks) writeSse(response, chunk);
       response.end("data: [DONE]\n\n");
       if (answer.kind === "done") finish();
     } catch (error) {
@@ -144,10 +134,6 @@ async function processTable() {
     .map((match) => ({ pid: Number(match[1]), command: match[2] }));
 }
 
-function startedFrom(command, executable) {
-  return command === executable || command.startsWith(`${executable} `);
-}
-
 /** What Aiden's state, its pause file and Lume (as Aiden runs it) say now. */
 async function observe(paths, lume) {
   const state = parseBotComputersState(await readJson(paths.stateFile));
@@ -157,7 +143,7 @@ async function observe(paths, lume) {
     if (listed.exitCode !== 0) throw new Error(`lume ls failed: ${listed.stderr.trim()}`);
     vms = parseLumeVmList(listed.stdout).map(({ name, state: vmState }) => ({ name, state: vmState }));
   }
-  const processes = (await processTable()).filter((entry) => startedFrom(entry.command, lume.binaryPath));
+  const processes = (await processTable()).filter((entry) => commandMatchesExecutable(entry.command, lume.binaryPath));
   return {
     baseBuild: state.setup.baseBuild,
     baseVersion: state.setup.baseVersion,
@@ -207,22 +193,6 @@ async function preseedRestoreImage(source, imagesDir) {
   const destination = path.join(imagesDir, `UniversalMac_${BOT_COMPUTER_RESTORE_IMAGE.build}_Restore.ipsw`);
   // An APFS clone is instant; fall back to a full copy across volumes.
   await executeFile("/bin/cp", ["-c", source, destination]).catch(() => copyFile(source, destination));
-}
-
-function monitorChild(child) {
-  let outcome = null;
-  const promise = new Promise((resolve) => {
-    child.once("error", (error) => {
-      outcome = { error };
-      resolve(outcome);
-    });
-    child.once("exit", (code, signal) => {
-      if (outcome) return;
-      outcome = { code, signal };
-      resolve(outcome);
-    });
-  });
-  return { promise, outcome: () => outcome };
 }
 
 function beforeDeadline(promise, deadline, message) {
@@ -275,7 +245,7 @@ async function runAcceptance() {
   await verifyMacPackage(appPath);
   const artifact = await packagedArtifactIdentity(appPath);
   const executable = path.join(appPath, "Contents", "MacOS", "Aiden Agent");
-  if ((await processTable()).some((entry) => startedFrom(entry.command, executable))) {
+  if ((await processTable()).some((entry) => commandMatchesExecutable(entry.command, executable))) {
     throw new Error("Quit every running Aiden window before starting the isolated acceptance run.");
   }
 
@@ -394,7 +364,7 @@ async function runAcceptance() {
     child = null;
     await sleep(3_000);
     timeline.afterQuit = {
-      lumeProcesses: (await processTable()).filter((entry) => startedFrom(entry.command, lume.binaryPath)).length,
+      lumeProcesses: (await processTable()).filter((entry) => commandMatchesExecutable(entry.command, lume.binaryPath)).length,
     };
 
     const requests = evaluateAcceptanceRequests(model.requests, { ...context, sharedFileText: sharedFileText ?? undefined });

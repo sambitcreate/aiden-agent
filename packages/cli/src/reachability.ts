@@ -50,25 +50,30 @@ function jsonRecord(text: string): Record<string, unknown> | undefined {
   }
 }
 
+/** Arms the timer before starting `work`, so its synchronous setup counts against `timeoutMs`. */
+async function raceTimeout<T>(work: () => Promise<T>, timeoutMs: number, onTimeout: () => T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<T>((resolveLate) => {
+    timer = setTimeout(() => resolveLate(onTimeout()), timeoutMs);
+  });
+  try {
+    return await Promise.race([work(), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Reads Tailscale's status, Serve config and settings. Every read is optional:
  * an unreadable fact is left out. A Tailscale that has not answered within
  * `timeoutMs` is reported as unresponsive rather than holding up the caller.
  */
 export async function readTailscaleFacts(runner: AidenTailscaleCommandRunner | null, host: TailscaleHost = systemTailscaleHost(), timeoutMs = TAILSCALE_FACTS_TIMEOUT_MS, cancel?: AbortController): Promise<TailscaleFacts> {
-  let timer: NodeJS.Timeout | undefined;
-  const late = new Promise<TailscaleFacts>((resolveLate) => {
-    timer = setTimeout(() => {
-      // Stop the Tailscale command still running, so a CLI that exits next leaves nothing behind.
-      cancel?.abort();
-      resolveLate({ installed: true, signedIn: false, httpsCertificates: false, funnelOn443: false, unresponsive: true });
-    }, timeoutMs);
+  return raceTimeout(() => readTailscaleFactsNow(runner, host), timeoutMs, () => {
+    // Stop the Tailscale command still running, so a CLI that exits next leaves nothing behind.
+    cancel?.abort();
+    return { installed: true, signedIn: false, httpsCertificates: false, funnelOn443: false, unresponsive: true };
   });
-  try {
-    return await Promise.race([readTailscaleFactsNow(runner, host), late]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 /**
@@ -221,21 +226,15 @@ export interface ServerReachability {
  * server is listening at all.
  */
 export async function remoteServerStatus(agentDir: string, timeoutMs = 5_000): Promise<ServerReachability | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<ServerReachability>((resolveLate) => { timer = setTimeout(() => resolveLate({ unanswered: true }), timeoutMs); });
-  try {
-    const asked = remoteDaemonCommand(agentDir, "remote", ["status"]).then(
-      (value) => value as ServerReachability,
-      (error: unknown): ServerReachability | undefined => {
-        const code = (error as NodeJS.ErrnoException | undefined)?.code;
-        if (code === "ENOENT" || code === "ECONNREFUSED") return undefined;
-        return /^Remote is off/u.test(error instanceof Error ? error.message : String(error)) ? { remoteOff: true } : { unanswered: true };
-      },
-    );
-    return await Promise.race([asked, late]);
-  } finally {
-    clearTimeout(timer);
-  }
+  const ask = () => remoteDaemonCommand(agentDir, "remote", ["status"]).then(
+    (value) => value as ServerReachability,
+    (error: unknown): ServerReachability | undefined => {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT" || code === "ECONNREFUSED") return undefined;
+      return /^Remote is off/u.test(error instanceof Error ? error.message : String(error)) ? { remoteOff: true } : { unanswered: true };
+    },
+  );
+  return raceTimeout<ServerReachability | undefined>(ask, timeoutMs, () => ({ unanswered: true }));
 }
 
 /**
@@ -319,7 +318,7 @@ export function probeAidenHealth(endpoint: string, timeoutMs: number, options: {
   });
 }
 
-function pause(ms: number, signal: AbortSignal): Promise<void> {
+export function pause(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolvePause) => {
     if (signal.aborted) { resolvePause(); return; }
     const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolvePause(); };

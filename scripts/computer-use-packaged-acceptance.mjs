@@ -1,4 +1,4 @@
-/* global Buffer, console, process, setTimeout */
+/* global console, process, setTimeout */
 
 import { spawn, execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -19,6 +19,13 @@ import {
   resolveAcceptanceTarget,
 } from "./computer-use-packaged-acceptance-core.mjs";
 import {
+  argumentValue,
+  commandMatchesExecutable,
+  monitorChild,
+  readJsonRequest,
+  writeSse,
+} from "./packaged-acceptance-support.mjs";
+import {
   invalidateComputerUseAcceptanceReceipt,
   resolveComputerUseAcceptanceReceipt,
   writeComputerUseAcceptanceReceipt,
@@ -32,7 +39,6 @@ import {
 const executeFile = promisify(execFile);
 const modulePath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
-const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 const ACCEPTANCE_TIMEOUT_MS = 15 * 60 * 1_000;
 const PROCESS_POLL_MS = 250;
 const TEXTEDIT_BUNDLE_ID = "com.apple.TextEdit";
@@ -40,26 +46,6 @@ const TEXTEDIT_KNOWN_PATHS = Object.freeze([
   "/System/Applications/TextEdit.app",
   "/Applications/TextEdit.app",
 ]);
-
-function argumentValue(name) {
-  const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] : undefined;
-}
-
-async function readJsonRequest(request) {
-  const chunks = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    bytes += chunk.length;
-    if (bytes > MAX_REQUEST_BYTES) throw new Error("Acceptance model request exceeded 64 MiB.");
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
-function writeSse(response, value) {
-  response.write(`data: ${JSON.stringify(value)}\n\n`);
-}
 
 export async function startAcceptanceModel({ capability, expectedTitles, readGates }) {
   const requests = [];
@@ -185,14 +171,9 @@ async function processTable() {
 }
 
 async function executableProcesses(executable) {
-  return (await processTable()).filter(
-    (processInfo) =>
-      processInfo.command === executable || processInfo.command.startsWith(`${executable} `),
+  return (await processTable()).filter((processInfo) =>
+    commandMatchesExecutable(processInfo.command, executable),
   );
-}
-
-function commandMatchesExecutable(command, executable) {
-  return command === executable || command.startsWith(`${executable} `);
 }
 
 async function commandForPid(pid) {
@@ -504,22 +485,6 @@ export async function terminateLingeringComputerUseProcesses(
       "Could not terminate every package-owned Computer Use helper.",
     );
   }
-}
-
-function monitorChild(child) {
-  let outcome = null;
-  const promise = new Promise((resolve) => {
-    child.once("error", (error) => {
-      outcome = { error };
-      resolve(outcome);
-    });
-    child.once("exit", (code, signal) => {
-      if (outcome) return;
-      outcome = { code, signal };
-      resolve(outcome);
-    });
-  });
-  return { promise, outcome: () => outcome };
 }
 
 function forwardChildOutput(child) {

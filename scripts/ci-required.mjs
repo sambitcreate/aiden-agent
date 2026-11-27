@@ -1,8 +1,8 @@
-import { appendFileSync } from "node:fs";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { AREA_NAMES } from "./ci-changes.mjs";
+import { appendGithubOutput, appendGithubSummary } from "./ci-github-output.mjs";
 
 // A conditional job may be skipped only when every area that selects it is
 // explicitly false. Linux packaging is deliberately not required.
@@ -148,18 +148,11 @@ function outputLines(result) {
 }
 
 export function writeRequiredOutputs(result, outputPath) {
-  if (!outputPath) {
-    return;
-  }
-  appendFileSync(outputPath, `${outputLines(result).join("\n")}\n`, "utf8");
+  if (outputPath) appendGithubOutput(outputLines(result), outputPath);
 }
 
 export function writeRequiredSummary(result, summaryPath) {
-  if (!summaryPath) {
-    return;
-  }
-  const summary = outputLines(result).at(-1);
-  appendFileSync(summaryPath, `${summary.slice("summary=".length)}\n`, "utf8");
+  if (summaryPath) appendGithubSummary(outputLines(result), summaryPath);
 }
 
 export function evaluateRequiredEnvironment(environment = process.env) {

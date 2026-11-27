@@ -2,17 +2,12 @@
 // BrowserWindow. Never exposes terminal, remote, bot, accessibility, screen
 // capture, or arbitrary native dialog APIs.
 
-import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { contextBridge, webUtils } from "electron";
+import { ipcRendererTransport } from "./preload-ipc-transport.js";
 import { createQuickChatPreloadApi } from "./quick-chat-preload-core.js";
 
 const api = createQuickChatPreloadApi({
-  invoke: <T>(channel: string, ...args: unknown[]) =>
-    ipcRenderer.invoke(channel, ...args) as Promise<T>,
-  onNotification: (channel: string, callback: (payload: unknown) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
-    ipcRenderer.on(channel, listener);
-    return () => ipcRenderer.removeListener(channel, listener);
-  },
+  ...ipcRendererTransport,
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
 });
 

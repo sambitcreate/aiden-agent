@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { constants as fsConstants, createReadStream } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import {
   access,
   chmod,
@@ -19,6 +19,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pathExists, sha256 as hashFile } from "./package-file-guards.mjs";
 import { assertSafeArchiveListing, downloadPinnedArchive } from "./vendor-archive.mjs";
 import {
   CUA_DRIVER_ARTIFACT_PROVENANCE,
@@ -168,11 +169,7 @@ export function runBoundedCommand(command, args, options = {}) {
 
 const run = runBoundedCommand;
 
-export async function hashFile(file) {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(file)) hash.update(chunk);
-  return hash.digest("hex");
-}
+export { hashFile };
 
 export function validateArtifact(artifact) {
   return assertCuaDriverArtifactProvenance(artifact);
@@ -322,16 +319,6 @@ async function installBinary(extractedBinary) {
     }
   } finally {
     await rm(stagedDestination, { force: true });
-  }
-}
-
-async function pathExists(candidate) {
-  try {
-    await lstat(candidate);
-    return true;
-  } catch (error) {
-    if (error?.code === "ENOENT") return false;
-    throw error;
   }
 }
 

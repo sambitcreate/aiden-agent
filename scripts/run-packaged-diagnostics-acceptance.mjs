@@ -1,27 +1,17 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { chromium } from "playwright";
+import { findApps, freePort } from "./packaged-acceptance-support.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const distributionRoot = path.join(repositoryRoot, "release", "distribution");
 const timeoutMs = 45_000;
 const execFileAsync = promisify(execFile);
-
-async function findApps(root) {
-  const results = [];
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    const candidate = path.join(root, entry.name);
-    if (entry.isDirectory() && entry.name.endsWith(".app")) results.push(candidate);
-    else if (entry.isDirectory()) results.push(...await findApps(candidate));
-  }
-  return results;
-}
 
 async function waitForReady(journal, child) {
   const deadline = Date.now() + timeoutMs;
@@ -45,18 +35,6 @@ async function waitForReady(journal, child) {
     await delay(100);
   }
   throw new Error("Packaged Aiden did not produce production diagnostics before the deadline.");
-}
-
-async function freePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Could not reserve a DevTools port.");
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  return address.port;
 }
 
 async function waitForJournalEvent(journal, eventName) {

@@ -1,8 +1,6 @@
 /* global process */
 
-import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { createReadStream } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -21,6 +19,7 @@ import {
   lumeRequirement,
   packagedLumePaths,
 } from "./bot-computers-lume-pins.mjs";
+import { sha256 } from "./package-file-guards.mjs";
 
 const executeFile = promisify(execFile);
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -46,12 +45,6 @@ function minimalEntitlementHelperPaths(app) {
   return new Set(
     MINIMAL_ENTITLEMENT_HELPERS.map((name) => path.resolve(app, "Contents", "Helpers", name)),
   );
-}
-
-async function sha256(file) {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(file)) hash.update(chunk);
-  return hash.digest("hex");
 }
 
 async function verifyPinnedDriver(driver) {

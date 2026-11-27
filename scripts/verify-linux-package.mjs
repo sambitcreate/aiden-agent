@@ -3,12 +3,13 @@
 import { readFileSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import { execFile } from "node:child_process";
-import { access, lstat, open, readdir, realpath } from "node:fs/promises";
+import { access, lstat, open, readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { listPackage } from "@electron/asar";
 import { verifyAidenFuses } from "./configure-electron-fuses.mjs";
+import { assertRegularFile } from "./package-file-guards.mjs";
 import { verifyPackagedRendererCsp } from "./verify-renderer-csp.mjs";
 import {
   verifyPackagedModelCatalogResources,
@@ -40,17 +41,6 @@ const REQUIRED_GENERATIVE_UI_LIBRARY_FILES = Object.freeze([
   "katex.min.js",
   "katex.min.css",
 ]);
-
-async function assertRegularFile(file, { executable = false } = {}) {
-  const info = await lstat(file);
-  if (!info.isFile() || info.isSymbolicLink() || (await realpath(file)) !== file) {
-    throw new Error(`Expected a regular non-symlinked package file: ${file}`);
-  }
-  if (executable && (info.mode & 0o111) === 0) {
-    throw new Error(`Expected an executable package file: ${file}`);
-  }
-  return info;
-}
 
 async function assertAbsent(file) {
   try {

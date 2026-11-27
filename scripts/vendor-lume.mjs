@@ -6,12 +6,11 @@
 // entitlement and a provisioning profile for vm.networking, which re-signing
 // would drop. Nothing here runs at app runtime.
 
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pathExists, sha256 as hashFile } from "./package-file-guards.mjs";
 import { assertSafeArchiveListing, downloadPinnedArchive } from "./vendor-archive.mjs";
 import {
   LUME_APP_TREE,
@@ -51,11 +50,7 @@ export function lumeVendorEnvironment(home) {
 const run = (command, args, options = {}) =>
   runBoundedCommand(command, args, { env: lumeVendorEnvironment(os.tmpdir()), ...options });
 
-export async function hashFile(file) {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(file)) hash.update(chunk);
-  return hash.digest("hex");
-}
+export { hashFile };
 
 export function validateArtifact(artifact) {
   return assertLumeArtifactProvenance(artifact);
@@ -181,16 +176,6 @@ export async function downloadLumeArchive(
     downloadLabel: "The pinned Lume download",
     fetchImpl,
   });
-}
-
-async function pathExists(candidate) {
-  try {
-    await lstat(candidate);
-    return true;
-  } catch (error) {
-    if (error?.code === "ENOENT") return false;
-    throw error;
-  }
 }
 
 /**

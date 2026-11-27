@@ -1,8 +1,6 @@
 /* global Buffer, console, process */
 
-import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { createReadStream } from "node:fs";
 import { lstat, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +33,9 @@ import {
   MAX_MODELS_DEV_SNAPSHOT_BYTES,
   validateModelsDevSnapshot,
 } from "./model-snapshot-core.mjs";
+import { assertRegularFile, sha256 } from "./package-file-guards.mjs";
+
+export { assertRegularFile };
 
 const executeFile = promisify(execFile);
 const modulePath = fileURLToPath(import.meta.url);
@@ -136,20 +137,6 @@ async function run(command, args) {
     maxBuffer: 4 * 1024 * 1024,
     timeout: 30_000,
   });
-}
-
-async function sha256(file) {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(file)) hash.update(chunk);
-  return hash.digest("hex");
-}
-
-export async function assertRegularFile(file) {
-  const info = await lstat(file);
-  if (!info.isFile() || info.isSymbolicLink() || (await realpath(file)) !== file) {
-    throw new Error(`Expected a regular non-symlinked package file: ${file}`);
-  }
-  return info;
 }
 
 /** The Silero VAD model ships as an extra resource beside app.asar. */

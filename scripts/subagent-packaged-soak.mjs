@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { commandMatchesExecutable, monitorChild } from "./packaged-acceptance-support.mjs";
 import {
   SUBAGENT_PACKAGED_SOAK_CHAT_ID,
   SUBAGENT_PACKAGED_SOAK_CONTROL_FILENAME,
@@ -220,10 +221,6 @@ async function processTable() {
     .map((match) => ({ pid: Number(match[1]), command: match[2] }));
 }
 
-function commandMatchesExecutable(command, executable) {
-  return command === executable || command.startsWith(`${executable} `);
-}
-
 /** Match every executable launched from this exact target bundle, not just its main binary. */
 export function isSubagentPackagedSoakPackageProcess(appPath, command) {
   if (typeof appPath !== "string" || typeof command !== "string") return false;
@@ -316,22 +313,6 @@ async function terminatePackageOwnedProcess(appPath, processInfo) {
   if (!(await waitForPackageProcessExit(appPath, processInfo, 5_000))) {
     throw new Error("A target-bundle packaged soak process did not exit after SIGKILL.");
   }
-}
-
-function monitorChild(child) {
-  let outcome = null;
-  const promise = new Promise((resolve) => {
-    child.once("error", (caught) => {
-      outcome = { error: caught };
-      resolve(outcome);
-    });
-    child.once("exit", (code, signal) => {
-      if (outcome) return;
-      outcome = { code, signal };
-      resolve(outcome);
-    });
-  });
-  return { promise, outcome: () => outcome };
 }
 
 export function appendSubagentPackagedSoakDiagnosticTail(previous, chunk) {

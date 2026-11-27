@@ -1,10 +1,10 @@
-import { appendFileSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import { spawnSync as defaultSpawnSync } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { appendGithubOutput, appendGithubSummary } from "./ci-github-output.mjs";
 
 // Areas map to CI jobs:
 // - desktop: static, verify, unit lanes, Electron E2E
@@ -536,18 +536,11 @@ function outputLines(result) {
 }
 
 export function writeChangedAreaOutputs(result, outputPath) {
-  if (!outputPath) {
-    return;
-  }
-  appendFileSync(outputPath, `${outputLines(result).join("\n")}\n`, "utf8");
+  if (outputPath) appendGithubOutput(outputLines(result), outputPath);
 }
 
 export function writeChangedAreaSummary(result, summaryPath) {
-  if (!summaryPath) {
-    return;
-  }
-  const summary = outputLines(result).at(-1);
-  appendFileSync(summaryPath, `${summary.slice("summary=".length)}\n`, "utf8");
+  if (summaryPath) appendGithubSummary(outputLines(result), summaryPath);
 }
 
 function main() {

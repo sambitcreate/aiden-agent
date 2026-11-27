@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
+import { findApps } from "./packaged-acceptance-support.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const defaultDistributionRoot = path.join(repositoryRoot, "release", "distribution");
@@ -41,16 +42,6 @@ export function createRebootMigrationFixture() {
     2,
   )}\n`;
   return Object.freeze({ v1, v2, mismatchedGeneration, sourceSha256: sha256(v1) });
-}
-
-async function findApps(root) {
-  const results = [];
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    const candidate = path.join(root, entry.name);
-    if (entry.isDirectory() && entry.name.endsWith(".app")) results.push(candidate);
-    else if (entry.isDirectory()) results.push(...(await findApps(candidate)));
-  }
-  return results;
 }
 
 async function resolveApp(supplied) {

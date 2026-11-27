@@ -1,6 +1,7 @@
 import type { AidenRemoteDesktopPairing, AidenRemotePairingWindowStatus } from "../../../main/services/aiden-remote-pairing.js";
 import { reportServerRejection, serverAnalyticsContext, showServerNoticeInTerminal, startServerAnalytics } from "./server-analytics.ts";
 import { remoteDaemonCommand } from "./daemon-control.ts";
+import { pause } from "./reachability.ts";
 
 export const SERVE_USAGE = "Usage: aiden serve [--no-remote] [--pair lan|tailscale | --no-pair] [--daemon] | serve stop | serve status";
 
@@ -68,15 +69,6 @@ export async function daemonRemoteSummary(agentDir: string, timeoutMs = STATUS_T
 
 const POLL_MS = 2_000;
 
-function wait(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) { resolve(); return; }
-    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
-    const timer = setTimeout(done, ms);
-    signal.addEventListener("abort", done, { once: true });
-  });
-}
-
 /**
  * Open one pairing window through the daemon's own `remote pair` path, show
  * its QR and manual code, then say how to get a new one once it expires.
@@ -113,7 +105,7 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
   const expiresAt = Date.parse(pairing.bootstrap.expiresAt);
   if (!Number.isFinite(expiresAt)) return pairing.sessionId;
   while (!signal.aborted) {
-    await wait(Math.min(POLL_MS, Math.max(0, expiresAt - Date.now())), signal);
+    await pause(Math.min(POLL_MS, Math.max(0, expiresAt - Date.now())), signal);
     if (signal.aborted) return pairing.sessionId;
     let status: AidenRemotePairingWindowStatus | { state: "none" };
     try { status = await remoteDaemonCommand(agentDir, "remote", ["pair-status"]) as typeof status; } catch { return pairing.sessionId; }

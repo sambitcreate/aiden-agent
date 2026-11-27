@@ -2,16 +2,10 @@
 // `aidenAPI.ipc` shape the renderer's ipc-bridge uses, gated by the overlay's
 // own allowlists.
 
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge } from "electron";
 import { createBotBubblesPreloadApi } from "./bot-bubbles-preload-core.js";
+import { ipcRendererTransport } from "./preload-ipc-transport.js";
 
-const api = createBotBubblesPreloadApi({
-  invoke: <T>(channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args) as Promise<T>,
-  onNotification: (channel: string, callback: (payload: unknown) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
-    ipcRenderer.on(channel, listener);
-    return () => ipcRenderer.removeListener(channel, listener);
-  },
-});
+const api = createBotBubblesPreloadApi(ipcRendererTransport);
 
 contextBridge.exposeInMainWorld("aidenAPI", api);
