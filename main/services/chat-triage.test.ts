@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { ChatTriageStore, SNOOZE_WAKE_CHECK_MS, wakeTriageOnAttention } from "./chat-triage.js";
@@ -13,10 +12,10 @@ import {
   snoozeOptions,
   type ChatTriageSnapshot,
 } from "../../renderer/shared/chat-triage.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function tmpDir(t: test.TestContext): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-triage-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-triage-");
   return directory;
 }
 

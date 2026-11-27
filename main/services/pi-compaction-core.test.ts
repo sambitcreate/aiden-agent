@@ -53,6 +53,7 @@ import { hookContextMessage } from "./workspace-chat-hooks.js";
 import { chatStateRecord, chatStateUpdateMessage, memoryFactLinesInBranch, withoutForgottenFactsSession, type ChatTurnState } from "./chat-frozen-state.js";
 import { compileVcc } from "./pi-vcc/compiler.js";
 import { rememberStableHead, withPromptCacheBreakpoints } from "./prompt-cache-breakpoints.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const ZERO_COST = {
   input: 0,
@@ -1501,8 +1502,7 @@ test("cancellation racing checkpoint append restores the exact prior branch leaf
 
 for (const failure of ["before-append", "after-append", "reconstruction", "cancelled-reconstruction"] as const) {
   test(`failed checkpoint publication restores durable context: ${failure}`, async (t) => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "aiden-checkpoint-rollback-"));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await temporaryDirectory(t, "aiden-checkpoint-rollback-");
     const { faux, models, model } = compactionFixture();
     faux.setResponses([fauxAssistantMessage(structuredSummary("must not become active"))]);
     const session = await new PiCompactionSessionStore({ root: async () => root }).openChat("rollback-test");
@@ -1929,8 +1929,7 @@ test("journal synchronization stores the exact enriched skill turn once", async 
 });
 
 test("durable journals are private and delete with their chat", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-session-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-session-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const store = new PiCompactionSessionStore({ root: async () => root });
@@ -1947,8 +1946,7 @@ test("durable journals are private and delete with their chat", async (t) => {
 });
 
 test("deleteChat waits for an in-flight quarantine instead of refusing, even when its recovery failed", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-quarantined-delete-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-quarantined-delete-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const store = new PiCompactionSessionStore({ root: async () => root });
@@ -1987,8 +1985,7 @@ test("deleteChat waits for an in-flight quarantine instead of refusing, even whe
 });
 
 test("private history inspection preserves indexed, current, legacy, and quarantined journals without opening sessions", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-history-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-history-");
   const store = new PiCompactionSessionStore({
     root: async () => { throw new Error("inspection must not initialize the repository"); },
     readOnlyRoot: async () => root,
@@ -2024,8 +2021,7 @@ test("private history inspection preserves indexed, current, legacy, and quarant
 });
 
 test("private history inspection fails closed on corrupt index, malformed journals, and unreadable paths", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-history-corrupt-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-history-corrupt-");
   const store = new PiCompactionSessionStore({ root: async () => root });
   const indexPath = path.join(root, "aiden-journal-index.json");
   for (const contents of ["{broken", JSON.stringify({ version: 1, chats: { other: "not-an-array" } })]) {
@@ -2047,8 +2043,7 @@ test("private history inspection fails closed on corrupt index, malformed journa
 });
 
 test("header-only sessions created by old empty-chat reads are empty, but private body entries preserve them", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-header-only-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-header-only-");
   const original = new PiCompactionSessionStore({ root: async () => root });
   const session = await original.openChat("empty-chat-read");
   assert.equal(await original.hasChatHistory("empty-chat-read"), true, "an active session stays protected");
@@ -2065,8 +2060,7 @@ test("header-only sessions created by old empty-chat reads are empty, but privat
 });
 
 test("completed migration of an empty legacy journal is disposable with indexed backup and receipt", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-empty-migration-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-empty-migration-");
   const chatId = "empty-promoted-chat";
   const promoted = path.join(root, "empty.jsonl");
   const header = {
@@ -2102,8 +2096,7 @@ test("completed migration of an empty legacy journal is disposable with indexed 
 });
 
 test("Pi 0.84.4 rollback backups count as history only when they hold conversation", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-084-backup-history-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-pi-084-backup-history-");
   const inspect = (chatId: string) => new PiCompactionSessionStore({ root: async () => root }).hasChatHistory(chatId);
   const oldHeader = (chatId: string) => JSON.stringify({ kind: "header", version: 4, id: chatId, createdAt: 1, cwd: root,
     metadata: { kind: "aiden-chat-compaction-v1", chatId } });
@@ -2147,8 +2140,7 @@ test("Pi 0.84.4 rollback backups count as history only when they hold conversati
 });
 
 test("opening a chat promotes its legacy v3 journal before current repository discovery", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-v3-open-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-v3-open-");
   const root = path.join(temporary, "sessions");
   const directory = path.join(root, "--legacy--");
   await mkdir(directory, { recursive: true });
@@ -2181,8 +2173,7 @@ test("opening a chat promotes its legacy v3 journal before current repository di
 });
 
 test("a corrupt legacy duplicate is quarantined when valid v4 history exists", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-v3-duplicate-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-v3-duplicate-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const currentStore = new PiCompactionSessionStore({ root: async () => root });
@@ -2223,8 +2214,7 @@ test("a corrupt legacy duplicate is quarantined when valid v4 history exists", a
 });
 
 test("reopen rolls back a transaction interrupted by process death", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-crash-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-crash-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const firstStore = new PiCompactionSessionStore({ root: async () => root });
@@ -2248,8 +2238,7 @@ test("reopen rolls back a transaction interrupted by process death", async (t) =
 });
 
 test("reopen rolls back a Pi batch until visible persistence commits the turn", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-turn-crash-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-turn-crash-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const first = await new PiCompactionSessionStore({
@@ -2273,8 +2262,7 @@ test("reopen rolls back a Pi batch until visible persistence commits the turn", 
 });
 
 test("repairing a committed failed turn preserves the outer visible transaction", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-repair-visible-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-repair-visible-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const store = new PiCompactionSessionStore({ root: async () => root });
@@ -2430,8 +2418,7 @@ test("retry exhaustion reconciles a visible partial before persisting its marker
 });
 
 test("journal quarantine blocks reuse until recovery settles", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-quarantine-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-quarantine-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const store = new PiCompactionSessionStore({ root: async () => root });
@@ -2457,8 +2444,7 @@ test("journal quarantine blocks reuse until recovery settles", async (t) => {
 });
 
 test("newest corrupt duplicate is quarantined and older valid history reopens", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-fallback-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-fallback-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const repo = new JsonlSessionRepo({
@@ -2493,8 +2479,7 @@ test("newest corrupt duplicate is quarantined and older valid history reopens", 
 });
 
 test("corrupt indexed headers delete with private chat data", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-corrupt-delete-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-corrupt-delete-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const store = new PiCompactionSessionStore({ root: async () => root });
@@ -2510,8 +2495,7 @@ test("corrupt indexed headers delete with private chat data", async (t) => {
 });
 
 test("deleting one chat never matches another journal's body text", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-delete-owner-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-delete-owner-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const store = new PiCompactionSessionStore({ root: async () => root });
@@ -2524,8 +2508,7 @@ test("deleting one chat never matches another journal's body text", async (t) =>
 });
 
 test("reopen repairs a torn final JSONL line and retains the committed prefix", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-torn-tail-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-torn-tail-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const first = await new PiCompactionSessionStore({
@@ -2542,8 +2525,7 @@ test("reopen repairs a torn final JSONL line and retains the committed prefix", 
 });
 
 test("startup reconciliation removes indexed orphan journals", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-orphan-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-orphan-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const store = new PiCompactionSessionStore({ root: async () => root });
@@ -2555,8 +2537,7 @@ test("startup reconciliation removes indexed orphan journals", async (t) => {
 });
 
 test("a torn journal index is set aside intact and indexed journals are still deleted", async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-torn-index-"));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-pi-torn-index-");
   const root = path.join(temporary, "sessions");
   await mkdir(root, { recursive: true });
   const store = new PiCompactionSessionStore({ root: async () => root });
@@ -2708,8 +2689,7 @@ test("with skills off, the on-demand tools a turn declared are still recorded fo
 });
 
 test("skill-free visible context compacts and reopens through the real JSONL repository", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-skill-free-jsonl-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-skill-free-jsonl-");
   const { model, models, faux } = compactionFixture();
   let compactedVisibleContext = false;
   faux.setResponses([(context) => {
@@ -2807,8 +2787,7 @@ for (const entryPoint of ["check", "pressure"] as const) {
   });
 
   test(`model ownership: ${entryPoint} remeasures a reopened checkpoint for the new model`, async (t) => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-model-switch-"));
-    t.after(() => rm(directory, { recursive: true, force: true }));
+    const directory = await temporaryDirectory(t, "aiden-model-switch-");
     const { faux, models, model } = compactionFixture();
     faux.setResponses(Array.from({ length: 10 }, () => fauxAssistantMessage(structuredSummary("new model checkpoint"))));
     const initial = await new PiCompactionSessionStore({ root: async () => directory }).openChat("switch");
@@ -2873,8 +2852,7 @@ for (const contextWindow of [8_192, 16_384, 16_385, 20_000, 32_000]) {
 
 for (const mode of ["manual", "automatic"] as const) {
   test(`${mode} small-model compaction reduces retained content and survives restart`, async (t) => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-small-budget-"));
-    t.after(() => rm(directory, { recursive: true, force: true }));
+    const directory = await temporaryDirectory(t, "aiden-small-budget-");
     const { faux, models, model } = compactionFixture();
     const smallModel = { ...model, contextWindow: 8_192 };
     faux.setResponses(Array.from({ length: 10 }, () => fauxAssistantMessage(structuredSummary("small model"))));

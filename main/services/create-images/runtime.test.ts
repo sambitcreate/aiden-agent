@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { access, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { StudioAssetStore } from "../studio-assets/store.js";
@@ -12,10 +11,10 @@ import { createPiImageGenerationPort } from "./image-port.js";
 import { ImageRunLedger } from "./run-ledger.js";
 import { CreateImagesRuntime, type CreateImagesAssets } from "./runtime.js";
 import { fakeImageModels, generateChains, saveWorkflow, until } from "./test-fixture.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function environment(t: TestContext, options: Parameters<typeof fakeImageModels>[0] = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-runtime-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-image-runtime-");
   const assets = new StudioAssetStore({ root: () => path.join(root, "assets"), thumbnailer: fakeThumbnailer().thumbnailer });
   await assets.initialize();
   t.after(() => assets.close());

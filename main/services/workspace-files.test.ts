@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { mapWorkspaceMetadata } from "./workspace-metadata.js";
@@ -14,10 +13,10 @@ import {
   WorkspaceFileError,
   writeWorkspaceFile,
 } from "./workspace-files.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function workspace(t: test.TestContext): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-files-test-"));
-  t.after(() => fs.rm(root, { force: true, recursive: true }));
+  const root = await temporaryDirectory(t, "aiden-files-test-");
   return root;
 }
 

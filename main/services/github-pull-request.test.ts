@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { GitHubApi } from "./github/github-api.js";
@@ -19,6 +18,7 @@ import {
   rollupGitHubChecksState,
 } from "./github-pull-request.js";
 import { processRunning } from "../shared/process-liveness-test-support.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("normalizes GitHub status checks and conclusions", () => {
   assert.equal(
@@ -529,8 +529,7 @@ test("ambiguous create failures are unknown; missing tools are definite failures
 });
 
 async function fakeGitHubCli(t: TestContext, body: string): Promise<{ binary: string; dir: string }> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-fake-gh-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-fake-gh-");
   const binary = path.join(dir, "gh");
   await writeFile(binary, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   return { binary, dir };

@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 import {
   createModels,
@@ -26,6 +23,7 @@ import {
   syncChatMessagesToPiSession,
 } from "./pi-compaction-session-store.js";
 import type { Chat } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const baseChat: Chat = {
   id: "chat-1",
@@ -334,8 +332,7 @@ function compactionRuntime(providerId: string, modelId: string) {
 }
 
 test("manual compaction excludes durable skill instructions while Skills is disabled", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-skill-gate-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-context-skill-gate-");
   const providerId = "context-skill-gate";
   const modelId = "context-skill-gate-model";
   const { faux, model, runtime } = compactionRuntime(providerId, modelId);
@@ -413,8 +410,7 @@ async function compactableChat(root: string, providerId: string, modelId: string
 }
 
 test("PreCompact hook context steers an operator compaction and a finished one is reported", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-precompact-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-context-precompact-");
   const { faux, runtime, chat, session } = await compactableChat(root, "context-precompact", "context-precompact-model");
   const providerPayloads: string[] = [];
   faux.setResponses(
@@ -449,8 +445,7 @@ test("PreCompact hook context steers an operator compaction and a finished one i
 });
 
 test("an operator compaction continues the chat's cached request, and the finished one retires that request", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-cached-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-context-cached-");
   const { faux, runtime, chat, session } = await compactableChat(root, "context-cached", "context-cached-model");
   // A model whose prompt cache lives five minutes, so the chat's last request is kept.
   const model = { ...runtime.model, promptCache: { short: 300 } } as Model<Api>;
@@ -494,8 +489,7 @@ test("an operator compaction continues the chat's cached request, and the finish
 });
 
 test("a failing PreCompact source never fails a recovery compaction, which hooks see as auto", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-precompact-fail-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-context-precompact-fail-");
   const { faux, runtime, chat, session } = await compactableChat(root, "context-precompact-fail", "context-precompact-fail-model");
   faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage(validSummary("recovered checkpoint"))));
   const triggers: string[] = [];
@@ -520,8 +514,7 @@ test("a failing PreCompact source never fails a recovery compaction, which hooks
 });
 
 test("disabling Skills cancels an operator compaction already at the provider", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-skill-cancel-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-context-skill-cancel-");
   const providerId = "context-skill-cancel";
   const modelId = "context-skill-cancel-model";
   const { faux, runtime } = compactionRuntime(providerId, modelId);
@@ -599,8 +592,7 @@ test("disabling Skills cancels an operator compaction already at the provider", 
 
 
 test("manual compaction snapshots the saved model's recent budget across provider resolution", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-model-budget-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-context-model-budget-");
   const providerId = "budget-provider";
   const modelId = "budget-model";
   const { faux, model, runtime } = compactionRuntime(providerId, modelId);

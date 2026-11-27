@@ -1,18 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import {
-  access,
-  chmod,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rename,
-  rm,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
-import os from "node:os";
+import { access, chmod, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -24,6 +13,7 @@ import {
   resolveSubagentFileMutatorBinary,
   SubagentFileMutatorError,
 } from "./subagent-file-mutator-io.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const repositoryRoot = process.cwd();
 const productionBinary = path.join(
@@ -40,8 +30,7 @@ const testingBinary = path.join(
 );
 
 async function workspace(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-mutator-io-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-mutator-io-");
   return root;
 }
 

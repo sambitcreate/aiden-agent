@@ -18,6 +18,7 @@ import {
   type BotRuntimeEffectiveAuthority,
 } from "./bot-runtime-authority.js";
 import type { Chat } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 function authorityFixture(input: {
   root: string;
@@ -262,8 +263,7 @@ test("a device paired without its own Full Access notice opens Bot Files under t
 });
 
 test("re-listing Bot Files reclaims superseded unopened handles instead of answering 429", async (t) => {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-bot-files-"));
-  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-remote-bot-files-");
   const root = path.join(temporary, "managed-home");
   await fs.mkdir(root, { recursive: true });
   await fs.writeFile(path.join(root, "a.md"), "a\n", "utf8");
@@ -543,8 +543,7 @@ test("stalled Bot file PUT parses its body before device revocation admission", 
 });
 
 async function budgetBotFixture(t: test.TestContext) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-metadata-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-metadata-");
   for (let i = 0; i < 24; i += 1) await fs.writeFile(path.join(root, `file${i}.txt`), "fixture");
   const controller = new AbortController();
   const handles = new AidenOpaqueHandleStore();
@@ -566,8 +565,7 @@ async function budgetBotFixture(t: test.TestContext) {
 
 test("Bot and workspace listings share the aggregate metadata budget with ordered fresh handles", async (t) => {
   const { service, releases } = await budgetBotFixture(t);
-  const desktopRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-desktop-metadata-"));
-  t.after(() => fs.rm(desktopRoot, { recursive: true, force: true }));
+  const desktopRoot = await temporaryDirectory(t, "aiden-desktop-metadata-");
   for (let i = 0; i < 96; i += 1) await fs.writeFile(path.join(desktopRoot, `file${i}.txt`), "fixture");
   const original = fsPromises.stat;
   let active = 0;

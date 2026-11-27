@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { approveReviewedMcpLaunch, mcpLaunchReviewText, type McpLaunchReviewDependencies } from "./mcp-launch-review-core.js";
@@ -8,12 +7,12 @@ import { mcpStdioLaunchFingerprint, planMcpFieldSecrets, stageMcpFieldSecrets, r
 import { createMcpStdioApprovalStore } from "./mcp-stdio-approvals.js";
 import { resolveMcpConnectionCredentials } from "./mcp-connection-credentials.js";
 import type { McpServer } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const plain: McpServer = { id: "pending", name: "Pending", enabled: true, transport: "stdio", command: "node", args: ["server.js"], env: { NODE_OPTIONS: "--require /tmp/fixture.js", PATH: "/test/bin", TOKEN: "TEST_PRIVATE_VALUE" } };
 
 async function fixture(t: test.TestContext) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-mcp-review-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-mcp-review-");
   // Distinct markers, as the real random source provides.
   let next = 0;
   const unique = planMcpFieldSecrets(plain, () => (++next).toString(16).padStart(32, "0"));

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import {
@@ -16,10 +15,10 @@ import {
   createSubagentTranscriptStore,
   SUBAGENT_TRANSCRIPTS_DIRECTORY,
 } from "./subagent-transcript-store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function tempRoot(t: { after(callback: () => Promise<void>): void }): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-transcripts-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-transcripts-");
   return root;
 }
 

@@ -3,14 +3,13 @@
 
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { DataStore } from "./data-store.js";
 import { MAX_CHAT_PULL_REQUEST_LINKS } from "../../renderer/shared/chat-pull-requests.js";
 import { ChatPullRequestStore } from "./chat-pull-request-store.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const REF = { host: "github.com", repository: "owner/repo", number: 12 };
 
@@ -27,8 +26,7 @@ function link(number: number, overrides: Record<string, unknown> = {}) {
 }
 
 test("links deduplicate by (host, repository, number) and keep first linkedAt", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const store = new ChatPullRequestStore(() => directory);
 
   await store.link("chat-1", link(12));
@@ -49,8 +47,7 @@ test("links deduplicate by (host, repository, number) and keep first linkedAt", 
 });
 
 test("malformed link input is rejected", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const store = new ChatPullRequestStore(() => directory);
 
   // A bad display URL falls back to the canonical URL; a bad ref rejects.
@@ -65,8 +62,7 @@ test("malformed link input is rejected", async (t) => {
 });
 
 test("link capacity is enforced", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const store = new ChatPullRequestStore(() => directory);
   for (let i = 1; i <= MAX_CHAT_PULL_REQUEST_LINKS; i += 1) {
     await store.link("chat-1", link(i));
@@ -78,8 +74,7 @@ test("link capacity is enforced", async (t) => {
 });
 
 test("links persist atomically and survive a store restart", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
 
   const first = new ChatPullRequestStore(() => directory);
   await first.link("chat-1", link(12));
@@ -104,8 +99,7 @@ test("links persist atomically and survive a store restart", async (t) => {
 });
 
 test("a corrupt file reads as empty and is preserved on the next write", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   await fs.writeFile(path.join(directory, "chat-1.json"), "{ not json", "utf8");
 
   const store = new ChatPullRequestStore(() => directory);
@@ -121,8 +115,7 @@ test("a corrupt file reads as empty and is preserved on the next write", async (
 });
 
 test("unlink removes only the matching ref and reports missing", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const store = new ChatPullRequestStore(() => directory);
 
   await store.link("chat-1", link(1));
@@ -136,8 +129,7 @@ test("unlink removes only the matching ref and reports missing", async (t) => {
 });
 
 test("create intents persist, cap, and clear", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const store = new ChatPullRequestStore(() => directory);
 
   const intent = {
@@ -162,8 +154,7 @@ test("create intents persist, cap, and clear", async (t) => {
 });
 
 test("pending intents are never evicted — capacity rejects the new intent", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const store = new ChatPullRequestStore(() => directory);
   const intent = {
     operationId: "op-0",
@@ -189,8 +180,7 @@ test("pending intents are never evicted — capacity rejects the new intent", as
 });
 
 test("deleteChat removes the file and never requires GitHub", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const store = new ChatPullRequestStore(() => directory);
 
   await store.link("chat-1", link(1));
@@ -200,8 +190,7 @@ test("deleteChat removes the file and never requires GitHub", async (t) => {
 });
 
 test("a file with foreign chatId or wrong schema is not adopted", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   await fs.writeFile(
     path.join(directory, "chat-1.json"),
     JSON.stringify({ schemaVersion: 1, chatId: "other", links: [link(1)] }),
@@ -212,8 +201,7 @@ test("a file with foreign chatId or wrong schema is not adopted", async (t) => {
 });
 
 test("created link and settled intent publish together and cannot reappear after unlink", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const store = new ChatPullRequestStore(() => directory);
   await store.recordCreateIntent("chat-1", {
     operationId: "op",
@@ -235,8 +223,7 @@ test("created link and settled intent publish together and cannot reappear after
 });
 
 test("stale create completion cannot resurrect an explicitly unlinked PR", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const store = new ChatPullRequestStore(() => directory);
   await store.recordCreateIntent("chat-1", {
     operationId: "op",
@@ -262,8 +249,7 @@ test("stale create completion cannot resurrect an explicitly unlinked PR", async
 });
 
 test("future schema and malformed pending expectations stay write-protected", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   for (const payload of [
     {
       schemaVersion: 2,
@@ -300,8 +286,7 @@ test("future schema and malformed pending expectations stay write-protected", as
 });
 
 test("oversized or duplicate pending intent inventories preserve every byte", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const intent = {
     operationId: "op",
     host: "github.com",
@@ -333,8 +318,7 @@ test("oversized or duplicate pending intent inventories preserve every byte", as
 });
 
 test("deletion drains admitted writes and rejects every later write", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const store = new ChatPullRequestStore(() => directory);
   const linking = store.link("chat-1", link(1));
   const rejected = assert.rejects(linking);
@@ -346,8 +330,7 @@ test("deletion drains admitted writes and rejects every later write", async (t) 
 });
 
 test("deletion waits for a read that is recovering a held PR file", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   await fs.writeFile(
     path.join(
       directory,
@@ -402,8 +385,7 @@ test("deletion waits for a read that is recovering a held PR file", async (t) =>
 });
 
 test("deletion consumes failed recovery artifacts before restart without touching another chat", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const payload = JSON.stringify({
     schemaVersion: 1,
     chatId: "chat-1",
@@ -449,8 +431,7 @@ test("deletion consumes failed recovery artifacts before restart without touchin
 });
 
 test("deletion consumes recovery artifacts even when no store was loaded", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   await fs.writeFile(
     path.join(
       directory,
@@ -477,8 +458,7 @@ for (const [deletedId, siblingId] of [
 ]) {
   for (const cached of [false, true]) {
     test(`deleting a chat preserves dotted sibling recovery files (${deletedId}, cached=${cached})`, async (t) => {
-      const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-      t.after(() => rm(directory, { recursive: true, force: true }));
+      const directory = await temporaryDirectory(t, "aiden-chat-pr-");
       const store = new ChatPullRequestStore(() => directory);
       if (cached) await store.list(deletedId);
       const siblingNames = ["held", "previous"].map(
@@ -516,8 +496,7 @@ for (const [deletedId, siblingId] of [
 }
 
 test("recovery and deletion preserve files with non-generated operation tokens", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-pr-");
   const names = [
     "notes",
     "00000000-0000-1000-8000-000000000000",

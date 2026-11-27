@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -19,6 +17,7 @@ import {
   waitForChildExit,
 } from "./process-group.js";
 import { processGroupRunning, processRunning } from "./process-liveness-test-support.js";
+import { temporaryDirectory } from "./temp-dir-test-support.js";
 
 const posix = process.platform !== "win32";
 
@@ -47,8 +46,7 @@ async function eventually(check: () => boolean, timeoutMs = 2_000): Promise<bool
 test("termination keeps escalating after the leader closes until a SIGTERM-ignoring descendant is gone", { skip: !posix }, async (t) => {
   // The descendant ignores SIGTERM and does not hold the leader's pipes, so the
   // leader closes on SIGTERM while the descendant survives it.
-  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-process-group-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-process-group-");
   const ready = path.join(dir, "ready");
   const child = spawnGroup(
     `sh -c 'trap "" TERM; : > "${ready}"; while :; do sleep 0.05; done' >/dev/null 2>&1 &\necho $!\nwait`,
@@ -461,8 +459,7 @@ test("Darwin lsof parser accepts buffered anonymous pipes with cnt=N while rejec
 });
 
 test("captureProcessGroupSurvivors fails closed without proof and verifies pipe-inheriting survivors while rejecting unrelated leaderless groups", { skip: !posix }, async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-survivor-proof-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-survivor-proof-");
 
   // 1. Spawn a wrapper whose grandchild inherits our stdout/stderr pipes, then wrapper exits.
   const ownedWrapper = spawn(
@@ -562,8 +559,7 @@ process.exit(0);`,
 });
 
 test("observePreExitProcessGroupMembers proves a stdio-ignored descendant before leader exit", { skip: !posix }, async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-preexit-proof-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  await temporaryDirectory(t, "aiden-preexit-proof-");
   const child = spawn(
     process.execPath,
     [

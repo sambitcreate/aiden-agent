@@ -24,6 +24,7 @@ import {
 } from "./workspace-intake.js";
 import { processRunning } from "../shared/process-liveness-test-support.js";
 import { createPeerProjectSource } from "./peer-project-source.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const FIXTURE_URL = "https://example.invalid/acme/widget.git";
 
@@ -739,8 +740,7 @@ test("clone progress lines and failures are parsed into short user-facing result
 
 
 test("remote clone publishes optional environment files privately before registration and replays without another clone", async t => {
-  const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-clone-bare-"));
-  t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
+  const repositoryRoot = await temporaryDirectory(t, "aiden-remote-clone-bare-");
   const bare = await bareRepository(repositoryRoot, ".env*");
   const fixture_ = await fixture(t, { runClone: createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] }) });
   let consumed = 0;
@@ -768,8 +768,7 @@ test("remote clone publishes optional environment files privately before registr
 });
 
 test("remote clone refuses environment files that the destination does not ignore", async t => {
-  const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-clone-ignore-"));
-  t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
+  const repositoryRoot = await temporaryDirectory(t, "aiden-remote-clone-ignore-");
   const bare = await bareRepository(repositoryRoot);
   const sourcePath = path.join(repositoryRoot, "source");
   await fs.appendFile(path.join(sourcePath, ".git", "info", "exclude"), "\n.env.local\n");
@@ -787,8 +786,7 @@ test("remote clone refuses environment files that the destination does not ignor
 });
 
 test("destination ignore admission does not depend on case-insensitive Git configuration", async t => {
-  const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-ignore-case-"));
-  t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
+  const repositoryRoot = await temporaryDirectory(t, "aiden-clone-ignore-case-");
   const bare = await bareRepository(repositoryRoot, ".ENV*");
   const clone = createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] });
   const fixture_ = await fixture(t, { runClone: async request => {
@@ -804,8 +802,7 @@ test("destination ignore admission does not depend on case-insensitive Git confi
 });
 
 test("destination rejects mixed-case negation under normal Git staging", async t => {
-  const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-negation-"));
-  t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
+  const repositoryRoot = await temporaryDirectory(t, "aiden-clone-negation-");
   const bare = await bareRepository(repositoryRoot, ".env*\n!.ENV.local");
   const clone = createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] });
   const fixture_ = await fixture(t, { runClone: async request => {
@@ -821,8 +818,7 @@ test("destination rejects mixed-case negation under normal Git staging", async t
 });
 
 test("destination cannot rely on a user-level Git exclude", async t => {
-  const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-global-ignore-"));
-  t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
+  const repositoryRoot = await temporaryDirectory(t, "aiden-clone-global-ignore-");
   const bare = await bareRepository(repositoryRoot);
   const excludes = path.join(repositoryRoot, "global-excludes");
   const config = path.join(repositoryRoot, "gitconfig");

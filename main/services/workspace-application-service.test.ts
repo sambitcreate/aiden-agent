@@ -22,6 +22,7 @@ import { createAidenAppTools } from "./aiden-app-tools.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 function workspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
@@ -319,8 +320,7 @@ test("agent workspace Memory redirects before intent while the caller is awaitin
 });
 
 test("removing a workspace drops its artifacts, and a failure there does not undo the removal", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-workspace-artifacts-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-workspace-artifacts-");
   const store = new WorkspaceArtifactStore({ root: () => dir });
   const compiled = compileAum('<Visual title="PRs"><Text>Open</Text></Visual>');
   await store.create(
@@ -378,8 +378,7 @@ test("removing a workspace ends the design grants on its folder and no others", 
 });
 
 async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, initial: Workspace[]) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-no-workspace-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-no-workspace-");
   const registry = new Map(initial.map((entry) => [entry.id, entry]));
   const chatOwners = new Set<string>();
   /** Chat ids per workspace, for the paired-device checks. */

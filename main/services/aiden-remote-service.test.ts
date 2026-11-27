@@ -32,6 +32,7 @@ import {
   pairingRequestMatchCode,
 } from "./aiden-remote-sealed-envelope.js";
 import { openPeerPairingRequestGrant } from "./peer-pairing.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("Remote discovery selects the Node Bonjour backend on Linux", () => {
   assert.equal(aidenRemoteBonjourBackend("darwin"), "dns-sd");
@@ -2574,8 +2575,7 @@ test("a Remote enable that failed on a torn operations ledger succeeds once the 
   const { DataStore } = await import("./data-store.js");
   const { AidenIdempotencyLedger } = await import("./aiden-remote-operation-contract.js");
   const { aidenRemoteOperationStoreOptions, openAidenRemoteOperationLedger } = await import("./aiden-remote-operation-store.js");
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-operations-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-remote-operations-");
   const file = path.join(dir, "operations.json");
   await fs.writeFile(file, '{"version":1,"entries":[', "utf8");
   const store = new DataStore("operations.json", new AidenIdempotencyLedger().snapshot(), () => dir, aidenRemoteOperationStoreOptions());

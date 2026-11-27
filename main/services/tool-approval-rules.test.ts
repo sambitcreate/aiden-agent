@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { DataStore } from "./data-store.js";
@@ -15,10 +14,10 @@ import {
   TOOL_APPROVAL_RULES_MAX_BYTES,
   type ToolApprovalRulesDocument,
 } from "./tool-approval-rules.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function diskBook(t: test.TestContext) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-approval-rules-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-approval-rules-");
   const open = () =>
     new DataStore<ToolApprovalRulesDocument>(
       "tool-approval-rules.json",

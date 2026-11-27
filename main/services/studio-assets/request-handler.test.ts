@@ -1,17 +1,14 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { StudioAssetError } from "./contract.js";
 import { StudioAssetGrants } from "./delivery-core.js";
 import { createStudioAssetRequestHandler } from "./request-handler.js";
 import { StudioAssetStore } from "./store.js";
 import { fakeThumbnailer, pngBytes } from "./test-fixture.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function fixture(t: TestContext) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-studio-protocol-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-studio-protocol-");
   let now = 1_000_000;
   const store = new StudioAssetStore({
     root: () => root,

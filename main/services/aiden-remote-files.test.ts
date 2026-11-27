@@ -14,6 +14,7 @@ import type { Workspace } from "./types.js";
 import { createWorkspaceEnvironmentApplicationService } from "./workspace-environment-application-service.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("remote Files uses device/workspace-bound opaque handles and version-safe writes", async () => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-files-"));
@@ -314,8 +315,7 @@ test("remote workspace owners survive disconnect-shaped reuse and revoke active 
 });
 
 test("lazy save reserves capacity before mutation and renews the returned handle", { skip: process.platform !== "darwin" }, async (t) => {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lazy-save-"));
-  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const temporary = await temporaryDirectory(t, "aiden-lazy-save-");
   const root = await fs.realpath(temporary);
   await fs.writeFile(path.join(root, "note.txt"), "old");
   const workspace: Workspace = { id: "save", name: "Save", folderPath: root, permission: "ask", createdAt: 1, updatedAt: 2 };
@@ -573,8 +573,7 @@ test("in-flight file reads stay pinned under concurrent lazy browsing and genuin
 });
 
 async function legacyFixture(t: test.TestContext, count: number, capacity = 10_000) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-legacy-metadata-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-legacy-metadata-");
   for (let start = 0; start < count; start += 100) {
     await Promise.all(Array.from({ length: Math.min(100, count - start) }, (_, offset) =>
       fs.writeFile(path.join(root, `file${start + offset}.txt`), "data")));

@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test from "node:test";
 import { createChatStore } from "../services/chat-store-core.js";
 import { parseUiVisualStateUpdate } from "./chat-ui-visual-state.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const VISUAL = {
   version: 1 as const,
@@ -35,8 +33,7 @@ test("a visual's local state update is parsed strictly", () => {
 });
 
 test("the store keeps a visual's latest local state and refuses everything else", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-ui-state-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-ui-state-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ title: "State", workspaceId: "w", providerId: "p", model: "m" });
   await store.appendMessage(chat.id, { role: "user", content: "Show it" });

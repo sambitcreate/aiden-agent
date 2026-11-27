@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { createChatStore } from "./chat-store-core.js";
 import { createScheduleStore } from "./schedule-store.js";
 import { createScheduledChatClaim } from "./scheduled-chat-creation.js";
 import { MemoryPersistence } from "./task-persistence-test-support.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 class FailingTaskPersistence<T> extends MemoryPersistence<T> {
   fail: "before" | "after" | null = null;
@@ -24,8 +24,7 @@ class FailingTaskPersistence<T> extends MemoryPersistence<T> {
 }
 
 test("an indeterminate scheduled create preserves its exact recovered chat identity", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-scheduled-chat-claim-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-scheduled-chat-claim-");
   let failIndexWrites = true;
   const interrupted = createChatStore(async () => directory, undefined, {
     syncDirectory: async () => undefined,

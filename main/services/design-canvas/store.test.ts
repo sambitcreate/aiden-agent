@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
@@ -9,10 +8,10 @@ import {
 } from "../../../renderer/shared/design-canvas/schema.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 import { DesignCanvasStore } from "./store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function tempRoot(t: TestContext): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-store-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-design-canvas-store-");
   return path.join(root, "design-canvases");
 }
 

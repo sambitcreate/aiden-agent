@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { assertPathInside, isPathInside, resolveRealPathInside } from "./path-containment.js";
+import { temporaryDirectory } from "./temp-dir-test-support.js";
 
 test("isPathInside rejects traversal, sibling prefixes, and foreign absolute paths", () => {
   const root = path.resolve("/srv/aiden/root");
@@ -49,8 +49,7 @@ test("assertPathInside throws the caller's message only for escapes", () => {
 });
 
 test("resolveRealPathInside follows symlinks before deciding containment", async (t) => {
-  const base = await mkdtemp(path.join(os.tmpdir(), "aiden-path-containment-"));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-path-containment-");
   const root = path.join(base, "root");
   const outside = path.join(base, "outside");
   await mkdir(path.join(root, "inner"), { recursive: true });

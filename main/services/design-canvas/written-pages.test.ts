@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
@@ -18,6 +17,7 @@ import {
   writtenPagePath,
 } from "./written-pages.js";
 import { DesignCanvasStore } from "./store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const ids = () => {
   let next = 0;
@@ -113,8 +113,7 @@ test("the pages a chat wrote are read from its saved activity, newest last and e
 });
 
 test("only pages that exist are placed, the canvas is saved once per change, and a filled canvas is not refilled on entry", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-written-pages-");
   const workspaceRoot = path.join(base, "workspace");
   await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
   await fs.writeFile(path.join(workspaceRoot, "design", "home.html"), "<!doctype html><title>Home</title>");
@@ -147,8 +146,7 @@ test("only pages that exist are placed, the canvas is saved once per change, and
 });
 
 test("a page the person takes off the canvas is not put back when Aiden writes it again, until Aiden places it or the person adds it", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-written-pages-");
   const workspaceRoot = path.join(base, "workspace");
   await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
   for (const name of ["home", "about"]) await fs.writeFile(path.join(workspaceRoot, "design", `${name}.html`), "<!doctype html><title>x</title>");
@@ -211,8 +209,7 @@ test("a page the person takes off the canvas is not put back when Aiden writes i
 });
 
 test("after each command, the design/ pages it made or changed are found, and nothing else", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-pages-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-command-pages-");
   const workspaceRoot = path.join(base, "workspace");
   const design = path.join(workspaceRoot, "design");
   await fs.mkdir(design, { recursive: true });
@@ -256,8 +253,7 @@ test("a page the first command writes while the scanner takes its first look is 
 });
 
 test("a workspace without a design folder has no command pages", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-pages-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-command-pages-");
   const scanner = createDesignPageScanner(base);
   await fs.writeFile(path.join(base, "index.html"), "<!doctype html>");
   assert.deepEqual(await scanner.changedSinceLastLook(), []);
@@ -290,8 +286,7 @@ test("pages a running reply wrote join the saved ones for design mode's entry, n
 });
 
 test("deleted newest pages do not starve older surviving pages under limit, and shouldSave prevents recreating a deleted chat's canvas", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-race-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-written-pages-race-");
   const workspaceRoot = path.join(base, "workspace");
   const canvasesDir = path.join(base, "canvases");
   await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
@@ -350,8 +345,7 @@ test("deleted newest pages do not starve older surviving pages under limit, and 
 });
 
 test("leaving design mode while the page's save waits keeps the frame off the stored canvas", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-exit-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-written-pages-exit-");
   const workspaceRoot = path.join(base, "workspace");
   await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
   await fs.writeFile(path.join(workspaceRoot, "design", "home.html"), "<!doctype html><title>Home</title>");
@@ -384,8 +378,7 @@ test("leaving design mode while the page's save waits keeps the frame off the st
 });
 
 test("leaving design mode while the page's file is being written takes the frame back off, unless the mode is on again", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-exit-write-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-written-pages-exit-write-");
   const workspaceRoot = path.join(base, "workspace");
   await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
   await fs.writeFile(path.join(workspaceRoot, "design", "home.html"), "<!doctype html><title>Home</title>");
@@ -459,8 +452,7 @@ test("a page's own width hint picks its design width; pages that do not say stay
 });
 
 test("written pages land at the width they ask for, with that width's box", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-widths-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-written-widths-");
   const workspaceRoot = path.join(base, "workspace");
   await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
   await fs.writeFile(path.join(workspaceRoot, "design", "phone.html"), '<!doctype html><meta name="aiden-design-width" content="390"><title>Phone</title>');
@@ -487,8 +479,7 @@ test("written pages land at the width they ask for, with that width's box", asyn
 });
 
 test("the width hint is read only from a regular file, never through a symbolic link", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-hint-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-written-hint-");
   const real = path.join(base, "real.html");
   await fs.writeFile(real, '<meta name="aiden-design-width" content="390">');
   await fs.symlink(real, path.join(base, "link.html"));

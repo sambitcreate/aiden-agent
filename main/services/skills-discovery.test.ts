@@ -11,6 +11,7 @@ import {
   invalidateSkillDiscoveryCache,
   SKILL_DISCOVERY_LIMITS,
 } from "./skills-discovery.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function writeSkill(dir: string, name: string, body: string) {
   const skillDir = path.join(dir, name);
@@ -19,8 +20,7 @@ async function writeSkill(dir: string, name: string, body: string) {
 }
 
 test("discovers legacy global .agents skills", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-home-");
 
   await writeSkill(
     path.join(home, ".agents"),
@@ -35,8 +35,7 @@ test("discovers legacy global .agents skills", async (t) => {
 });
 
 test("discovers nested global .agents/skills skills", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-home-");
 
   await writeSkill(
     path.join(home, ".agents", "skills"),
@@ -51,8 +50,7 @@ test("discovers nested global .agents/skills skills", async (t) => {
 });
 
 test("discovers global .claude/skills skills", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-home-");
 
   await writeSkill(
     path.join(home, ".claude", "skills"),
@@ -66,8 +64,7 @@ test("discovers global .claude/skills skills", async (t) => {
 });
 
 test("discovers global .aiden/{skill,skills} skills", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-home-");
 
   await writeSkill(
     path.join(home, ".aiden", "skill"),
@@ -155,8 +152,7 @@ test("authoritative discovery retains colliding candidates for registry resoluti
 });
 
 test("native, Claude, and Agents roots retain their documented precedence", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-home-");
 
   await writeSkill(
     path.join(home, ".agents", "skills"),
@@ -211,8 +207,7 @@ test("filesystem discovery enforces an aggregate candidate and traversal budget"
 });
 
 test("skips skills without instructions", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-home-");
 
   await writeSkill(path.join(home, ".agents", "skills"), "empty", `---\nname: empty\n---\n`);
 
@@ -221,8 +216,7 @@ test("skips skills without instructions", async (t) => {
 });
 
 test("skips an oversized skill without reading beyond the bounded contract", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-home-");
 
   await writeSkill(
     path.join(home, ".agents", "skills"),
@@ -314,8 +308,7 @@ test("rejects a skill root replacement before its canonical identity is trusted"
 });
 
 test("caches repeated discovery for the same roots", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-home-");
 
   await writeSkill(
     path.join(home, ".agents", "skills"),
@@ -339,16 +332,14 @@ test("caches repeated discovery for the same roots", async (t) => {
 });
 
 test("returns empty array when no skill directories exist", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-home-");
 
   const skills = await discoverSkills(undefined, home);
   assert.equal(skills.length, 0);
 });
 
 test("YAML skill metadata reaches the catalog and tools without losing multiline descriptions", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-yaml-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-yaml-");
   const fixtures = [
     {
       directory: "folded",
@@ -413,8 +404,7 @@ test("YAML skill metadata reaches the catalog and tools without losing multiline
 });
 
 test("malformed or non-string YAML metadata does not admit a skill or hide valid neighbors", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-yaml-invalid-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-yaml-invalid-");
   const invalid = [
     "name: [unterminated",
     "name: duplicate\nname: other",
@@ -452,8 +442,7 @@ test("malformed or non-string YAML metadata does not admit a skill or hide valid
 });
 
 test("nested skill names cannot shadow a separately authored skill", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-yaml-identity-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-yaml-identity-");
   const root = path.join(home, ".aiden", "skills");
   await writeSkill(
     root,
@@ -470,8 +459,7 @@ test("nested skill names cannot shadow a separately authored skill", async (t) =
 });
 
 test("YAML parsing preserves legacy bodies, folder fallback, and description-only skills", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-yaml-fallback-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-yaml-fallback-");
   const root = path.join(home, ".aiden", "skills");
   const fixtures = [
     {
@@ -525,8 +513,7 @@ test("YAML parsing preserves legacy bodies, folder fallback, and description-onl
 });
 
 test("fresh skill resolution rejects selections after YAML description edits or parse errors", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-yaml-reload-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skills-yaml-reload-");
   const root = path.join(home, ".aiden", "skills");
   await writeSkill(
     root,
@@ -567,8 +554,7 @@ test("fresh skill resolution rejects selections after YAML description edits or 
 });
 
 test("strict invocation booleans default to both and isolate malformed policies", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skill-policy-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-skill-policy-");
   const root = path.join(home, ".agents", "skills");
   const cases = [
     ["legacy", "", true, true],
@@ -625,8 +611,7 @@ async function enablePlugins(base: string, enabledPlugins: Record<string, unknow
 }
 
 test("enabled installed plugin skills reach the authoritative catalog with namespace and invocation policies", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-plugins-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-plugins-");
   const root = await installPlugin(home, "review@shop", {
     review: "---\nname: audit\ndescription: Review code.\ndisable-model-invocation: true\n---\nReview carefully.",
     hidden: "---\nuser-invocable: false\n---\nAutomatic only.",
@@ -669,8 +654,7 @@ test("project plugin enablement and installed scope stay workspace-bound and req
 });
 
 test("manifest collections and root skills use bounded plugin containment and preserve authored overrides", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-plugins-paths-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-plugins-paths-");
   const root = await installPlugin(home, "tools@shop", { normal: "Normal body." }, { manifest: { skills: ["./extra", "./linked", "../../outside", "/tmp", "./extra/SKILL.md"] } });
   await fs.mkdir(path.join(root, "extra"));
   await fs.writeFile(path.join(root, "extra", "SKILL.md"), "---\nname: custom\n---\nCustom body.");
@@ -705,8 +689,7 @@ test("manifest collections and root skills use bounded plugin containment and pr
 });
 
 test("malformed plugin metadata and nonboolean enablement fail closed without hiding ordinary skills", async (t) => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-plugins-invalid-"));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const home = await temporaryDirectory(t, "aiden-plugins-invalid-");
   await writeSkill(path.join(home, ".claude", "skills"), "ordinary", "Ordinary body.");
   await installPlugin(home, "plugin@shop", { review: "Plugin body." });
   await enablePlugins(home, { "plugin@shop": ["^1.0.0"] });

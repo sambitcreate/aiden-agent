@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { botSessionDirectory } from "../bot-routine-notes.js";
@@ -13,6 +12,7 @@ import {
   type BotApprovalDecision,
   type BotApprovalTallyKey,
 } from "./bot-approval-tallies.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const DAY = 86_400_000;
 const START = Date.parse("2026-11-04T12:00:00.000Z");
@@ -20,8 +20,7 @@ const CAL = { kind: "connection", serverId: "gcal", tool: "create_event" } as co
 const FOLDER = { kind: "folder", path: "/Users/p/Taxes" } as const;
 
 async function setup(t: test.TestContext) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-tallies-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-bot-tallies-");
   let clock = START;
   let ids = 0;
   const open = () => createBotApprovalTallies({ profileDir: () => dir, now: () => clock });

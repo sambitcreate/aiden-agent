@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test from "node:test";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.js";
@@ -14,10 +11,10 @@ import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { WorkspaceArtifactStore, workspaceArtifactDigest } from "../services/workspace-artifacts/store.js";
 import type { WorkspaceArtifactChatVisual } from "./workspace-artifacts.js";
 import { registerWorkspaceArtifactHandlers, WORKSPACE_ARTIFACT_CHANNELS } from "./workspace-artifacts.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function setup(t: test.TestContext) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-ipc-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifact-ipc-");
   let ids = 0;
   const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}` });
   const events: WorkspaceArtifactsChangedEvent[] = [];

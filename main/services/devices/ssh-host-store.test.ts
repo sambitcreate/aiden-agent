@@ -1,15 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { parseStoredSshHosts, readSshHosts, sshHostsPath, writeSshHosts } from "./ssh-host-store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const MINI = { id: "ssh-mini01", label: "Mac mini", target: "me@mini.local", port: 2222 };
 
 test("hosts and their install approvals round-trip, and approvals for removed hosts are dropped", async (t) => {
-  const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-ssh-store-"));
-  t.after(() => rm(baseDir, { recursive: true, force: true }));
+  const baseDir = await temporaryDirectory(t, "aiden-ssh-store-");
   assert.deepEqual(await readSshHosts(baseDir), { hosts: [], toolConsent: {} }, "no file means no hosts");
   await writeSshHosts(baseDir, {
     hosts: [MINI],
@@ -21,8 +19,7 @@ test("hosts and their install approvals round-trip, and approvals for removed ho
 });
 
 test("a damaged or foreign file loads as no hosts rather than partial ones", async (t) => {
-  const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-ssh-store-"));
-  t.after(() => rm(baseDir, { recursive: true, force: true }));
+  const baseDir = await temporaryDirectory(t, "aiden-ssh-store-");
   await writeFile(sshHostsPath(baseDir), "{not json");
   assert.deepEqual(await readSshHosts(baseDir), { hosts: [], toolConsent: {} });
   const empty = { hosts: [], toolConsent: {} };

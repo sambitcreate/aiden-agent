@@ -23,6 +23,7 @@ import { ChatTriageStore } from "./chat-triage.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { PiCacheWarmer, adoptChatCacheWarmer } from "./pi-cache-warming.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 function chat(id = "chat-1", workspaceId = "workspace-1"): Chat {
   return {
@@ -835,8 +836,7 @@ test("a canvas save or grant that lands while the chat is being deleted does not
 });
 
 test("a delete rolled forward at startup clears the chat's Inbox state, even when one store fails", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-app-inbox-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-chat-app-inbox-");
   const triage = new ChatTriageStore(() => root, { now: () => 1_000 });
   t.after(() => triage.dispose());
   const readMarkers = new ChatReadMarkerStore(() => root, { now: () => 1_000 });

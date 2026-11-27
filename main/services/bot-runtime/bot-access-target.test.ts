@@ -9,10 +9,10 @@ import {
   resolveBotAccessTarget,
   type BotAccessTargetDeps,
 } from "./bot-access-target.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 test("resolve folders, files, home, symlinks and exact approved-root boundaries", async (t) => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "bot-target-"));
-  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const temp = await temporaryDirectory(t, "bot-target-");
   const home = await fs.realpath(temp),
     documents = path.join(home, "Documents"),
     taxes = path.join(documents, "Taxes"),

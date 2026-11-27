@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
-import { lstat, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { lstat, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 import type { OutputRef } from "../../../renderer/shared/images/run-types.js";
 import { ImageRunLedger, type CreateRunInput, type ImageRunLedgerOptions } from "./run-ledger.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function directory(t: TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-ledger-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-image-ledger-");
   return root;
 }
 

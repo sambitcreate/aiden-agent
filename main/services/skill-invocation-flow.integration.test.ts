@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -14,10 +13,10 @@ import {
 } from "./skill-invocation-turn.js";
 import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { DiscoveredSkill, Workspace } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("the production skill turn commits safe provenance and injects private instructions once", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skill-flow-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-skill-flow-");
   const workspace: Workspace = {
     id: "workspace-a",
     name: "Workspace A",

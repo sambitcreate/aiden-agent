@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { readWorkspaceFile } from "../../main/services/workspace-files";
 import { workspaceFileOpenErrorPresentation } from "./workspace-file-open-error";
+import { temporaryDirectory } from "../../main/shared/temp-dir-test-support.js";
 
 async function workspace(t: test.TestContext): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-open-error-"));
-  t.after(() => fs.rm(root, { force: true, recursive: true }));
+  const root = await temporaryDirectory(t, "aiden-open-error-");
   return root;
 }
 

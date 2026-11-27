@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, utimes } from "node:fs/promises";
+import { mkdir, symlink, utimes } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -12,10 +12,10 @@ import {
 } from "./memory-shared.js";
 import { MemoryStore, type MemoryScope } from "./memory-store.js";
 import type { Chat } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function fixture(t: TestContext) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-memory-shared-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-memory-shared-");
   return root;
 }
 

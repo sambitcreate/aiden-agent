@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -17,10 +16,10 @@ import {
 import { addPage, deletePage, showPage } from "../../../renderer/shared/design-canvas/pages.js";
 import { reopenComment } from "../../../renderer/shared/design-canvas/comments.js";
 import { DesignCanvasStore } from "./store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function setup(t: test.TestContext, extra: Partial<Parameters<typeof createDesignCanvasTools>[0]> = {}) {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-tools-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-canvas-tools-");
   const workspace = path.join(base, "workspace");
   await fs.mkdir(path.join(workspace, "design"), { recursive: true });
   await fs.writeFile(path.join(workspace, "design", "home.html"), "<!doctype html><title>Home</title>");
@@ -453,8 +452,7 @@ test("only an attended desktop chat with design mode on and a folder gets the ca
 });
 
 test("canvas_focus asks the canvas to show frames that exist, and refuses ones that do not", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-focus-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-canvas-focus-");
   const store = new DesignCanvasStore({ root: () => base });
   const focused: string[][] = [];
   const tools = createDesignCanvasTools({
@@ -479,8 +477,7 @@ test("canvas_focus asks the canvas to show frames that exist, and refuses ones t
 });
 
 test("Aiden reads and places on a page it names, and focusing a frame on another page brings that page on screen", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-pages-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-canvas-pages-");
   const store = new DesignCanvasStore({ root: () => base });
   const focused: string[][] = [];
   const tools = createDesignCanvasTools({
@@ -520,8 +517,7 @@ test("Aiden reads and places on a page it names, and focusing a frame on another
 });
 
 test("a canvas_read cursor reads on its own page, whichever page is on screen", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-cursor-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-canvas-cursor-");
   const store = new DesignCanvasStore({ root: () => base });
   const tools = createDesignCanvasTools({ chatId: "chat-1", workspaceRoot: base, store, broadcast: () => undefined });
   const call = async (args: Record<string, unknown>) => {
@@ -577,8 +573,7 @@ test("a canvas_read cursor reads on its own page, whichever page is on screen", 
 });
 
 test("canvas_read with snapshot shows Aiden the canvas picture, or says why there is none", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-snapshot-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-canvas-snapshot-");
   let picture: { data: string; mimeType: string } | null = { data: "iVBORw0KGgo=", mimeType: "image/png" };
   let asked = 0;
   const store = new DesignCanvasStore({ root: () => base });
@@ -630,8 +625,7 @@ test("canvas_read with snapshot shows Aiden the canvas picture, or says why ther
 });
 
 test("canvas_inspect draws the page a frame shows and hands Aiden the report, with the picture when there is one", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-inspect-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-canvas-inspect-");
   const store = new DesignCanvasStore({ root: () => base });
   await store.update("chat-1", (doc) => {
     const withOther = addPage(doc, "p2", "Other");

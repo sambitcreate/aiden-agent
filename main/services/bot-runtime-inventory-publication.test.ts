@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test from "node:test";
 import { DataStore } from "./data-store.js";
 import { emptyPortableConfig } from "./portable-config-core.js";
@@ -14,6 +11,7 @@ import {
   invalidateChangedBotSettingsAuthority,
   withBotProviderInventoryMutation,
 } from "./bot-runtime-inventory-publication.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 function expectPublicationAbort(
   publish: (
@@ -183,8 +181,7 @@ test("Pi provider refresh fences leases acquired during durable-to-memory public
 });
 
 test("the post-publication fence exposes the new cache before admitting current work", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-config-fence-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-config-fence-");
   const registry = new BotRuntimeInventoryLeaseRegistry();
   let racingLease: ReturnType<BotRuntimeInventoryLeaseRegistry["acquire"]> | undefined;
   let admittedLease: ReturnType<BotRuntimeInventoryLeaseRegistry["acquire"]> | undefined;

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { createChatAttachmentRequestHandler, parseChatImageUrl } from "./chat-attachment-request-handler.js";
@@ -11,14 +10,14 @@ import type { Attachment } from "./types.js";
 import { parseAttachments, withReadableImages } from "./attachment-contract.js";
 import { projectAidenChatExport } from "./chat-export.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 const PNG_BYTES = Buffer.from(PNG, "base64");
 const DAY = 24 * 60 * 60 * 1000;
 
 async function tempDir(t: test.TestContext): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-images-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-images-");
   return directory;
 }
 

@@ -1,16 +1,15 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { readWorkspaceArtifactFile, WorkspaceArtifactFileChangedError } from "./file-policy.js";
 import { readLinuxArtifactFile, LinuxArtifactFileChangedError } from "./linux-file-read.js";
 import { captureManagedWorktreeRootIdentity } from "../managed-worktree-file-io.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const linuxOnly = { skip: process.platform !== "linux" };
 async function fixture(t: test.TestContext) {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-linux-artifact-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-linux-artifact-");
   const root = path.join(base, "workspace"); await fs.mkdir(root);
   await fs.mkdir(path.join(root, "selected")); await fs.mkdir(path.join(root, "selected", "nested"));
   await fs.writeFile(path.join(root, "selected", "nested", "data.txt"), "ordinary workspace data\n");

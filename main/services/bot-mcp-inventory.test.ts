@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import test from "node:test";
 import {
   botMcpCredentialSignatureCore,
@@ -32,6 +29,7 @@ import { admitWithBotConnectorInventoryScope, botConnectorInventoryServer, withB
 import type { BotRuntimeEffectiveAuthority } from "./bot-runtime-authority.js";
 import { getMcpPreset, serverFromPreset } from "./mcp-presets.js";
 import type { SubagentMcpRemoteTool } from "./subagents/subagent-mcp-read.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -193,8 +191,7 @@ test("Bot MCP discovery returns at its deadline even if an inspector ignores can
 });
 
 test("an OAuth token refresh during discovery keeps a Bot's MCP connection; re-authorization changes it", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-mcp-oauth-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-mcp-oauth-");
   let minted = 0;
   const protectedStore = createBotCapabilityStore({
     root: () => root,
@@ -624,8 +621,7 @@ test("servers switched off for the model and hidden tools never reach Bot scopes
 });
 
 test("one unreadable saved MCP sign-in stays on its own connection instead of failing the Bot catalog", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-mcp-unreadable-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-mcp-unreadable-");
   let minted = 0;
   const protectedStore = createBotCapabilityStore({
     root: () => root,

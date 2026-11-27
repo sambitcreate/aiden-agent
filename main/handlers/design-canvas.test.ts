@@ -22,6 +22,7 @@ import {
   type DesignCanvasUpdated,
   type DesignFrameRenderRequest,
 } from "./design-canvas.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -59,8 +60,7 @@ async function fixture(
     artifactTitles?: Record<string, string>;
   } = {},
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-design-canvas-handlers-");
   let enabled = options.enabled ?? true;
   const handlers = new Map<string, Handler>();
   const broadcasts: DesignCanvasUpdated[] = [];
@@ -545,8 +545,7 @@ async function exportCanvas(
   options: Parameters<typeof fixture>[1] = {},
 ): Promise<Awaited<ReturnType<typeof fixture>> & { site: string; out: string }> {
   const { site } = await pickWorkspace(t);
-  const out = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-export-"));
-  t.after(() => fs.rm(out, { recursive: true, force: true }));
+  const out = await temporaryDirectory(t, "aiden-design-export-");
   const harness = await fixture(t, { roots: { "workspace-1": site }, ...options });
   const frame = { x: 0, y: 0, w: 640, h: 436, pageId: "page-1", createdBy: "person" as const };
   const doc: DesignCanvas = {

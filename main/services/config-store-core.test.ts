@@ -4,7 +4,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { createConfigStore, type SecretsPort } from "./config-store-core.js";
@@ -23,6 +22,7 @@ import { freshWebSearchSettings } from "./web-search-provider-registry-core.js";
 import { defaultWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
 import { effectiveApprovalMode } from "../../renderer/shared/approval-mode.js";
 import type { AssistantConfig, StoredProvider, Workspace } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 function expectedWebSearchSettings(enabled: boolean) {
   return { ...freshWebSearchSettings(), enabled };
@@ -106,8 +106,7 @@ function fakeSecrets(initial: Record<string, unknown> = {}) {
 }
 
 async function harness(t: test.TestContext, legacy?: unknown) {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-config-store-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-config-store-");
   const portableRoot = path.join(base, "dot-aiden");
   const localRoot = path.join(base, "userData");
   await fs.mkdir(localRoot, { recursive: true });
@@ -1390,8 +1389,7 @@ test("provider migration folds complementary caches from every historical alias"
 });
 
 test("provider keys are re-homed onto the reserved ID during seeding", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-config-keys-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-config-keys-");
   const localRoot = path.join(base, "userData");
   await fs.mkdir(localRoot, { recursive: true });
   await fs.writeFile(
@@ -1421,8 +1419,7 @@ test("provider keys are re-homed onto the reserved ID during seeding", async (t)
 });
 
 test("secret migration preserves unknown future-shaped source and destination records", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-config-future-keys-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-config-future-keys-");
   const localRoot = path.join(base, "userData");
   await fs.mkdir(localRoot, { recursive: true });
   await fs.writeFile(
@@ -1463,8 +1460,7 @@ test("secret migration preserves unknown future-shaped source and destination re
 });
 
 test("a string legacy key cannot bypass a future-shaped custom destination", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-config-future-target-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-config-future-target-");
   const localRoot = path.join(base, "userData");
   await fs.mkdir(localRoot, { recursive: true });
   await fs.writeFile(
@@ -1501,8 +1497,7 @@ test("a string legacy key cannot bypass a future-shaped custom destination", asy
 });
 
 test("a future-shaped custom alias source stays unresolved when its destination is absent", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-config-future-source-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-config-future-source-");
   const localRoot = path.join(base, "userData");
   await fs.mkdir(localRoot, { recursive: true });
   await fs.writeFile(
@@ -1532,8 +1527,7 @@ test("a future-shaped custom alias source stays unresolved when its destination 
 });
 
 test("conflicting custom alias ciphertexts stay preserved and unbound", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-config-conflicting-keys-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-config-conflicting-keys-");
   const localRoot = path.join(base, "userData");
   await fs.mkdir(localRoot, { recursive: true });
   await fs.writeFile(
@@ -1743,8 +1737,7 @@ test("unsafe or active-source aliases never move or delete provider keys", async
     { [provider.id]: secondProvider.id, [secondProvider.id]: provider.id },
     { [provider.id]: "" },
   ]) {
-    const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-config-alias-safety-"));
-    t.after(() => fs.rm(base, { recursive: true, force: true }));
+    const base = await temporaryDirectory(t, "aiden-config-alias-safety-");
     const localRoot = path.join(base, "userData");
     const portableRoot = path.join(base, "dot-aiden");
     await fs.mkdir(localRoot, { recursive: true });

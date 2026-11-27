@@ -15,6 +15,7 @@ import {
   type StudioAssetStoreTimers,
 } from "./store.js";
 import { fakeThumbnailer, pngBytes } from "./test-fixture.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const HOUR = 60 * 60 * 1000;
 const code = (expected: StudioAssetError["code"]) => (error: unknown) =>
@@ -388,8 +389,7 @@ test("a failing ROLLBACK does not mask the original transaction error", async (t
 });
 
 test("concurrent initialize calls share one open", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-studio-assets-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-studio-assets-");
   let rootCalls = 0;
   const store = new StudioAssetStore({
     root: () => {
@@ -407,8 +407,7 @@ test("concurrent initialize calls share one open", async (t) => {
 });
 
 async function rawStore(t: TestContext, onError?: (error: unknown) => void) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-studio-assets-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-studio-assets-");
   const store = new StudioAssetStore({
     root: () => root,
     thumbnailer: fakeThumbnailer().thumbnailer,

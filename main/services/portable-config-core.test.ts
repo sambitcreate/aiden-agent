@@ -31,6 +31,7 @@ import { CONFIGURED_SKILL_LIMITS } from "./skill-config-limits.js";
 import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import type { PortableConfigShape } from "./portable-config-core.js";
 import type { StoredProvider, Workspace } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 interface Roots {
   portableRoot: string;
@@ -44,8 +45,7 @@ interface Roots {
 }
 
 async function roots(t: test.TestContext): Promise<Roots> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-portable-"));
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const base = await temporaryDirectory(t, "aiden-portable-");
   const portableRoot = path.join(base, "dot-aiden");
   const localRoot = path.join(base, "userData");
   await fs.mkdir(localRoot, { recursive: true });

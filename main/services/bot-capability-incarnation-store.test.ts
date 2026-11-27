@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { createBotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
 import { createBotCapabilityStore } from "./bot-capability-store.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -20,8 +20,7 @@ async function incarnationStore(root: string, counter: { value: number }) {
 }
 
 test("incarnations survive restart, rotate with credentials, and change after observed remove/re-add", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-incarnations-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-incarnations-");
   const counter = { value: 0 };
   const firstStore = await incarnationStore(root, counter);
   const [first] = await firstStore.reconcileNamespace("provider", [
@@ -52,8 +51,7 @@ test("incarnations survive restart, rotate with credentials, and change after ob
 });
 
 test("namespaces and target partitions reconcile independently", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-incarnations-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-bot-incarnations-");
   const store = await incarnationStore(root, { value: 0 });
   const [provider] = await store.reconcileNamespace("provider", [
     { sourceId: "same-id", credentialSignature: hash("none") },

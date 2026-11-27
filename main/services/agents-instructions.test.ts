@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import os from "node:os";
 import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import type { AgentContext, AgentTool } from "@earendil-works/pi-agent-core";
 import {
@@ -23,6 +22,7 @@ import {
   nextRequestContextOptions,
   rememberedContextOptions,
 } from "./context-profile.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const context = (): AgentContext => ({ messages: [{ role: "system", content: "HOST", timestamp: 0 }], tools: [] });
 const prompt = (value: AgentContext) => getCurrentSystemPrompt(value.messages);
@@ -34,8 +34,7 @@ const records = (systemPrompt: string): { scope: string; instructions: string }[
 };
 
 async function fixture(t: test.TestContext) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-agents-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-agents-");
   const globalRoot = path.join(root, "global"); const workspaceRoot = path.join(root, "workspace");
   await fs.mkdir(globalRoot); await fs.mkdir(workspaceRoot);
   const read = async ({ canonicalPath }: { canonicalPath: string }) => fs.readFile(path.join(canonicalPath, "AGENTS.md"), "utf8");

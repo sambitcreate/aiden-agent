@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
@@ -14,6 +13,7 @@ import { isAppendReconciliationRequiredError } from "./chat-append-commit.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
 import { SkillRegistry } from "./skill-registry.js";
 import type { RegisteredSkill } from "./skill-registry.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 let nextTurn = 0;
 function request(overrides: Record<string, unknown> = {}) {
@@ -42,8 +42,7 @@ function documentOwner() {
 }
 
 async function fixture(t: test.TestContext, durability: ChatStoreDurability = {}, admission: ChatTurnAdmissionOptions = {}) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-first-message-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-first-message-");
   const store = createChatStore(async () => directory, undefined, durability);
   const owner = documentOwner();
   t.after(() => owner.invalidate());

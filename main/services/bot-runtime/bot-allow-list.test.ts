@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { emptyToolApprovalRulesDocument, ToolApprovalRuleBook, type ToolApprovalRuleStore } from "../tool-approval-rules.js";
@@ -9,11 +8,11 @@ import { createBotApprovals } from "./bot-approvals.js";
 import { botApprovalNudgeHint, createBotAllowList, reconcileBotAllowListHistory } from "./bot-allow-list.js";
 import { botSessionDirectory } from "../bot-routine-notes.js";
 import type { BotApprovalSettlementInput } from "./bot-extension.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const CAL = { kind: "connection", serverId: "gcal", tool: "create_event" } as const;
 async function fixture(t: import("node:test").TestContext) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-allow-service-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-allow-service-");
   let now = Date.parse("2026-11-04T12:00:00Z"), document = emptyToolApprovalRulesDocument(), nextId = 0;
   let tail: Promise<unknown> = Promise.resolve();
   const store: ToolApprovalRuleStore = { load: async () => structuredClone(document), update: mutation => {

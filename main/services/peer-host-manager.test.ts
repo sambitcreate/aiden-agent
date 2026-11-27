@@ -30,6 +30,7 @@ import type {
   PeerHostView,
   PeerRunFrameMessage,
 } from "../../renderer/shared/peer-host.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const CAPABILITIES = ["chat:read", "chat:write", "host:events", "runs:observe", "runs:control"];
 const FEATURES = ["host-events-v1", "run-streams-v1", "run-control-v1"];
@@ -1252,13 +1253,9 @@ test("a registry change during a preferred-route check keeps one 30-second check
 
 test("a paired private-CA .local host retries TLS collisions via backoff, Reconnect and wake without concurrent loops, while /server instance mismatches stay terminal", async (t) => {
   const { X509Certificate } = await import("node:crypto");
-  const { mkdtemp, rm } = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
   const { loadOrCreateAidenRemoteTlsIdentity } = await import("./aiden-remote-tls-identity.js");
 
-  const tlsDir = await mkdtemp(path.join(os.tmpdir(), "aiden-mgr-lan-ca-"));
-  t.after(() => rm(tlsDir, { recursive: true, force: true }));
+  const tlsDir = await temporaryDirectory(t, "aiden-mgr-lan-ca-");
   const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory: tlsDir, hostnames: ["studio.local"] });
   const caCertificateDerBase64 = new X509Certificate(identity.caCertificate).raw.toString("base64");
   const lanRecord = (id: string): StoredPeerHost => ({

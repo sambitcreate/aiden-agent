@@ -9,9 +9,7 @@ import { AppendReconciliationRequiredError } from "./chat-append-commit.js";
 import { agentNotice, fenceAsData } from "../../renderer/shared/agent-notices.js";
 import type { Chat } from "./types.js";
 import { ChatTriageStore } from "./chat-triage.js";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 interface AgentStub {
   queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined;
@@ -376,8 +374,7 @@ test("run input admission maps the isCurrent cancel race to cancelled without co
 });
 
 test("a steer or follow-up the person writes ends the chat's snooze; a notice or a refused one leaves it", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-admission-triage-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-admission-triage-");
   const triage = new ChatTriageStore(() => root, { now: () => 1_000 });
   const wakes: Promise<boolean>[] = [];
   const app = fixture({ onPersonWrote: (chatId) => void wakes.push(triage.wake(chatId)) });

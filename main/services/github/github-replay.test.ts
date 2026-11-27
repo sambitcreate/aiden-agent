@@ -4,9 +4,6 @@
 // measured by running this scenario over it with a counting gh runner.
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import test from "node:test";
 import { ChatPullRequestService } from "../chat-pull-request-service.js";
 import { ChatPullRequestStore } from "../chat-pull-request-store.js";
@@ -24,6 +21,7 @@ import {
 } from "./github-replay-scenario.js";
 import { GitHubRateLimitGate } from "./github-request-gate.js";
 import { fixedCredentials, recordingFetch } from "./github-test-fetch.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const GH_BASELINE_CALLS = 73;
 const GH_BASELINE_NOTIFICATIONS = 4;
@@ -49,8 +47,7 @@ function fakePullRequest(entry: ReplayPullRequest): FakePullRequest {
 }
 
 test("a 30-minute session makes at least 70% fewer GitHub calls than the gh implementation", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "aiden-replay-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-replay-");
   const world = new ReplayWorld();
   let time = 0;
   const clock = { now: () => time, set: (ms: number) => void (time = ms) };

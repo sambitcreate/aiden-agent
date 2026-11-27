@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
@@ -9,6 +8,7 @@ import { DataStore, type DataStoreOptions } from "./data-store.js";
 import { emptySpendingDocument, type SpendingDocument } from "./spending-core.js";
 import { issueSpendingUnknownAcknowledgement, parseDurableSpendingDocument, SpendingDispatchError, type SpendingDispatchInput } from "./spending-dispatch-ledger.js";
 import { SpendingService } from "./spending-service.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 process.env.TZ = "UTC";
 
@@ -18,8 +18,7 @@ const dispatch = (dispatchId: string, botId = "ada"): SpendingDispatchInput => (
 const code = (expected: string) => (error: unknown) => error instanceof SpendingDispatchError && error.code === expected;
 
 async function fixture(t: test.TestContext, settings: unknown = { botMonthUsd: 10, routineRunUsd: 1 }) {
-  const dir = await mkdtemp(path.join(tmpdir(), "aiden-spending-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-spending-");
   const file = path.join(dir, "spending.json");
   const open = (options: DataStoreOptions<unknown> = {}, now = () => NOW) => {
     const store = new DataStore<unknown>("spending.json", emptySpendingDocument(), () => dir, { compact: true, fileMode: 0o600, ...options });

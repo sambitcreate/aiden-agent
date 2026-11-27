@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import {
   createScratchWorkspaceDirectory,
   generateScratchWorkspaceName,
 } from "./scratch-workspace.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 test("generates a three-word name using only three- or four-letter words", () => {
   const name = generateScratchWorkspaceName(() => 0);
@@ -15,8 +15,7 @@ test("generates a three-word name using only three- or four-letter words", () =>
 });
 
 test("creates a unique directory without reusing an existing name", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-scratch-workspace-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-scratch-workspace-");
   await fs.mkdir(path.join(root, "day-game-run"));
 
   let calls = 0;

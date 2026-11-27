@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { GitRepoWatcher, resolveGitWatchTargets, type GitRepoWatcherOptions, type GitWatchTargets } from "./git-repo-watcher.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 type GitRunner = (cwd: string, ...args: string[]) => Buffer;
 
@@ -371,8 +372,7 @@ test("idle workspaces stop being watched until they are read again", async (t) =
 });
 
 test("non-repository folders are tolerated and never notify", async (t) => {
-  const root = await fs.mkdtemp(path.join(tmpdir(), "aiden-git-watch-plain-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-git-watch-plain-");
   const harness = nativeWatchHarness(t, { debounceMs: 20 });
   await harness.watcher.observe("plain", root);
   await fs.writeFile(path.join(root, "file.txt"), "x");

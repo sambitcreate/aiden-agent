@@ -1,17 +1,16 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { mcpStdioLaunchFingerprint } from "./mcp-field-secrets-core.js";
 import { createMcpStdioApprovalStore, publishWithLaunchApproval } from "./mcp-stdio-approvals.js";
 import type { McpServer } from "./types.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "npx", args: ["server"], enabled: true };
 
 async function store(t: import("node:test").TestContext) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-stdio-approvals-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-stdio-approvals-");
   const file = path.join(dir, "mcp-stdio-approvals.json");
   return { file, approvals: createMcpStdioApprovalStore(async () => file) };
 }

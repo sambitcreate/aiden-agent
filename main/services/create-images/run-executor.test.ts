@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { Usage } from "@earendil-works/pi-ai";
@@ -17,6 +15,7 @@ import { fakeThumbnailer, pngBytes } from "../studio-assets/test-fixture.js";
 import { executeRun, type RunExecutorDependencies } from "./run-executor.js";
 import { ImageRunLedger } from "./run-ledger.js";
 import { planRun } from "./scheduler-core.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const MODEL = { provider: "openrouter", id: "google/gemini-3.1-flash-image" };
 const at = { x: 0, y: 0 };
@@ -32,8 +31,7 @@ const generated = (seed: number, count = 1): ImageGenerationResult => ({
 });
 
 async function fixture(t: TestContext) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-executor-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await temporaryDirectory(t, "aiden-image-executor-");
   const assets = new StudioAssetStore({ root: () => path.join(root, "assets"), thumbnailer: fakeThumbnailer().thumbnailer });
   await assets.initialize();
   t.after(() => assets.close());

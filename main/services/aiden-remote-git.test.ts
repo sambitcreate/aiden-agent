@@ -28,6 +28,7 @@ import { createWorkspaceEnvironmentApplicationService } from "./workspace-enviro
 import { workspaceRevision } from "./aiden-remote-workspaces.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const runFile = promisify(execFile);
 
@@ -393,8 +394,7 @@ test("a changed filename that cannot be projected is omitted instead of failing 
 });
 
 test("a repository with no commits says so in its branch list", async (t) => {
-  const repository = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-git-unborn-"));
-  t.after(() => fs.rm(repository, { recursive: true, force: true }));
+  const repository = await temporaryDirectory(t, "aiden-remote-git-unborn-");
   await git(repository, "init", "-b", "main");
   await git(repository, "config", "user.email", "aiden@example.test");
   await git(repository, "config", "user.name", "Aiden Test");

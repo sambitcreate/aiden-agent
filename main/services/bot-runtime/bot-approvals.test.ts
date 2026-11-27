@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createBotApprovalTallies, BOT_APPROVAL_TALLIES_FILE } from "./bot-approval-tallies.js";
 import { botSessionDirectory } from "../bot-routine-notes.js";
 import { createBotApprovals, publicBotApprovalPrompt } from "./bot-approvals.js";
 import type { BotApprovalRequest, BotApprovalDecision, BotAllowListRelease } from "./bot-extension.js";
 import { waitFor } from "./test-support/faux.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 const target = { kind: "connection", serverId: "calendar", tool: "create_event" } as const;
 const request = (waitId = "w1"): BotApprovalRequest => ({ botId: "bot-1", waitId, toolCallId: "provider-duplicate", toolName: "calendar__create_event",
@@ -162,8 +162,7 @@ test("bridge: the optional public offer copies only its key and count", async ()
 
 for (const toolName of ["calendar__create_event", "computer_use"]) {
   test(`bridge: unreadable tally evidence does not block an unremembered ${toolName} card`, async t => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-approval-isolation-"));
-    t.after(() => rm(directory, { recursive: true, force: true }));
+    const directory = await temporaryDirectory(t, "aiden-approval-isolation-");
     const botDirectory = botSessionDirectory(directory, "bot-1");
     await mkdir(botDirectory, { recursive: true });
     await writeFile(path.join(botDirectory, BOT_APPROVAL_TALLIES_FILE), "corrupt tally evidence");

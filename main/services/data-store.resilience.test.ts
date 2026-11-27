@@ -8,7 +8,6 @@
 
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -21,10 +20,10 @@ import {
 } from "./data-store.js";
 import { createChatStore } from "./chat-store-core.js";
 import { chatSummaryRevision } from "./chat-summary-revision.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function tmpDir(t: test.TestContext, prefix: string): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, prefix);
   return directory;
 }
 

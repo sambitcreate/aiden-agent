@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { registerChatImageActionHandlers, safeImageFileStem, type ChatImageActionDeps } from "./chat-image-actions.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 
 async function setup(t: test.TestContext) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-actions-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-image-actions-");
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
   const clipboard: Buffer[] = [];
   const revealed: string[] = [];
@@ -76,8 +75,7 @@ test("only an image stored in that chat can be saved or copied", async (t) => {
 });
 
 test("an image kept as a file is read from that file alone", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-actions-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-image-actions-");
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
   const reads: string[] = [];
   const sha256 = "c".repeat(64);
@@ -140,8 +138,7 @@ test("bidi overrides, isolates and C1 controls cannot disguise a saved file's na
 });
 
 test("a saved image keeps the extension of its stored type", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-ext-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-image-ext-");
   const types = {
     "image/png": "png",
     "image/jpeg": "jpg",

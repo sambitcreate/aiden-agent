@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { compileAum } from "../../../renderer/shared/aiden-ui/compile.js";
@@ -18,10 +17,10 @@ import {
   workspaceArtifactDigest,
   type WorkspaceArtifactContent,
 } from "./store.js";
+import { temporaryDirectory } from "../../shared/temp-dir-test-support.js";
 
 async function openStore(t: test.TestContext) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifacts-");
   let clock = 1_000;
   let ids = 0;
   const make = () => new WorkspaceArtifactStore({ root: () => dir, now: () => (clock += 1), newId: () => `art${++ids}` });
@@ -440,8 +439,7 @@ test("removing a workspace while a replace is still keeping its earlier version 
 });
 
 test("a history file that cannot be cleared does not stop a delete", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifacts-");
   const errors: unknown[] = [];
   let ids = 0;
   const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, onHistoryError: (error) => errors.push(error) });
@@ -479,8 +477,7 @@ test("a damaged history file is tolerated: bad entries are dropped and pages sti
 });
 
 test("history that would outgrow its file drops the oldest versions instead of failing the save", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifacts-");
   let clock = 1_000;
   let ids = 0;
   const errors: unknown[] = [];
@@ -507,8 +504,7 @@ test("history that would outgrow its file drops the oldest versions instead of f
 });
 
 test("history that would outgrow its file drops older versions' markup before any version, and a restore says so", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifacts-");
   let clock = 1_000;
   const errors: unknown[] = [];
   const make = () =>
@@ -543,8 +539,7 @@ test("history that would outgrow its file drops older versions' markup before an
 });
 
 test("pages that would outgrow their file drop the least recently changed pages' markup, the saved page's last", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifacts-");
   let clock = 1_000;
   let ids = 0;
   const make = () =>
@@ -580,8 +575,7 @@ test("pages that would outgrow their file drop the least recently changed pages'
 });
 
 test("saving one page's state near the size cap drops only that page's markup, and fails rather than drop another's", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifacts-");
   let ids = 0;
   const make = (artifactsMaxBytes?: number) =>
     new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, ...(artifactsMaxBytes ? { artifactsMaxBytes } : {}) });
@@ -607,8 +601,7 @@ test("saving one page's state near the size cap drops only that page's markup, a
 });
 
 test("a history write that fails is reported, and the update still succeeds", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifacts-");
   const errors: unknown[] = [];
   let ids = 0;
   const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, onHistoryError: (error) => errors.push(error) });
@@ -622,8 +615,7 @@ test("a history write that fails is reported, and the update still succeeds", as
 });
 
 test("a restore that cannot keep the current version is refused, and nothing is lost", async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "aiden-artifacts-");
   const errors: unknown[] = [];
   let ids = 0;
   const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, onHistoryError: (error) => errors.push(error) });

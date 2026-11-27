@@ -1,18 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { emptyToolApprovalRulesDocument, ToolApprovalRuleBook, type ToolApprovalRuleStore } from "../services/tool-approval-rules.js";
 import { createBotApprovalTallies } from "../services/bot-runtime/bot-approval-tallies.js";
 import { createBotAllowList } from "../services/bot-runtime/bot-allow-list.js";
 import { createBotApprovals } from "../services/bot-runtime/bot-approvals.js";
 import { registerBotAllowedHandlers, registerBotApprovalDecisionHandler } from "./bot-allowed.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 const CAL = { kind: "connection", serverId: "calendar", tool: "create_event" } as const;
 async function setup(t: TestContext) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "bot-allowed-ipc-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await temporaryDirectory(t, "bot-allowed-ipc-");
   let document = emptyToolApprovalRulesDocument(), tail: Promise<unknown> = Promise.resolve(), id = 0;
   const bots = new Set(["bot:ada", "bot:jo"]);
   const store: ToolApprovalRuleStore = {

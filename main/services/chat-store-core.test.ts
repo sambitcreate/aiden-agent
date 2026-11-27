@@ -32,6 +32,7 @@ import {
   admitOwnedWorkspaceOperation,
 } from "./workspace-operation-registry.js";
 import { generationModelMeta } from "./chat-model-selection-meta.js";
+import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function testStore(t: test.TestContext) {
   const directory = await fs.mkdtemp(
@@ -110,8 +111,7 @@ test("serializes assistant persistence with a background title update", async (t
 });
 
 test("Bot model authority changes durably without changing history or activity time", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-model-store-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-bot-model-store-");
   const first = createChatStore(async () => directory);
   const chat = await first.create({
     botId: "bot:model-owner",
@@ -771,8 +771,7 @@ test("persists reasoning only on assistant messages", async (t) => {
 });
 
 test("assistant turn stats survive restart and reach the renderer; malformed or misplaced stats do not", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-turn-stats-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-store-turn-stats-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
   const turnStats = {
@@ -827,8 +826,7 @@ test("persists only normalized user skill provenance", async (t) => {
 });
 
 test("follow-up notices survive a restart on user messages only, in their exact shape", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-notice-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-notice-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
   const notice = { version: 1, source: "background_job", tone: "failure", title: "Background job ended", summary: "npm run dev · exit code 1" } as const;
@@ -848,8 +846,7 @@ test("follow-up notices survive a restart on user messages only, in their exact 
 });
 
 test("the By voice marker survives a restart on user messages only", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-voice-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-voice-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
   await store.appendMessage(chat.id, { role: "user", content: "Check the reset page too.", inputSource: "voice" });
@@ -866,8 +863,7 @@ test("the By voice marker survives a restart on user messages only", async (t) =
 });
 
 test("the From-the-lead-chat marker survives a restart on plain user messages only", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-lead-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-lead-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
   await store.appendMessage(chat.id, { role: "user", content: "Run the tests.", fromLeadChat: true });
@@ -1789,8 +1785,7 @@ test("persists a per-chat Computer Use grant without reordering the chat index",
 });
 
 test("a Computer Use continue marker survives reopening the store until cleared", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-store-");
   const first = createChatStore(async () => directory);
   const chat = await first.create({ title: "Waiting on setup" });
   await first.appendMessage(chat.id, { role: "user", content: "Open Notes" });
@@ -1838,8 +1833,7 @@ test("the summary index records when assistant output was last persisted", async
 });
 
 test("a failed turn counts as new assistant output and is marked failed until a reply succeeds", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-store-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
   await store.appendMessage(chat.id, { role: "user", content: "Hello" });
@@ -1918,8 +1912,7 @@ test("loads legacy Azure chat identities through the renamed native provider", a
 });
 
 test("feature-owned chats leave regular listings but stay in the full index across a restart", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-owner-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-store-owner-");
   const owner = { kind: "design-project" as const, projectId: "project-1" };
   const store = createChatStore(async () => directory);
   const regular = await store.create({ workspaceId: "default" });
@@ -1980,8 +1973,7 @@ test("renderer-authored appends cannot write into a feature-owned conversation",
 });
 
 test("design mode persists per chat across a restart without reordering it", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-mode-store-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-design-mode-store-");
   const first = createChatStore(async () => directory);
   const chat = await first.create({ workspaceId: "workspace-1", title: "Landing hero" });
   const other = await first.create({ workspaceId: "workspace-1", title: "Pricing" });
@@ -2057,8 +2049,7 @@ test("a design mode change and a rename on the same chat both survive", async (t
 });
 
 test("a stored design mode value other than true reads as off", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-mode-garbled-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-design-mode-garbled-");
   const store = createChatStore(async () => directory);
   const chat = await store.create({ workspaceId: "workspace-1" });
   const file = path.join(directory, `${chat.id}.json`);
@@ -2071,8 +2062,7 @@ test("a stored design mode value other than true reads as off", async (t) => {
 });
 
 test("getMeta answers from the index without reading the chat's transcript", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-meta-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-meta-");
   const seeding = createChatStore(async () => directory);
   const chat = await seeding.create({ workspaceId: "workspace-1", title: "Landing hero" });
   await seeding.setDesignMode(chat.id, true);
@@ -2127,8 +2117,7 @@ function sampleGrabbedElement(overrides: Partial<GrabbedElementContextV1> = {}):
 }
 
 test("grabbedElements round-trip across createWithFirstMessage, append, restart, fork, export, title policy, and renderer projection", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-grab-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-grab-");
   const store = createChatStore(async () => directory);
 
   const firstElement = sampleGrabbedElement({ id: "el_first", thumbnailAttachmentId: undefined });
@@ -2233,8 +2222,7 @@ test("grabbedElements round-trip across createWithFirstMessage, append, restart,
 
 test("first-message committer reports browser_grab_sent once on commit and not on replay", async (t) => {
   const sent = captureAnalyticsEvents(t);
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-first-grab-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-first-grab-");
   const store = createChatStore(async () => directory);
   const turns = new ChatTurnAdmission();
   const workspaces = new WorkspaceOperationRegistry();
@@ -2323,8 +2311,7 @@ test("an in-chat task run on another model leaves the chat's own model unchanged
 });
 
 test("a started chat keeps who started it across a restart, and a damaged record drops only that", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-started-by-store-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-started-by-store-");
   const store = createChatStore(async () => directory);
   const startedBy = { version: 1 as const, kind: "chat" as const, chatId: "lead-1", at: 1_000 };
   const child = await store.create({ workspaceId: "workspace-1", title: "Run the tests", startedBy });
@@ -2346,8 +2333,7 @@ test("a started chat keeps who started it across a restart, and a damaged record
 });
 
 test("a turn's thinking level is saved in the same write as its message, survives restart, and only on a regular chat with a model", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-thinking-level-"));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const directory = await temporaryDirectory(t, "aiden-chat-thinking-level-");
   const first = createChatStore(async () => directory);
   const chat = await first.create({ workspaceId: "workspace", providerId: "openai", model: "model-a" });
 
