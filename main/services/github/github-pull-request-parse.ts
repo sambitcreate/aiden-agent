@@ -12,6 +12,7 @@ import type {
   GitHubPullRequestReviewDecision,
   GitHubPullRequestSummary,
 } from "../types.js";
+import { isRecord } from "../../shared/guards.js";
 
 const MAX_RENDERER_STRING_CHARS = 2_048;
 const MAX_CHECKS = 100;
@@ -47,9 +48,7 @@ export interface RawPullRequest {
   statusCheckRollup?: unknown;
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export { isRecord };
 
 export function boundedString(
   value: unknown,

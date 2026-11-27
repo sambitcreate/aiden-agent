@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { AidenRemoteBotAvatarAsset } from "./aiden-remote-protocol.js";
+import { isRecord } from "../shared/guards.js";
 
 export const BOT_AVATAR_STORE_VERSION = 1 as const;
 export const BOT_AVATAR_SOURCE_MAX_BYTES = 4 * 1_048_576;
@@ -133,10 +134,6 @@ export class BotAvatarRevisionConflictError extends Error {
 
 export class BotAvatarReplayError extends Error {
   readonly name = "BotAvatarReplayError";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

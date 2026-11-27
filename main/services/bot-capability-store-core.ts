@@ -44,6 +44,7 @@ import {
 } from "./bot-capability-bindings.js";
 import type { BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
 import { inspectBotRoutineModelGrant, type BotRoutineModelGrant } from "./bot-routine-models.js";
+import { isRecord } from "../shared/guards.js";
 
 const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
 const MAX_INCARNATIONS_PER_NAMESPACE = 4_096;
@@ -239,10 +240,6 @@ export class BotCapabilityNoticeRequiredError extends Error {
     super("Review the current Bot access notice before this Bot acts.");
     this.name = "BotCapabilityNoticeRequiredError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function exactKeys(

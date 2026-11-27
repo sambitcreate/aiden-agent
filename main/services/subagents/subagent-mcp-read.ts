@@ -17,6 +17,7 @@ import {
   type SubagentMcpScopeV2,
   type SubagentMcpToolScopeV2,
 } from "./authority-v2.js";
+import { isRecord } from "../../shared/guards.js";
 
 export const MAX_SUBAGENT_MCP_INVENTORY_TOOLS = 256;
 export const MAX_SUBAGENT_MCP_SCHEMA_BYTES = 64 * 1024;
@@ -133,10 +134,6 @@ export type NormalizedSubagentMcpRemoteTool = InspectedSubagentMcpTool & {
 interface JsonState {
   nodes: number;
   seen: Set<object>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function canonicalJsonValue(value: unknown, state: JsonState, depth = 0): unknown {

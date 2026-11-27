@@ -1,6 +1,7 @@
 import { sanitizeSubagentSnapshotText } from "./subagent-safe-text.js";
 import { boundedUnicodePrefix } from "./unicode-prefix.js";
 import { isGenerationThinkingLevel, type GenerationThinkingLevel } from "./generation-thinking.js";
+import { isRecord } from "../../main/shared/guards.js";
 
 export const SUBAGENT_RUN_SNAPSHOT_VERSION = 1 as const;
 export const MAX_SUBAGENT_RUNS_PER_GENERATION = 8;
@@ -196,10 +197,6 @@ const OPTIONAL_SNAPSHOT_KEYS = new Set([
   "thinkingLevel",
   "modelSelection",
 ]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function finiteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;

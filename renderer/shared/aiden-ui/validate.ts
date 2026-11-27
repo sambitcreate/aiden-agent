@@ -10,6 +10,7 @@ import {
   type AidenUiPropValueV1,
 } from "./types.js";
 import { isWireSafeKey, parseAidenUiState } from "./visual.js";
+import { isRecord } from "../../../main/shared/guards.js";
 
 /**
  * Checks an already-compiled page from outside Aiden (an imported file)
@@ -40,10 +41,6 @@ class Invalid extends Error {}
 
 function fail(message: string): never {
   throw new Invalid(message);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /** A name from the page, shown only when it reads as one. */

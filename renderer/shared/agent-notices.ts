@@ -6,6 +6,8 @@
 // instead of a user bubble. The message content is the model-facing text and
 // fences any command output or GitHub text as data.
 
+import { isRecord } from "../../main/shared/guards.js";
+
 export const AGENT_NOTICE_SOURCES = ["background_job", "pull_request", "check", "check_back", "schedule", "goal", "chat"] as const;
 export type AgentNoticeSource = (typeof AGENT_NOTICE_SOURCES)[number];
 
@@ -30,10 +32,6 @@ export interface AgentNoticeV1 {
 
 export const MAX_AGENT_NOTICE_TITLE_CHARS = 80;
 export const MAX_AGENT_NOTICE_SUMMARY_CHARS = 240;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** One display line: control characters become spaces, then trimmed and cut. */
 export function noticeLine(value: string, maxChars: number): string {

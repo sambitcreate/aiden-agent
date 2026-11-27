@@ -4,6 +4,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { WorkspacePermission } from "../types.js";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
 import { parseSubagentToolRequest, type SubagentTaskRequest } from "./contracts.js";
+import { isRecord } from "../../shared/guards.js";
 
 export const SUBAGENT_AUTHORITY_VERSION = 2 as const;
 export const MAX_SUBAGENT_MCP_SCOPES = 16;
@@ -203,10 +204,6 @@ const BUDGET_KEYS = [
   "maxQueued",
   "maxNetworkOperations",
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function subagentMcpEffectProfileFingerprintV2(
   profile: Omit<SubagentMcpMutationEffectProfileV2, "fingerprint">,

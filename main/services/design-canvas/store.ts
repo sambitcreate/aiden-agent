@@ -11,6 +11,7 @@ import {
   type DesignCanvas,
 } from "../../../renderer/shared/design-canvas/schema.js";
 import { writeJsonAtomic } from "../durable-fs.js";
+import { isRecord } from "../../shared/guards.js";
 
 export type DesignCanvasSaveResult =
   | { ok: true; revision: number }
@@ -193,10 +194,6 @@ export class DesignCanvasStore {
     });
     return run;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isMissing(error: unknown): boolean {

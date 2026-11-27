@@ -24,6 +24,7 @@ import type { PeerRequest, PeerTrust } from "../peer-transport.js";
 import { peerTlsOptions, PeerTransportError } from "../peer-transport.js";
 import { isEmulatorSerial } from "./android-device-actions.js";
 import type { DeviceHubUpstream } from "./device-hub-proxy.js";
+import { isRecord } from "../../shared/guards.js";
 
 /** Booting a simulator on the other Mac can take minutes. */
 /** Above the serving Mac's own boot wait, so the caller does not give up first. */
@@ -71,10 +72,6 @@ export interface PeerRegistryPort {
   list(): Promise<PeerHostView[]>;
   request(id: string, input: Omit<PeerRequest, "credential">): Promise<unknown>;
   relayTarget(id: string): Promise<{ trust: PeerTrust; credential: string } | null>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseSimulator(value: unknown): PeerSimulator | null {

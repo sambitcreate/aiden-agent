@@ -5,6 +5,7 @@ import {
   type OAuthTokens,
 } from "@earendil-works/pi-mcp/oauth";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { isRecord } from "../shared/guards.js";
 
 export interface McpOAuthSession {
   /** Normalized protected-resource URL this registration and tokens belong to. */
@@ -57,10 +58,6 @@ export const MCP_REJECTED_REFRESH_RESTORE_MS = 5 * 60_000;
 
 function refreshTokenHash(refreshToken: string): string {
   return createHash("sha256").update(refreshToken).digest("hex");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 /** Validate decrypted session structure while retaining compatible future fields. */

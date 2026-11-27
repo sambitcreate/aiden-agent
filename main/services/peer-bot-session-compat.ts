@@ -21,6 +21,7 @@ import {
   parseAidenRemoteBotQueuedList,
   type AidenRemoteBotSessionEvent,
 } from "./aiden-remote-protocol.js";
+import { isRecord } from "../shared/guards.js";
 
 const SESSION_KEYS = [
   "botId",
@@ -40,10 +41,6 @@ const SESSION_KEYS = [
   "accessRequest",
   "plan",
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function has(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);

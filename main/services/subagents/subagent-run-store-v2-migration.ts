@@ -21,6 +21,7 @@ import {
   parseMutableSubagentRunDatabaseV2,
   type MutableSubagentRunDatabaseV2,
 } from "./subagent-run-store-v2-core.js";
+import { isRecord } from "../../shared/guards.js";
 
 const STORE_VERSION_V2 = 2 as const;
 const MIGRATION_ADAPTER_VERSION = 1 as const;
@@ -70,10 +71,6 @@ export interface SubagentRunStoreV1CheckpointEvidenceV2 {
   source: "missing" | "v1";
   sourceGeneration: SubagentRunStoreGeneration;
   sourceSha256: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

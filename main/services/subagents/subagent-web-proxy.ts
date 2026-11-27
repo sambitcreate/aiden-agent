@@ -8,6 +8,7 @@ import {
 } from "../web-search-core.js";
 import type { WebSearchAvailability, WebSearchSearchOptions } from "../web-search.js";
 import { createSubagentAuthorityV2, type SubagentAuthorityV2 } from "./authority-v2.js";
+import { isRecord } from "../../shared/guards.js";
 
 export const SUBAGENT_WEB_PROXY_TIMEOUT_MS = 20_000;
 export const MAX_SUBAGENT_WEB_QUERY_CHARS = 2_000;
@@ -59,10 +60,6 @@ export interface SubagentWebProxyHostDependencies {
 export type ConsumeSubagentNetworkOperation = (authority: SubagentAuthorityV2) => boolean;
 
 class SafeWebProxyError extends Error {}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const actual = Object.keys(value);

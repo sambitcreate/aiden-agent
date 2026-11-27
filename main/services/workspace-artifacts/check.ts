@@ -15,6 +15,7 @@ import {
   type WorkspaceArtifactSourceResultV1,
   type WorkspaceArtifactV1,
 } from "../../../renderer/shared/workspace-artifacts.js";
+import { isRecord } from "../../shared/guards.js";
 
 const MAX_NAMES_SHOWN = 12;
 /** The check runs in the main process, so a hostile page or huge data must not stall the app. */
@@ -45,10 +46,6 @@ export interface WorkspaceArtifactPageCheck {
   findings: string[];
   /** What could not be checked, such as a source that did not load or an empty list. */
   unchecked: string[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Up to a dozen names that came from data, quoted; the rest are counted, never echoed. */

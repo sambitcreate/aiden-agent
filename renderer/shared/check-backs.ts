@@ -6,6 +6,7 @@
 // renderer share: the tool name, the bounds and how a time reads.
 
 import { botWakeUpWhen } from "./bot-wake-ups.js";
+import { isRecord } from "../../main/shared/guards.js";
 
 export const CHECK_BACK_TOOL_NAME = "check_back";
 
@@ -40,10 +41,6 @@ export function checkBackClock(timestamp: number, zone?: string): string {
  */
 export function checkBackWhen(fireAt: number, now: number, zone?: string): string {
   return botWakeUpWhen(fireAt, now, zone);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Shape check for one check-back in the follow-through IPC answer. */

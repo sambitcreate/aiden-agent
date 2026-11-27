@@ -118,6 +118,7 @@ import type {
   StoredProvider,
   Workspace,
 } from "./types.js";
+import { isRecord } from "../shared/guards.js";
 
 /** The slice of the keychain store this module needs. See secrets.ts. */
 export interface SecretsPort {
@@ -150,10 +151,6 @@ function defaultWorkspace(): Workspace {
 }
 
 const PERMISSIONS = new Set(["full", "ask", "none"]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 /** Point every Agent Slider stop at its provider's current id, as `lastProviderId` is. */
 function withResolvedStopProviders(

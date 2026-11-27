@@ -17,6 +17,8 @@
  * only the schema handed to the model is normalized.
  */
 
+import { isRecord } from "../shared/guards.js";
+
 type NumericRange = { minimum?: number; maximum?: number };
 
 /**
@@ -69,10 +71,6 @@ const SUBSCHEMA_MAP_KEYWORDS = new Set([
   "dependentSchemas",
   "dependencies",
 ]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function allowsNumbers(type: unknown): boolean {
   if (type === undefined) return true;

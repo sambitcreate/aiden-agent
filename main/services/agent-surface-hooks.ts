@@ -16,6 +16,7 @@ import { hookScopesFor } from "./hooks/hook-config.js";
 import { getHookDispatcher } from "./hooks/index.js";
 import type { HookDispatcher, HookEvent, HookOutcome, HookPayload, HookScope } from "./hooks/hook-types.js";
 import { MAX_STOP_HOOK_CONTINUATIONS, hookCheckFailed, hookDispatchFailure, hookNoticeLines, hookStopMessage } from "./workspace-chat-hooks.js";
+import { isRecord } from "../shared/guards.js";
 
 /** Stop hooks keep one run going at most this many times, on every surface. */
 export { MAX_STOP_HOOK_CONTINUATIONS };
@@ -163,10 +164,6 @@ export function chatSurfaceHooks(
     dispatcher,
     options,
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

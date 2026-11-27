@@ -5,6 +5,7 @@ import type { CallToolResult, ServerCapabilities, Tool } from "@earendil-works/p
 import { mcpRequest, type McpCallOptions, type McpRequester } from "./mcp-client.js";
 import { copyBoundedJson, utf8Size } from "./bounded-json.js";
 import { assertBotConnectorMetadataRenewalCurrent, botConnectorForegroundLifetime } from "./bot-connector-inventory-scope.js";
+import { isRecord } from "../shared/guards.js";
 
 export const MCP_TOOL_INVENTORY_MAX_PAGES = 64;
 export const MCP_TOOL_INVENTORY_MAX_TOOLS = 512;
@@ -14,10 +15,6 @@ export type McpToolCallParams = { name: string; arguments?: Record<string, unkno
 /** Servers end a list with an absent, `null` or empty `nextCursor`. */
 export function mcpListCursor(value: unknown): string | undefined {
   return value === undefined || value === null || value === "" ? undefined : value as string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /**

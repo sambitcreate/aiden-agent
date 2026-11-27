@@ -19,6 +19,7 @@ import {
   type BotAvatarShape,
   type BotInterruptions,
 } from "./bots.js";
+import { isRecord } from "../../main/shared/guards.js";
 
 export const UPDATE_BOT_TOOL_NAME = "update_bot";
 export const BOT_SETTINGS_CHANGE_ENTRY_KIND = "aiden.bot-settings-change";
@@ -264,10 +265,6 @@ function boundedText(value: unknown, maximum: number, allowEmpty: boolean): stri
     if ((code < 0x20 && character !== "\n" && character !== "\r" && character !== "\t") || code === 0x7f) return undefined;
   }
   return trimmed;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**

@@ -53,6 +53,7 @@ import {
   type BackgroundSubagentRunV2,
   type BackgroundSubagentStoreV2,
 } from "./background-lifecycle-v2.js";
+import { isRecord } from "../../shared/guards.js";
 
 const STORE_VERSION = 2 as const;
 const MIGRATION_ADAPTER_VERSION = 1 as const;
@@ -102,10 +103,6 @@ export interface SubagentRunStoreV1CheckpointV2 {
   source: "missing" | "v1";
   sourceGeneration: SubagentRunStoreGeneration;
   sourceSha256: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function exactKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {

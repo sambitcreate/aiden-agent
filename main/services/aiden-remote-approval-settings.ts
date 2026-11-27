@@ -28,6 +28,7 @@ import {
   parseAidenRemoteApprovalModeView,
   type AidenRemoteApprovalModeView,
 } from "./aiden-remote-bot-ux.js";
+import { isRecord } from "../shared/guards.js";
 
 /** The desktop services the routes reuse. */
 export interface AidenRemoteApprovalSettingsPorts {
@@ -55,9 +56,6 @@ const SCOPES = ["mac", "workspace", "bot", "chat"] as const;
 const UNREADABLE = "Your approval rules couldn’t be read. Fix them on your Mac first.";
 const REFUSED = "That rule couldn’t be changed. Refresh and try again.";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function exactKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
   for (const key of Object.keys(value)) if (!keys.includes(key)) throw new Error(`${label} has an unknown field.`);
 }

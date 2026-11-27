@@ -11,6 +11,7 @@ import type {
   LiveServerMessage,
   Session,
 } from "@google/genai";
+import { isRecord } from "../../shared/guards.js";
 
 export const GEMINI_LIVE_INPUT_SAMPLE_RATE = 16_000;
 export const GEMINI_LIVE_OUTPUT_SAMPLE_RATE = 24_000;
@@ -239,10 +240,6 @@ export class GeminiLiveProtocolFailure extends Error {
   ) {
     super(SAFE_ERROR_MESSAGES[code]);
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function hasOnlyKeys(

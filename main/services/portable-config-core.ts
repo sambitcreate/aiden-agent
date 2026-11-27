@@ -67,6 +67,7 @@ import { parseWebFetchSettings } from "../../renderer/shared/web-fetch-settings.
 import { parseTtsSettingsDocument } from "./tts/settings.js";
 import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
 import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
+import { isRecord } from "../shared/guards.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -152,10 +153,6 @@ export const LEGACY_CONFIG_ARCHIVE_SUFFIX = ".pre-aiden-dir";
 
 export function emptyPortableConfig(): PortableConfigShape {
   return { providers: [], providerIdAliases: {}, mcpServers: [], skills: [] };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isStringMap(value: unknown): value is Record<string, string> {
