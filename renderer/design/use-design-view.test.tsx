@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, render } from "@testing-library/react";
 import { emptyDesignCanvas, type DesignCanvas } from "../shared/design-canvas/schema";
+import { DesignPaneContext, type DesignPane } from "./design-pane";
 import { DESIGN_VIEW_REPORT_DELAY_MS, useDesignView, type DesignViewHandle } from "./use-design-view";
 
 type Kept = {
@@ -66,7 +67,7 @@ test("the canvas opens on the chat's kept page where it was left, and reports th
   assert.deepEqual(view.viewport, { x: 40, y: 0, zoom: 2 });
   await tick(DESIGN_VIEW_REPORT_DELAY_MS);
   assert.deepEqual(reports(), [
-    ["chat-1", { workspaceId: "ws-1", view: { pageId: "p2", viewport: { x: 40, y: 0, zoom: 2 } }, focusId: 3 }],
+    ["chat-1", { workspaceId: "ws-1", view: { pageId: "p2", viewport: { x: 40, y: 0, zoom: 2 } }, focusId: 3, visible: true }],
   ]);
 });
 
@@ -102,7 +103,7 @@ test("page switches, pans and size changes are reported once, 250 ms after the l
   assert.equal(reports().length, opened, "still inside the debounce");
   await tick(1);
   assert.deepEqual(reports().slice(opened), [
-    ["chat-1", { workspaceId: "ws-1", view: { pageId: "p3", viewport: { x: -320, y: 10, zoom: 0.5 }, size: { w: 900, h: 600 } }, focusId: 0 }],
+    ["chat-1", { workspaceId: "ws-1", view: { pageId: "p3", viewport: { x: -320, y: 10, zoom: 0.5 }, size: { w: 900, h: 600 } }, focusId: 0, visible: true }],
   ]);
   // Back on the first page, the earlier pan is still where it was.
   await act(async () => view.showPage("page-1"));
@@ -120,7 +121,7 @@ test("leaving within 250 ms sends the last change first, then says the canvas cl
   mounted.unmount();
   await settle();
   assert.deepEqual(reports().slice(opened), [
-    ["chat-1", { workspaceId: "ws-1", view: { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0 }],
+    ["chat-1", { workspaceId: "ws-1", view: { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0, visible: true }],
     ["chat-1", { mounted: false }],
   ]);
 });
@@ -132,7 +133,7 @@ test("Aiden's page change is applied and its focusId echoed; an older one is ign
   await act(async () => view.applyFocus({ pageId: "p3", focusId: 4 }));
   assert.equal(view.pageId, "p3");
   await tick(DESIGN_VIEW_REPORT_DELAY_MS);
-  assert.deepEqual(lastReport(), ["chat-1", { workspaceId: "ws-1", view: { pageId: "p3", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 4 }]);
+  assert.deepEqual(lastReport(), ["chat-1", { workspaceId: "ws-1", view: { pageId: "p3", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 4, visible: true }]);
 
   await act(async () => view.applyFocus({ pageId: "p2", focusId: 2 }));
   assert.equal(view.pageId, "p3", "a page change older than one already seen is ignored");
@@ -193,7 +194,7 @@ test("a fallback page is reported to main", async () => {
   await settle();
   await tick(DESIGN_VIEW_REPORT_DELAY_MS);
   assert.deepEqual(reports().slice(opened), [
-    ["chat-1", { workspaceId: "ws-1", view: { pageId: "p3", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0 }],
+    ["chat-1", { workspaceId: "ws-1", view: { pageId: "p3", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0, visible: true }],
   ]);
 });
 
@@ -215,3 +216,55 @@ test("when the view's page comes back after a fallback was reported, main hears 
   assert.equal((lastReport()?.[1] as { view: { pageId: string } }).view.pageId, "p2");
 });
 
+
+function StackedProbe({ pane }: { pane: DesignPane }) {
+  return (
+    <DesignPaneContext.Provider value={{ stacked: true, pane, setPane: () => {} }}>
+      <Probe />
+    </DesignPaneContext.Provider>
+  );
+}
+
+const visibleOf = (report: unknown[] | undefined) => (report?.[1] as { visible?: boolean } | undefined)?.visible;
+
+test("the stacked layout reports visible false when the Chat pane is shown and true when the Canvas pane is", async () => {
+  kept = { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 }, focusId: 0, viewports: {} };
+  const shown = render(<StackedProbe pane="chat" />);
+  await settle();
+  await tick(DESIGN_VIEW_REPORT_DELAY_MS);
+  assert.equal(visibleOf(lastReport()), false);
+  const before = reports().length;
+  shown.rerender(<StackedProbe pane="canvas" />);
+  await settle();
+  await tick(DESIGN_VIEW_REPORT_DELAY_MS);
+  assert.equal(reports().length, before + 1, "the pane switch alone is reported");
+  assert.equal(visibleOf(lastReport()), true);
+  shown.rerender(<StackedProbe pane="chat" />);
+  await settle();
+  await tick(DESIGN_VIEW_REPORT_DELAY_MS);
+  assert.equal(visibleOf(lastReport()), false);
+});
+
+test("a document the system reports hidden still reports the shown canvas pane as visible: main judges the window", async () => {
+  // macOS can report an occluded window's document hidden; the dev server must not stop for that.
+  let state: DocumentVisibilityState = "hidden";
+  const descriptor = Object.getOwnPropertyDescriptor(document, "visibilityState");
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  try {
+    kept = { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 }, focusId: 0, viewports: {} };
+    render(<Probe />);
+    await settle();
+    await tick(DESIGN_VIEW_REPORT_DELAY_MS);
+    assert.equal(visibleOf(lastReport()), true);
+    state = "visible";
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await settle();
+    await tick(DESIGN_VIEW_REPORT_DELAY_MS);
+    assert.equal(visibleOf(lastReport()), true);
+  } finally {
+    if (descriptor) Object.defineProperty(document, "visibilityState", descriptor);
+    else delete (document as unknown as Record<string, unknown>).visibilityState;
+  }
+});

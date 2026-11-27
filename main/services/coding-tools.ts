@@ -997,6 +997,89 @@ export async function writeWorkspaceBinaryFile(
   return relativePath;
 }
 
+/**
+ * The target for a write that never follows a link: every component that
+ * exists, from the root to the target, is checked with `lstat` and any
+ * symbolic link refuses the write. The unresolved path goes to the native
+ * writer, which creates folders and commits with `O_NOFOLLOW` at each step,
+ * so a link swapped in after this check is refused there too.
+ */
+async function resolveWritableNoFollow(
+  workspace: WorkspaceRootGuard,
+  suppliedPath: string,
+  signal?: AbortSignal,
+): Promise<{ full: string; relativePath: string }> {
+  const lexical = resolveInRoot(workspace.lexical, suppliedPath);
+  const realRoot = await verifyWorkspaceRoot(workspace, signal);
+  const segments = path.relative(workspace.lexical, lexical).split(path.sep).filter(Boolean);
+  if (segments.length === 0) throw new Error(`Path "${suppliedPath}" is the workspace folder itself.`);
+  let current = realRoot;
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    let info: Stats;
+    try {
+      info = await fs.lstat(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+      throw error;
+    }
+    if (info.isSymbolicLink()) throw new Error(`Path "${suppliedPath}" goes through a link, and this file is only written to a real path.`);
+    if (index < segments.length - 1 && !info.isDirectory()) throw new Error(`Path "${suppliedPath}" goes through a file that isn't a folder.`);
+  }
+  await workspace.testObserver?.beforeWriteCommit?.(lexical);
+  throwIfAborted(signal, "File write cancelled.");
+  return { full: path.join(realRoot, ...segments), relativePath: segments.join("/") };
+}
+
+/**
+ * Writes Aiden's own text file into the workspace with write_file's
+ * protections (pinned root, confined path, protected config paths, the native
+ * writer's conflict check). `expectedSha256` is the content hash the file
+ * must still have, or `null` when it must not exist yet. With
+ * `followLinks: false` no link anywhere on the path is followed, even one
+ * that stays inside the folder.
+ */
+export async function writeConfinedWorkspaceText(
+  root: string,
+  relativePath: string,
+  text: string,
+  options: {
+    expectedSha256?: string | null;
+    followLinks?: boolean;
+    signal?: AbortSignal;
+    fileMutatorBinary?: string;
+    testObserver?: Pick<NonNullable<WorkspaceRootGuard["testObserver"]>, "beforeWriteCommit">;
+  } = {},
+): Promise<void> {
+  const { signal } = options;
+  const workspace = pinWorkspaceRoot(root, options.testObserver);
+  let full: string;
+  let committedPath: string | undefined;
+  if (options.followLinks === false) {
+    ({ full, relativePath: committedPath } = await resolveWritableNoFollow(workspace, relativePath, signal));
+  } else {
+    full = await resolveWritableInRoot(workspace, relativePath, signal);
+  }
+  assertAgentMayWriteConfigPath(relativePath, full);
+  const existing = await readReplacedFile(full, relativePath, signal);
+  if (options.expectedSha256 === null && existing) {
+    throw new Error(`${relativePath} already exists, so it was not replaced.`);
+  }
+  if (typeof options.expectedSha256 === "string" && existing?.preimage.sha256 !== options.expectedSha256) {
+    throw new Error(`${relativePath} changed since it was read, so it was not replaced.`);
+  }
+  throwIfAborted(signal, "File write cancelled.");
+  const realRoot = await verifyWorkspaceRoot(workspace, signal);
+  await commitPinnedWrite({
+    ...(options.fileMutatorBinary ? { binary: options.fileMutatorBinary } : {}),
+    root: realRoot,
+    rootIdentity: workspace.exactIdentity!,
+    relativePath: committedPath ?? path.relative(realRoot, full).split(path.sep).join("/"),
+    ...(existing ? { before: existing.preimage } : {}),
+    updated: Buffer.from(text, "utf8"),
+  });
+}
+
 async function isSymbolicLink(fullPath: string): Promise<boolean> {
   try {
     return (await fs.lstat(fullPath)).isSymbolicLink();

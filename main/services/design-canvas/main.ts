@@ -2,7 +2,9 @@
 // handlers are tested directly. Constructing the store does no I/O, so
 // workspace cleanup can remove a canvas even while the design-mode flag is off.
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
+import { findEnvKeys, getProviders } from "@earendil-works/pi-ai/compat";
 import { persistedChatWorkspaceId } from "../../../renderer/shared/chat-workspace.js";
 import { app, ipcMain, logger } from "../../platform.js";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
@@ -12,6 +14,19 @@ import { DesignCanvasSnapshots } from "./canvas-snapshots.js";
 import { createDesignCanvasCarry } from "./carry.js";
 import { createDesignChatCleanup, createDesignWorkspaceCleanup } from "./cleanup.js";
 import { DesignModeConsent } from "./design-mode-tool.js";
+import { DesignAppConsent } from "./app-server/app-consent.js";
+import { detectWebApp } from "./app-server/app-detect.js";
+import { launchDirsUnchanged, readLaunchSurface } from "./app-server/app-fingerprint.js";
+import { providerKeyNames } from "./app-server/app-launch-core.js";
+import { chooseAppPort, defaultOsPort } from "./app-server/app-ports.js";
+import { createDesignAppRecords } from "./app-server/app-records.js";
+import { DESIGN_APP_PRESENCE_GRACE_MS, DesignAppServers, type DesignAppJobs } from "./app-server/app-server-main.js";
+import { defaultAppToolchainDeps, resolveAppToolchain } from "./app-server/app-toolchain.js";
+import { readCanvasConfig, saveCanvasConfigApp } from "./canvas-config.js";
+import type { DesignJobView } from "../follow-through/background-jobs.js";
+import { agentShellCommandEnvironment } from "../agent-command-environment.js";
+import { workspaceMutationGate } from "../workspace-mutation-gate.js";
+import { designLiveEnabled } from "../studio/feature-flags.js";
 import { runDesignMdWorker } from "./design-md/lint-client.js";
 import { createDesignAppRoots } from "./design-md/locate.js";
 import { DesignMdOffers } from "./design-md/offers.js";
@@ -98,10 +113,11 @@ export const designCanvasCarry = createDesignCanvasCarry({
   isLive: designLiveChats,
 });
 
-/** A removed workspace's canvas, its corrupt copies and its chats' views of it. */
+/** A removed workspace's canvas, its corrupt copies, its chats' views of it, and its running apps. */
 export const designCanvasWorkspaceCleanup = createDesignWorkspaceCleanup({
   store: designWorkspaceCanvasStore,
   views: designCanvasViews,
+  apps: { forgetWorkspace: (workspaceId) => designAppServers.forgetWorkspace(workspaceId) },
 });
 
 /**
@@ -171,3 +187,99 @@ export const designMdOffers = new DesignMdOffers({
 
 /** The app roots each workspace's design turns describe, cached on its manifests. Memory only. */
 export const designAppRoots = createDesignAppRoots();
+
+// ── Live apps (design mode v2, Phase 2b) ──
+
+/** Run-app cards waiting for an answer. Memory only. */
+export const designAppConsent = new DesignAppConsent();
+
+/**
+ * The background jobs service and its design-job events, connected by
+ * main/index.ts: llm-client imports this file and loads follow-through-main
+ * lazily, so this file must not import it.
+ */
+let connectedJobs: DesignAppJobs | undefined;
+const designJobListeners = new Set<(view: DesignJobView) => void>();
+let settleRecovery: (ready: boolean) => void = () => undefined;
+const designAppRecovery = new Promise<boolean>((resolve) => {
+  settleRecovery = resolve;
+});
+
+export function connectDesignAppJobs(source: {
+  jobs: DesignAppJobs;
+  onJobChange(listener: (view: DesignJobView) => void): () => void;
+}): void {
+  if (connectedJobs) return;
+  connectedJobs = source.jobs;
+  source.onJobChange((view) => {
+    for (const listener of designJobListeners) listener(view);
+  });
+}
+
+/** Startup reaped (or failed to reap) the last session's processes; apps start only after true. */
+export function designAppRecoveryDone(ready: boolean): void {
+  settleRecovery(ready);
+}
+
+function jobs(): DesignAppJobs {
+  if (!connectedJobs) throw new Error("Background jobs are not ready yet.");
+  return connectedJobs;
+}
+
+/**
+ * E2E only: a shorter presence grace, from `AIDEN_E2E_DESIGN_APP_GRACE_MS`,
+ * read only in an unpackaged build (as AIDEN_ANALYTICS_DEBUG is) and clamped
+ * to 1–60 s. A packaged app always waits the full 60 s.
+ */
+function presenceGraceMs(): number {
+  const raw = app.isPackaged ? undefined : process.env.AIDEN_E2E_DESIGN_APP_GRACE_MS;
+  const value = raw === undefined ? Number.NaN : Number(raw);
+  return Number.isFinite(value) ? Math.min(DESIGN_APP_PRESENCE_GRACE_MS, Math.max(1_000, Math.floor(value))) : DESIGN_APP_PRESENCE_GRACE_MS;
+}
+
+/** Every workspace's design-mode dev servers. Construction does no I/O and starts nothing. */
+export const designAppServers = new DesignAppServers({
+  jobs: {
+    startDesign: (input) => jobs().startDesign(input),
+    stopDesign: (jobId) => jobs().stopDesign(jobId),
+    getDesign: (jobId) => connectedJobs?.getDesign(jobId),
+    designTail: (jobId) => connectedJobs?.designTail(jobId) ?? "",
+    designSockets: (jobIds) => jobs().designSockets(jobIds),
+    readDesignLog: (jobId, options) => jobs().readDesignLog(jobId, options),
+  },
+  onJobChange: (listener) => {
+    designJobListeners.add(listener);
+    return () => designJobListeners.delete(listener);
+  },
+  detect: (workspaceRoot) => detectWebApp(workspaceRoot, { stopAt: os.homedir(), homeDir: os.homedir() }),
+  readConfig: readCanvasConfig,
+  saveConfigApp: saveCanvasConfigApp,
+  toolchain: (detected) => resolveAppToolchain(detected, defaultAppToolchainDeps()),
+  fingerprint: readLaunchSurface,
+  dirsUnchanged: launchDirsUnchanged,
+  records: createDesignAppRecords(() => path.join(app.getPath("userData"), "design-apps.json")),
+  choosePort: (input) => chooseAppPort(input),
+  osPort: defaultOsPort,
+  consent: designAppConsent,
+  views: designCanvasViews,
+  workspace: async (workspaceId) => {
+    const workspace = await configStore.getWorkspace(workspaceId);
+    if (!workspace) return undefined;
+    return { id: workspace.id, ...(workspace.folderPath ? { path: workspace.folderPath } : {}), permission: workspace.permission };
+  },
+  gate: workspaceMutationGate,
+  recoveryReady: designAppRecovery,
+  launchEnv: () => {
+    const env = agentShellCommandEnvironment();
+    // pi-ai reads only set variables; every provider key name it finds is scrubbed (D7).
+    const set = Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+    return { env, providerKeys: providerKeyNames(env, getProviders(), (provider) => findEnvKeys(provider, set)) };
+  },
+  report: (event) => reportAnalyticsEvent("design_app_started", event),
+  enabled: () => designLiveEnabled(),
+  log: (event, detail) => logger.warn("design", event, detail),
+  limits: { graceMs: presenceGraceMs() },
+});
+
+// Every window hears each workspace's app status; it carries no output beyond a crash's bounded tail.
+designAppServers.onStatus((snapshot) => ipcMain.broadcast("designApp:status", snapshot));

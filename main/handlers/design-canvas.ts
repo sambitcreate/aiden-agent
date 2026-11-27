@@ -247,7 +247,7 @@ function saveOptions(options: unknown): { undone: string[]; workspaceId: string 
 /** A `designCanvas:view` report, checked; anything malformed is refused. */
 function parseViewReport(
   value: unknown,
-): "unmounted" | { workspaceId: string; view: DesignChatView; focusId: number } {
+): "unmounted" | { workspaceId: string; view: DesignChatView; focusId: number; visible: boolean } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid canvas view.");
   const raw = value as Record<string, unknown>;
   if (raw.mounted === false && Object.keys(raw).length === 1) return "unmounted";
@@ -256,7 +256,9 @@ function parseViewReport(
   if (typeof focusId !== "number" || !Number.isSafeInteger(focusId) || focusId < 0) throw new Error("Invalid canvas view.");
   const view = parseDesignChatView(raw.view);
   if (!view) throw new Error("Invalid canvas view.");
-  return { workspaceId, view, focusId };
+  // A report without `visible` (an older renderer) is a hidden canvas, so it never keeps a live app running.
+  if (raw.visible !== undefined && typeof raw.visible !== "boolean") throw new Error("Invalid canvas view.");
+  return { workspaceId, view, focusId, visible: raw.visible === true };
 }
 
 export function designCanvasWorkspaceOf(chat: Pick<DesignCanvasChat, "workspaceId">): string {
@@ -271,12 +273,17 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   getChat(chatId: string): Promise<DesignCanvasChat | null>;
   grants: Pick<DesignGrantRegistry, "issue" | "revokeChat">;
   /** Each chat's view of its canvas, as the renderer reports it. */
-  views: Pick<DesignCanvasViews, "report" | "unmount" | "kept" | "unmountAll" | "get" | "viewports" | "showPage">;
+  views: Pick<DesignCanvasViews, "report" | "unmount" | "kept" | "unmountAll" | "get" | "viewports" | "showPage" | "windowChanged">;
   /**
    * Calls `reset` whenever the window that sent `event` reloads, crashes or is
    * destroyed, since every canvas in it is then gone; called for every view report.
    */
   whenSenderResets?(event: Event, reset: () => void): void;
+  /**
+   * Whether the sender's window is shown (not minimized or hidden), for 2b's
+   * presence; `changed` runs whenever that may have changed.
+   */
+  senderWindowShown?(event: Event, changed: () => void): () => boolean;
   /** Sends `designCanvas:focus` to the window that sent `event`, if it is still there. */
   sendFocus?(event: Event, request: { chatId: string; pageId: string; frameIds: string[]; focusId: number }): void;
   /** The chat's workspace folder, or null when the chat has no folder to frame. */
@@ -371,7 +378,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const chat = await requireChat(chatId);
       deps.whenSenderResets?.(event, () => deps.views.unmountAll());
       if (parsed.workspaceId !== designCanvasWorkspaceOf(chat)) return;
-      await deps.views.report(chat.id, parsed.workspaceId, parsed.view, parsed.focusId);
+      const windowShown = deps.senderWindowShown?.(event, () => deps.views.windowChanged());
+      await deps.views.report(chat.id, parsed.workspaceId, parsed.view, parsed.focusId, parsed.visible, windowShown);
     });
   });
 

@@ -16,8 +16,9 @@ import { assertRenameAllowedFromChat } from "../services/chat-title-policy.js";
 import type { ChatTurnLease } from "../services/chat-turn-admission.js";
 import { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "../services/workspace-operation-registry.js";
-import { createRendererChatMutationHandlers, type ChatDesignModeChange } from "./chat-renderer-mutations.js";
+import { createRendererChatMutationHandlers, type ChatDesignModeChange, type RendererChatMutationDeps } from "./chat-renderer-mutations.js";
 import type { Workspace } from "../services/types.js";
+import { registerDesignAppHandlers, type DesignAppHandlerDeps } from "./design-app.js";
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 
@@ -57,6 +58,8 @@ async function fixture(
     designModeEnabled?: boolean;
     assertChatAccess?: (event: IpcMainInvokeEvent, chatId: string) => void;
     onChatRemoved?: (event: IpcMainInvokeEvent, chatId: string) => void;
+    designApp?: RendererChatMutationDeps["designApp"];
+    rendererDocumentOwner?: RendererChatMutationDeps["rendererDocumentOwner"];
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-renderer-chat-mutations-"));
@@ -138,7 +141,7 @@ async function fixture(
     hostPlatformCapabilities: () => ({ bots: false }),
     closeDeviceSessionsForChat: () => undefined,
     chatTriage: { wake: (chatId) => track(triage.wake(chatId)) },
-    rendererDocumentOwner: () => owner,
+    rendererDocumentOwner: options.rendererDocumentOwner ?? (() => owner),
     llmClient: {
       requiresAppendReconciliation: () => false,
       beginChatTurn: lease,
@@ -153,6 +156,7 @@ async function fixture(
     broadcastDesignModeChanged: (change) => broadcasts.push(change),
     ...(options.assertChatAccess ? { assertChatAccess: options.assertChatAccess } : {}),
     ...(options.onChatRemoved ? { onChatRemoved: options.onChatRemoved } : {}),
+    ...(options.designApp ? { designApp: options.designApp } : {}),
   });
   const handlers = new Map<string, Handler>([
     ["chats:rename", rendererChats.rename as Handler],
@@ -381,6 +385,96 @@ const projectWorkspaces = {
   site: { folderPath: "/Users/person/site" },
   empty: {},
 };
+
+test("turning design mode on calls designModeEntered once with the sender's document owner; turning it on again or off does not", async (t) => {
+  const entered: Array<{ chatId: string; workspaceId: string; owner: unknown }> = [];
+  const f = await fixture(t, {
+    workspaces: projectWorkspaces,
+    designApp: { enabled: () => true, entered: (input) => entered.push(input) },
+  });
+  await f.chatStore.create({ id: "site-chat", title: "Landing hero", workspaceId: "site" });
+  await f.invoke("chats:setDesignMode", "site-chat", true);
+  assert.deepEqual(entered, [{ chatId: "site-chat", workspaceId: "site", owner }]);
+  await f.invoke("chats:setDesignMode", "site-chat", true);
+  await f.invoke("chats:setDesignMode", "site-chat", false);
+  assert.equal(entered.length, 1);
+});
+
+test("with the live flag off, or from a subframe, designModeEntered is never called, and the toggle still succeeds", async (t) => {
+  const entered: unknown[] = [];
+  const off = await fixture(t, {
+    workspaces: projectWorkspaces,
+    designApp: { enabled: () => false, entered: (input) => entered.push(input) },
+  });
+  await off.chatStore.create({ id: "site-chat", workspaceId: "site" });
+  assert.equal(((await off.invoke("chats:setDesignMode", "site-chat", true)) as { designMode?: true }).designMode, true);
+
+  const subframe = await fixture(t, {
+    workspaces: projectWorkspaces,
+    designApp: { enabled: () => true, entered: (input) => entered.push(input) },
+    rendererDocumentOwner: (_event, invalidRequest) => {
+      throw invalidRequest();
+    },
+  });
+  await subframe.chatStore.create({ id: "site-chat", workspaceId: "site" });
+  assert.equal(((await subframe.invoke("chats:setDesignMode", "site-chat", true)) as { designMode?: true }).designMode, true);
+  assert.deepEqual(subframe.broadcasts, [{ chatId: "site-chat", designMode: true }]);
+  assert.deepEqual(entered, []);
+});
+
+test("the Design toggle starts no app for a chat the designApp:* channels refuse, even when the chat service lets design mode on", async () => {
+  // The chat store refuses design mode for a Bot's or a feature-owned chat
+  // today; this pins that the toggle's own guard matches the channels' if a
+  // later service lets one through.
+  const chats: Record<string, { id: string; workspaceId: string; botId?: string; owner?: unknown; designMode?: true }> = {
+    "site-chat": { id: "site-chat", workspaceId: "site" },
+    "bot-chat": { id: "bot-chat", workspaceId: "site", botId: "bot-1" },
+    "owned-chat": { id: "owned-chat", workspaceId: "site", owner: { kind: "design-project", projectId: "project-1" } },
+  };
+  const ipc = new Map<string, Handler>();
+  const started: string[] = [];
+  registerDesignAppHandlers<IpcMainInvokeEvent>({
+    enabled: () => true,
+    handle: (channel, handler) => ipc.set(channel, handler as Handler),
+    owner: () => owner,
+    getChat: async (chatId) => chats[chatId] ?? null,
+    workspace: async (workspaceId) => ({ id: workspaceId, folderPath: "/Users/person/site", permission: "ask" }),
+    servers: {
+      start: async (input: { chatId: string }) => {
+        started.push(input.chatId);
+        return undefined;
+      },
+    } as unknown as DesignAppHandlerDeps<IpcMainInvokeEvent>["servers"],
+    consent: { answer: () => false },
+  });
+  const entered: string[] = [];
+  const toggle = createRendererChatMutationHandlers({
+    chatApplicationService: {
+      // A service that lets design mode on for any chat it finds.
+      setDesignMode: async (chatId: string, enabled: boolean, options: { assertCurrent?: (chat: object) => void }) => {
+        const chat = chats[chatId]!;
+        options.assertCurrent?.(chat);
+        if (enabled) chat.designMode = true;
+        return { ...chat };
+      },
+    },
+    designModeEnabled: () => true,
+    broadcastDesignModeChanged: () => undefined,
+    rendererDocumentOwner: () => owner,
+    designApp: { enabled: () => true, entered: (input: { chatId: string }) => entered.push(input.chatId) },
+  } as unknown as RendererChatMutationDeps).setDesignMode;
+
+  for (const chatId of Object.keys(chats)) {
+    const refused = await Promise.resolve(ipc.get("designApp:start")!(event, chatId)).then(
+      () => false,
+      (error: Error) => /can't run apps/u.test(error.message),
+    );
+    await toggle(event, chatId, true, "toggle");
+    assert.equal(entered.includes(chatId), !refused, `${chatId}: the toggle starts an app exactly when the channel would`);
+  }
+  assert.deepEqual(started, ["site-chat"]);
+  assert.deepEqual(entered, ["site-chat"]);
+});
 
 test("design mode turns on for a project chat, tells every window, and turns off again", async (t) => {
   const events = captureAnalyticsEvents(t);

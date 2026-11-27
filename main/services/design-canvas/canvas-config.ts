@@ -10,9 +10,11 @@
  * Every path in the file is workspace-relative and must pass
  * `isSafeWorkspaceRelativePath` before it's used or shown.
  */
+import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "../../shared/path-containment.js";
+import { writeConfinedWorkspaceText } from "../coding-tools.js";
 import { readBounded } from "./app-server/app-detect.js";
 import { designTarget, isSafeScriptName, type WebAppDetection } from "./app-server/app-server-core.js";
 
@@ -158,4 +160,55 @@ export async function readCanvasConfigText(workspaceRoot: string): Promise<Canva
 export async function readCanvasConfig(workspaceRoot: string): Promise<CanvasConfig | null> {
   const read = await readCanvasConfigText(workspaceRoot);
   return read.status === "ok" ? parseCanvasConfig(read.text) : null;
+}
+
+/**
+ * Saves a monorepo choice (2b's `choose`): `script` is merged into the raw
+ * entry whose `root` matches, or a `{ root, script }` entry is appended.
+ * Every other field, entry and unknown key is kept. A new file is
+ * `{ "version": 1, "apps": [...] }`. A file Aiden can't read safely (a link,
+ * too large, unreadable or not JSON) refuses; an unsupported `version` is
+ * left alone and answers `unknown-version`. The write goes through the
+ * confined writer with no link followed anywhere on the path, and only if
+ * the file still has the content it was read with.
+ */
+export async function saveCanvasConfigApp(
+  workspaceRoot: string,
+  choice: { root: string; script: string },
+  signal?: AbortSignal,
+  hooks: { beforeWrite?: () => Promise<void> } = {},
+): Promise<"saved" | "unknown-version"> {
+  if (!isSafeWorkspaceRelativePath(choice.root) || !isSafeScriptName(choice.script)) {
+    throw new Error("That app root or script can't be saved.");
+  }
+  const read = await readCanvasConfigText(workspaceRoot);
+  let raw: Record<string, unknown>;
+  let expectedSha256: string | null;
+  if (read.status === "missing") {
+    raw = { version: CANVAS_CONFIG_VERSION, apps: [] };
+    expectedSha256 = null;
+  } else if (read.status !== "ok") {
+    throw new Error(`${CANVAS_CONFIG_PATH} can't be read safely (${read.status}), so the choice wasn't saved.`);
+  } else {
+    const inspection = inspectCanvasConfig(read.text);
+    if (inspection.status === "unsupported-version") return "unknown-version";
+    if (inspection.status === "invalid") throw new Error(`${CANVAS_CONFIG_PATH} isn't valid JSON, so the choice wasn't saved.`);
+    raw = inspection.raw;
+    if (raw.apps !== undefined && !Array.isArray(raw.apps)) {
+      throw new Error(`${CANVAS_CONFIG_PATH} has an apps field that isn't a list, so the choice wasn't saved.`);
+    }
+    expectedSha256 = createHash("sha256").update(read.text, "utf8").digest("hex");
+  }
+  const apps = (Array.isArray(raw.apps) ? raw.apps : []) as unknown[];
+  const entry = apps.find((candidate): candidate is Record<string, unknown> => isRecord(candidate) && candidate.root === choice.root);
+  if (entry) entry.script = choice.script;
+  else apps.push({ root: choice.root, script: choice.script });
+  raw.apps = apps;
+  await hooks.beforeWrite?.();
+  await writeConfinedWorkspaceText(workspaceRoot, CANVAS_CONFIG_PATH, `${JSON.stringify(raw, null, 2)}\n`, {
+    expectedSha256,
+    followLinks: false,
+    ...(signal ? { signal } : {}),
+  });
+  return "saved";
 }

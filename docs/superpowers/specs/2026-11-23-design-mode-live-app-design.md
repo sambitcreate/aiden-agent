@@ -1,6 +1,6 @@
 # Design mode v2: the live app canvas
 
-Status: approved by the owner, 2026-11-23. Pre-build checks recorded in §11, and the PR split revised in §8. Phase 1a is in progress; its plan is [`2026-11-23-design-mode-v2-p1a-workspace-canvas.md`](../plans/2026-11-23-design-mode-v2-p1a-workspace-canvas.md). Phase 2a (app detection) is built from [`2026-11-24-design-mode-v2-p2a-app-detection.md`](../plans/2026-11-24-design-mode-v2-p2a-app-detection.md); its decisions are S19–S24. Phase DM (DESIGN.md) is built from [`2026-11-24-design-mode-v2-dm-design-md.md`](../plans/2026-11-24-design-mode-v2-dm-design-md.md) behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE`; its decisions are S33–S44. Builds on [Design mode v1](2026-10-31-design-mode-design.md) (P0–P5 shipped, on by default). Project memory: `.memory/design-mode.md`.
+Status: approved by the owner, 2026-11-23. Pre-build checks recorded in §11, and the PR split revised in §8. Phase 1a is in progress; its plan is [`2026-11-23-design-mode-v2-p1a-workspace-canvas.md`](../plans/2026-11-23-design-mode-v2-p1a-workspace-canvas.md). Phase 2a (app detection) is built from [`2026-11-24-design-mode-v2-p2a-app-detection.md`](../plans/2026-11-24-design-mode-v2-p2a-app-detection.md); its decisions are S19–S24. Phase DM (DESIGN.md) is built from [`2026-11-24-design-mode-v2-dm-design-md.md`](../plans/2026-11-24-design-mode-v2-dm-design-md.md) behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE`; its decisions are S33–S44. Phase 2b (the dev server process) is built from [`2026-11-24-design-mode-v2-p2b-dev-server.md`](../plans/2026-11-24-design-mode-v2-p2b-dev-server.md) behind the same flag; its decisions are S25–S32. Builds on [Design mode v1](2026-10-31-design-mode-design.md) (P0–P5 shipped, on by default). Project memory: `.memory/design-mode.md`.
 
 ## 1. Intent
 
@@ -632,9 +632,51 @@ Phase 2a (app detection, plan `docs/superpowers/plans/2026-11-24-design-mode-v2-
 - **S23. `detectWebApp` lives in `app-detect.ts`.** §6.2.1 put it in `app-server-core.ts`. It reads the disk with bounded, no-follow reads; `app-server-core.ts` stays pure.
 - **S24. Device PATH fix.** The device helpers (`deviceNodeEnvironment`, `androidSdkEnv`, `createNpmRunner`, the generated agent-device launcher, and host commands run before Node is resolved) no longer put an empty entry on PATH. Node and package-manager lookup moved to `main/services/node-toolchain.ts`, shared by devices and design mode; the device exports are unchanged.
 
+### Phase 2b amendments (2026-11-24)
+
+Phase 2b (the dev server process, plan `docs/superpowers/plans/2026-11-24-design-mode-v2-p2b-dev-server.md`) built §6.2's server half behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE`. These win over §6.2, §11 and S1–S24 where they disagree.
+
+- **S25. Design jobs (2b).** Background jobs gain a design owner with its own cap of 8 running jobs and its own read, stop and socket methods. A design job's log rotates at 25 MB and keeps 50 MB; reads take byte offsets. `scanPorts` and finished-job eviction never notify a chat. The shared job types and Remote are unchanged. Stopping a design job also signals descendants that left its process group (`setsid`), found by parent pid before any signal.
+- **S26. Consent detail (2b).** The fingerprint covers:
+  - both roots' install lifecycle scripts;
+  - the raw `packageManager` and `devEngines` values;
+  - rc and workspace files from the app root to the lockfile folder, and the `yarnPath` target;
+  - the lockfile and framework configs (the spec's five, plus Nuxt, Angular and Gatsby).
+
+  The other rules:
+  - unreadable or linked files, and scripts over 4 000 characters, refuse;
+  - the record keeps `installShown`;
+  - detection, toolchain and fingerprint run again before every spawn, and the command is rebuilt from that result;
+  - display escapes cover control, format, line and paragraph separators, Hangul fillers and variation selectors;
+  - `start`, `restart` and `choose` need a live desktop window owner; a Remote or windowless owner gets `desktop-only` or `consent-unavailable`.
+- **S27. Install rule (2b; narrows S8).** An install runs for a missing `node_modules`, an unfinished or stale Aiden install, or on request. It doesn't run over an install the person made, and never when the lockfile is outside the workspace (`install-outside-workspace`).
+- **S28. Launch environment (2b; extends S19 and S22).**
+  - Flags are added only when the script runs the framework CLI, never as a second host or port flag; Vite-based CLIs get `--strictPort`, and classic `remix dev` gets env only.
+  - The scrub removes `NODE_ENV`, `ELECTRON_*`, `AIDEN_*`, `npm_*`, `npm_config_*`, `INIT_CWD` and the provider keys pi-ai knows (`findEnvKeys` over `getProviders()`).
+  - Framework telemetry is off unless the person set it.
+  - Remix 3's default starter ignores `HOST` and `PORT` and is refused as `exposed` (S22 note).
+- **S29. Origin and exposure (2b; amends §6.2.3 line 186).**
+  - The origin is `http://127.0.0.1:<port>`.
+  - Readiness needs an IPv4 loopback port the job's process tree holds; output resets the quiet timer at the next poll, with a 10-minute cap.
+  - Every socket of the tree must be loopback, checked by one shared poller (one `ps` and one `lsof` per tick for all jobs) every 500 ms while starting and every 2 s while running, with a reader that fails closed and a 4 096-fd cap per process; three failed reads stop the server.
+  - `appForOrigin` matches held addresses only, and `isAppOrigin` keeps every served origin restricted for the session.
+- **S30. Presence and workspace changes (2b; refines S6).**
+  - Presence is a visible canvas (pane shown and document visible); 60 s after none is visible, the server stops.
+  - Each attempt holds a workspace admission. A folder-path change or `none` stops a running server.
+  - `no-access` only when access is really gone, otherwise `interrupted`.
+  - The existing gate covers workspace changes, so there's no separate pause.
+- **S31. Tool and choice (2b).**
+  - No automatic restart.
+  - At most 4 starts, restarts or chooses per turn; the tool waits for the card, then up to 90 s for the attempt, and an aborted turn stops the wait, not the server.
+  - `design_app` skips the per-call approval card (`REVIEWED_CARDLESS_TOOLS`); hooks and Settings → Approvals rules still block or ask, and it is never judged.
+  - `choose` accepts only `web` candidates, and saves `script` into `.aiden/canvas.json` through the confined writer, which refuses any link on the path and an unknown `version`, and writes new files with `version: 1`.
+  - Configured roots come from DM's `configuredRoots`.
+  - A moved chat starts nothing.
+- **S32. Phase split (2b, 2c).** 2b owns the `design_app` tool, the `designApp:*` IPC (all through `rendererDocumentOwner`), the `designApp:status` broadcast, the `launch | attach` consent union and the attach problems. 2c adds only UI and attaching.
+
 ### Phase DM amendments (2026-11-24)
 
-Phase DM (DESIGN.md, plan `docs/superpowers/plans/2026-11-24-design-mode-v2-dm-design-md.md`) built §6.9's reading, checking, agent surface and draft offer, behind the live flag. These win over §6.9 and §11 where they disagree. 2b's S25–S32 go between the Phase 2a block and this one when 2b lands.
+Phase DM (DESIGN.md, plan `docs/superpowers/plans/2026-11-24-design-mode-v2-dm-design-md.md`) built §6.9's reading, checking, agent surface and draft offer, behind the live flag. These win over §6.9 and §11 where they disagree. 2b's S25–S32 sit between the Phase 2a block and this one.
 
 - **S33. Flag.** DM ships behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE` with 2b–5 (S6), and creates `designLiveEnabled` with 2b's definition. With the flag on, the DESIGN.md offer replaces v1's tokens offer; with it off, nothing changes and no lint worker starts.
 - **S34. No volatile prompt line.** §6.9's "volatile line" became the `design-canvas-status` note on 2026-11-18. The DESIGN.md path and counts are one sentence of that note, so a turn with the same counts adds nothing. The prompt section gains one static bullet when the flag is on; flipping the flag changes it once per chat.

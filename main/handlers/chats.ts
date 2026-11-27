@@ -41,7 +41,8 @@ import {
   parseChatCreate,
 } from "./chat-create-params.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
-import { designModeEnabled } from "../services/studio/feature-flags.js";
+import { designLiveEnabled, designModeEnabled } from "../services/studio/feature-flags.js";
+import { designAppServers } from "../services/design-canvas/main.js";
 import {
   parseChatContextPressureRequest,
   parseChatCopyRequest,
@@ -102,6 +103,7 @@ export function registerChatHistoryHandlers(): void {
     skillRegistry,
     designModeEnabled: () => designModeEnabled(),
     broadcastDesignModeChanged: (change) => ipcMain.broadcast("chats:design-mode-changed", change),
+    designApp: { enabled: () => designLiveEnabled(), entered: (input) => designAppServers.designModeEntered(input) },
     assertChatAccess: assertQuickChatConversationAccess,
     onChatRemoved: (event, chatId) => {
       if (isCurrentQuickChatEvent(event)) revokeQuickChatConversation(chatId);

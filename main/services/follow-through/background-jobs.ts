@@ -22,11 +22,24 @@ import {
 import { processGroupStillRuns } from "../../shared/process-group.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
 import { CheckInterruptedError } from "./done-when.js";
-import { defaultListeningPortsByProcess } from "./listening-ports.js";
+import {
+  defaultListeningPortsByProcess,
+  defaultSocketReaderDeps,
+  jobProcessTree,
+  processTable,
+  readJobSockets,
+  type JobSockets,
+} from "./listening-ports.js";
 
 export const MAX_RUNNING_JOBS_PER_CHAT = 10;
 export const MAX_RUNNING_JOBS = 20;
+/** Design-mode dev servers running at once, across all workspaces; apart from the chat caps. */
+export const MAX_RUNNING_DESIGN_JOBS = 8;
+/** Finished design jobs kept, apart from chats' finished jobs. */
+export const MAX_FINISHED_DESIGN_JOBS = 8;
 export const MAX_JOB_LOG_BYTES = 50 * 1024 * 1024;
+/** A design job's log file rotates past this; one older file is kept, so at most twice this is on disk. */
+export const DESIGN_JOB_LOG_ROTATE_BYTES = 25 * 1024 * 1024;
 /** Characters kept in memory per job; reads return at most this much. */
 export const JOB_TAIL_CHARS = 20_000;
 export const JOB_STOP_GRACE_MS = 4_000;
@@ -70,14 +83,54 @@ export interface BackgroundJobEnded {
   tail: string;
 }
 
+/** Who a job belongs to: a chat, or design mode's dev server for one app root of a workspace. */
+export type JobOwner = { kind: "chat"; chatId: string } | { kind: "design"; workspaceId: string; appRoot: string };
+
+/** A design job as design mode sees it: no chat, the app root it serves, and where its kept log starts. */
+export type DesignJobView = Omit<BackgroundJobView, "chatId" | "stopWhenChatSettles" | "origin"> & {
+  owner: "design";
+  appRoot: string;
+  /** The first byte of the job's whole output still kept in its log files. */
+  oldestKeptByte: number;
+};
+
+export interface StartDesignJobInput {
+  workspaceId: string;
+  /** POSIX, relative to the workspace root. */
+  appRoot: string;
+  cwd: string;
+  /** Spawned as is, never through a shell. */
+  argv: { file: string; args: readonly string[] };
+  /** What the job shows as its command, e.g. "pnpm run dev". */
+  display: string;
+  description: string;
+  env: NodeJS.ProcessEnv;
+}
+
+export interface DesignLogRead {
+  text: string;
+  /** The byte offset the text starts at. */
+  from: number;
+  /** The cursor for the next read. */
+  next: number;
+  /** The job's output so far, in bytes: the cursor at the end. */
+  end: number;
+  /** The cursor was before the oldest kept byte, so the read started there. */
+  truncated: boolean;
+}
+
 export interface BackgroundJobsOptions {
   /** Session log directory; created on first start. */
   logDir: string;
   now?: () => number;
   /** A job ended by itself (exit) or hit the output limit; never for a stop someone asked for. */
   onEnded?: (ended: BackgroundJobEnded) => void;
-  /** Any change to any job, for list views. */
+  /** Any change to any chat job, for list views. Never called for design jobs. */
   onChange?: (chatId: string) => void;
+  /** Any change to a design job: start, ports, end, or being forgotten. */
+  onDesignChange?: (view: DesignJobView) => void;
+  maxRunningDesign?: number;
+  designLogRotateBytes?: number;
   stopGraceMs?: number;
   maxLogBytes?: number;
   maxRunningPerChat?: number;
@@ -96,6 +149,15 @@ export interface BackgroundJobsOptions {
   processHasEnvironment?: (pid: number, entry: string) => Promise<boolean>;
   /** The TCP ports each of the given processes listens on; null turns port lookups off. */
   listeningPorts?: ((pids: readonly number[]) => Promise<Map<number, number[]>>) | null;
+  /** Each job's listening sockets with addresses, from one look for all of them; fails closed (design jobs). */
+  jobSockets?: (groups: ReadonlyMap<string, number>) => Promise<Map<string, JobSockets>>;
+  /** A design job's processes that left its group (a `setsid` child), found by parent pid. */
+  designStrays?: (pgid: number) => Promise<number[]>;
+  /**
+   * Every live process of this user started with this `NAME=value` in its
+   * environment, wherever its group or parent is now; rejects when it could not look.
+   */
+  markedProcesses?: (entry: string) => Promise<number[]>;
   portScanMs?: number;
   adoptedPollMs?: number;
   adoptSettleMs?: number;
@@ -127,8 +189,19 @@ export interface StartBackgroundJobInput {
   stopWhenChatSettles?: boolean;
 }
 
+interface DesignLogState {
+  appRoot: string;
+  /** Byte offset of the current log file's first byte. */
+  currentStart: number;
+  /** Byte offset of the rotated file's first byte, while one is kept. */
+  rotatedStart?: number;
+  rotatedPath: string;
+}
+
 interface JobRecord {
   view: BackgroundJobView;
+  owner: JobOwner;
+  design?: DesignLogState;
   cwd: string;
   child?: ChildProcess;
   log?: fs.WriteStream;
@@ -152,12 +225,14 @@ interface JobRecord {
   adoptedOutput?: { stdout: Readable; stderr: Readable };
   settleExited?: () => void;
   nextPortScanAt?: number;
+  /** A design job's stop: its descendants outside the group are found first, then everything is signalled. */
+  designStop?: Promise<void>;
 }
 
 /** Durable note of running jobs, so a launch after a crash can stop what was left. */
 interface RunningRecordFile {
   version: 1;
-  jobs: Array<{ id: string; pid: number; processStart?: string; check?: { workspaceId: string; chatId: string } }>;
+  jobs: Array<{ id: string; pid: number; processStart?: string; check?: { workspaceId: string; chatId: string }; design?: true }>;
 }
 
 const RECORD_FILE = "running.json";
@@ -230,6 +305,39 @@ export function defaultProcessHasEnvironment(pid: number, entry: string): Promis
   });
 }
 
+/**
+ * Every live process of this user whose starting environment holds `entry`.
+ * Linux reads each `/proc/<pid>/environ` (another user's is unreadable and
+ * skipped). macOS's `ps -E` prints a process's starting environment after its
+ * command for this user's processes, though not for Apple's own platform
+ * binaries, so a marked `sh` or `sleep` there is not found.
+ */
+export async function defaultMarkedProcesses(entry: string): Promise<number[]> {
+  const found: number[] = [];
+  if (process.platform === "linux") {
+    for (const name of await fsp.readdir("/proc")) {
+      const pid = Number(name);
+      if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) continue;
+      const environment = await fsp.readFile(`/proc/${pid}/environ`, "utf8").catch(() => "");
+      if (environment.split("\0").includes(entry)) found.push(pid);
+    }
+    return found;
+  }
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile("ps", ["-E", "-A", "-ww", "-o", "pid=,command="], { timeout: 5_000, maxBuffer: 32 * 1024 * 1024 }, (error, out) => {
+      if (error || typeof out !== "string") reject(error ?? new Error("ps printed nothing."));
+      else resolve(out);
+    });
+  });
+  for (const line of stdout.split("\n")) {
+    const match = /^\s*(\d+)\s+(.*)$/u.exec(line);
+    const pid = Number(match?.[1]);
+    if (!match || pid <= 1 || pid === process.pid) continue;
+    if (match[2]!.split(/\s+/u).includes(entry)) found.push(pid);
+  }
+  return found;
+}
+
 /** A chat, or Aiden, already runs as many background jobs as it may. */
 export class BackgroundJobLimitError extends Error {
   constructor(message: string) {
@@ -266,6 +374,22 @@ function groupExists(pid: number): boolean {
   }
 }
 
+function signalPid(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // Already gone.
+  }
+}
+
+/** Descendants of a group leader that are in another process group. */
+async function defaultDesignStrays(pgid: number): Promise<number[]> {
+  const table = await processTable(defaultSocketReaderDeps());
+  if (!table.ok) return [];
+  const groupOf = new Map(table.rows.map((row) => [row.pid, row.pgid]));
+  return jobProcessTree(table.rows, pgid).filter((pid) => pid > 1 && pid !== process.pid && groupOf.get(pid) !== pgid);
+}
+
 function signalGroup(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pid, signal);
@@ -278,6 +402,31 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
+function ownedBy(job: JobRecord, chatId: string): boolean {
+  return job.owner.kind === "chat" && job.owner.chatId === chatId;
+}
+
+function isDesign(job: JobRecord): boolean {
+  return job.owner.kind === "design";
+}
+
+function designView(job: JobRecord): DesignJobView {
+  const { chatId: _chatId, stopWhenChatSettles: _settles, origin: _origin, ...rest } = job.view;
+  return {
+    ...rest,
+    ...(rest.ports ? { ports: [...rest.ports] } : {}),
+    owner: "design",
+    appRoot: job.design!.appRoot,
+    oldestKeptByte: job.design!.rotatedStart ?? job.design!.currentStart,
+  };
+}
+
+/** Opened synchronously, so the file exists at once and a rotation can rename it at any time. */
+function openLogStream(logPath: string): fs.WriteStream {
+  const fd = fs.openSync(logPath, "w", 0o600);
+  return fs.createWriteStream("", { fd });
+}
+
 export class BackgroundJobs {
   private readonly jobs = new Map<string, JobRecord>();
   private readonly now: () => number;
@@ -285,6 +434,8 @@ export class BackgroundJobs {
   private readonly maxLogBytes: number;
   private readonly maxRunningPerChat: number;
   private readonly maxRunning: number;
+  private readonly maxRunningDesign: number;
+  private readonly designLogRotateBytes: number;
   private readonly maxFinished: number;
   private readonly processStartTime: (pid: number) => Promise<string | undefined>;
   private readonly processGroups: () => Promise<Map<number, number[]>>;
@@ -308,6 +459,8 @@ export class BackgroundJobs {
     this.maxLogBytes = options.maxLogBytes ?? MAX_JOB_LOG_BYTES;
     this.maxRunningPerChat = options.maxRunningPerChat ?? MAX_RUNNING_JOBS_PER_CHAT;
     this.maxRunning = options.maxRunning ?? MAX_RUNNING_JOBS;
+    this.maxRunningDesign = options.maxRunningDesign ?? MAX_RUNNING_DESIGN_JOBS;
+    this.designLogRotateBytes = options.designLogRotateBytes ?? DESIGN_JOB_LOG_ROTATE_BYTES;
     this.maxFinished = options.maxFinished ?? MAX_FINISHED_JOBS;
     this.processStartTime = options.processStartTime ?? defaultProcessStartTime;
     this.processGroups = options.processGroups ?? defaultProcessGroups;
@@ -349,6 +502,7 @@ export class BackgroundJobs {
     });
     const record: JobRecord = {
       view,
+      owner: { kind: "chat", chatId: input.chatId },
       cwd: input.cwd,
       log,
       logClosed,
@@ -370,6 +524,78 @@ export class BackgroundJobs {
       log.end();
       throw error instanceof Error ? error : new Error(String(error));
     }
+    this.track(record, child, resolveExited);
+    this.options.onChange?.(input.chatId);
+    this.schedulePortScans();
+    return { ...view };
+  }
+
+  /**
+   * Design mode's dev server (or its install) for one app root: the argv runs
+   * as is, with no shell, in its own process group. No chat owns it, so it
+   * never wakes or lists in a chat; `onDesignChange` hears about it instead.
+   * Its log rotates rather than stopping the job.
+   */
+  startDesign(input: StartDesignJobInput): DesignJobView {
+    if (this.closed) throw new Error("Aiden is closing; background jobs cannot start now.");
+    if (process.platform === "win32") throw new Error("Background jobs run on macOS and Linux.");
+    const display = oneLine(input.display, MAX_JOB_COMMAND_CHARS);
+    if (!input.argv.file || !display) throw new Error("Give the command to run.");
+    this.assertRoomForDesign();
+    fs.mkdirSync(this.options.logDir, { recursive: true, mode: 0o700 });
+    const id = newBackgroundJobId();
+    const logPath = path.join(this.options.logDir, `${id}.log`);
+    const { log, logClosed } = this.openLog(logPath);
+    const description = oneLine(input.description, MAX_JOB_DESCRIPTION_CHARS);
+    const view: BackgroundJobView = {
+      id,
+      chatId: "",
+      workspaceId: input.workspaceId,
+      command: display,
+      ...(description ? { description } : {}),
+      state: "running",
+      startedAt: this.now(),
+      outputBytes: 0,
+    };
+    let resolveExited!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      resolveExited = resolve;
+    });
+    const record: JobRecord = {
+      view,
+      owner: { kind: "design", workspaceId: input.workspaceId, appRoot: input.appRoot },
+      design: { appRoot: input.appRoot, currentStart: 0, rotatedPath: path.join(this.options.logDir, `${id}.1.log`) },
+      cwd: input.cwd,
+      log,
+      logClosed,
+      logPath,
+      tail: "",
+      decoder: new StringDecoder("utf8"),
+      exited,
+    };
+    let child: ChildProcess;
+    try {
+      child = spawn(input.argv.file, [...input.argv.args], {
+        cwd: input.cwd,
+        detached: true,
+        env: { ...input.env, [BACKGROUND_JOB_MARKER]: id },
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      log.end();
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    this.track(record, child, resolveExited);
+    this.options.onDesignChange?.(designView(record));
+    this.schedulePortScans();
+    return designView(record);
+  }
+
+  /** Wires a spawned child to its record: output, end, start time and the running record. */
+  private track(record: JobRecord, child: ChildProcess, resolveExited: () => void): void {
+    const view = record.view;
+    const id = view.id;
     record.child = child;
     if (child.pid) view.pid = child.pid;
     this.jobs.set(id, record);
@@ -381,7 +607,11 @@ export class BackgroundJobs {
       this.finish(record, null, null);
       resolveExited();
     });
-    child.once("exit", () => this.endLeftovers(record));
+    child.once("exit", () => {
+      this.endLeftovers(record);
+      // A design job's setsid children outlive its group when it crashes: end them by marker.
+      if (isDesign(record)) void this.sweepMarked(id).catch((error: unknown) => this.options.log?.("A design job's leftovers could not be ended.", error));
+    });
     child.once("close", (code, signal) => {
       this.finish(record, code, signal);
       resolveExited();
@@ -396,14 +626,11 @@ export class BackgroundJobs {
       });
     }
     this.writeRecord();
-    this.options.onChange?.(input.chatId);
-    this.schedulePortScans();
-    return { ...view };
   }
 
   private assertRoomFor(chatId: string): void {
-    const running = [...this.jobs.values()].filter((job) => job.view.state === "running");
-    if (running.filter((job) => job.view.chatId === chatId).length >= this.maxRunningPerChat) {
+    const running = [...this.jobs.values()].filter((job) => job.view.state === "running" && !isDesign(job));
+    if (running.filter((job) => ownedBy(job, chatId)).length >= this.maxRunningPerChat) {
       throw new BackgroundJobLimitError(
         `This chat already has ${this.maxRunningPerChat} background jobs running. Stop one before starting another.`,
       );
@@ -411,6 +638,15 @@ export class BackgroundJobs {
     if (running.length >= this.maxRunning) {
       throw new BackgroundJobLimitError(
         `Aiden already has ${this.maxRunning} background jobs running. Stop one before starting another.`,
+      );
+    }
+  }
+
+  private assertRoomForDesign(): void {
+    const running = [...this.jobs.values()].filter((job) => job.view.state === "running" && isDesign(job)).length;
+    if (running >= this.maxRunningDesign) {
+      throw new BackgroundJobLimitError(
+        `Design mode already runs ${this.maxRunningDesign} apps. Stop one before starting another.`,
       );
     }
   }
@@ -456,6 +692,7 @@ export class BackgroundJobs {
     const logPath = path.join(this.options.logDir, `${input.id}.log`);
     const record: JobRecord = {
       view,
+      owner: { kind: "chat", chatId: input.chatId },
       cwd: input.cwd,
       logPath,
       tail: input.output ? ADOPTED_JOB_OUTPUT_NOTE : ADOPTED_JOB_NOTE,
@@ -507,7 +744,7 @@ export class BackgroundJobs {
 
   list(chatId: string): BackgroundJobView[] {
     return [...this.jobs.values()]
-      .filter((job) => job.view.chatId === chatId)
+      .filter((job) => ownedBy(job, chatId))
       .map((job) => ({ ...job.view }))
       .sort((left, right) => right.startedAt - left.startedAt);
   }
@@ -519,13 +756,13 @@ export class BackgroundJobs {
 
   get(chatId: string, jobId: string): BackgroundJobView | undefined {
     const job = this.jobs.get(jobId);
-    return job && job.view.chatId === chatId ? { ...job.view } : undefined;
+    return job && ownedBy(job, chatId) ? { ...job.view } : undefined;
   }
 
   /** The newest output, at most `maxChars` (default all of the kept tail). */
   read(chatId: string, jobId: string, maxChars = JOB_TAIL_CHARS): { job: BackgroundJobView; output: string; truncated: boolean } {
     const job = this.jobs.get(jobId);
-    if (!job || job.view.chatId !== chatId) throw new Error(`There is no background job "${jobId}" in this chat.`);
+    if (!job || !ownedBy(job, chatId)) throw new Error(`There is no background job "${jobId}" in this chat.`);
     const limit = Math.max(1, Math.min(JOB_TAIL_CHARS, Math.floor(maxChars)));
     const { text, truncated } = tailText(job.tail, limit);
     return { job: { ...job.view }, output: text, truncated: truncated || job.view.outputBytes > Buffer.byteLength(job.tail) };
@@ -537,7 +774,7 @@ export class BackgroundJobs {
    */
   async settle(chatId: string, jobId: string, ms: number): Promise<BackgroundJobView> {
     const job = this.jobs.get(jobId);
-    if (!job || job.view.chatId !== chatId) throw new Error(`There is no background job "${jobId}" in this chat.`);
+    if (!job || !ownedBy(job, chatId)) throw new Error(`There is no background job "${jobId}" in this chat.`);
     if (job.view.state !== "running") return { ...job.view };
     job.watched = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -552,20 +789,106 @@ export class BackgroundJobs {
 
   runningCount(chatId?: string): number {
     return [...this.jobs.values()].filter(
-      (job) => job.view.state === "running" && (chatId === undefined || job.view.chatId === chatId),
+      (job) => job.view.state === "running" && !isDesign(job) && (chatId === undefined || ownedBy(job, chatId)),
     ).length;
   }
 
   /** Stop one job: polite first, forced after the grace period. Resolves once it has ended. */
   async stop(chatId: string, jobId: string, reason: BackgroundJobEndReason): Promise<BackgroundJobView> {
     const job = this.jobs.get(jobId);
-    if (!job || job.view.chatId !== chatId) throw new Error(`There is no background job "${jobId}" in this chat.`);
+    if (!job || !ownedBy(job, chatId)) throw new Error(`There is no background job "${jobId}" in this chat.`);
     await this.stopRecord(job, reason);
     return { ...job.view };
   }
 
+  getDesign(jobId: string): DesignJobView | undefined {
+    const job = this.jobs.get(jobId);
+    return job && isDesign(job) ? designView(job) : undefined;
+  }
+
+  /** A design job's newest output kept in memory (at most `JOB_TAIL_CHARS`), for its printed URL and crash tail; "" for any other id. */
+  designTail(jobId: string): string {
+    const job = this.jobs.get(jobId);
+    return job && isDesign(job) ? job.tail : "";
+  }
+
+  /** A workspace's design jobs, newest first. */
+  listDesign(workspaceId: string): DesignJobView[] {
+    return [...this.jobs.values()]
+      .filter((job) => isDesign(job) && job.view.workspaceId === workspaceId)
+      .map(designView)
+      .sort((left, right) => right.startedAt - left.startedAt);
+  }
+
+  /**
+   * Every listening TCP socket, with its address, of each design job's process
+   * group and descendants: one `ps` and one socket read for all of them. A job
+   * that isn't a running design job, or whose read failed, comes back failed,
+   * never as an empty list.
+   */
+  async designSockets(jobIds: readonly string[]): Promise<Map<string, JobSockets>> {
+    const results = new Map<string, JobSockets>();
+    const groups = new Map<string, number>();
+    for (const jobId of jobIds) {
+      const job = this.jobs.get(jobId);
+      const pid = job?.child?.pid;
+      if (!job || !isDesign(job) || job.view.state !== "running" || !pid) results.set(jobId, { ok: false, reason: "not running" });
+      else groups.set(jobId, pid);
+    }
+    if (groups.size) {
+      const read = await (this.options.jobSockets ?? readJobSockets)(groups);
+      for (const jobId of groups.keys()) results.set(jobId, read.get(jobId) ?? { ok: false, reason: "not read" });
+    }
+    return results;
+  }
+
+  /** Stop a design job: polite first, forced after the grace period. Resolves once it has ended. Idempotent. */
+  async stopDesign(jobId: string, reason: BackgroundJobEndReason = "person"): Promise<DesignJobView> {
+    const job = this.jobs.get(jobId);
+    if (!job || !isDesign(job)) throw new Error(`There is no design job "${jobId}".`);
+    await this.stopRecord(job, reason);
+    return designView(job);
+  }
+
+  /**
+   * Bytes of a design job's whole output from `after`, read from its log
+   * files: at most `maxBytes`. A cursor before the oldest kept byte starts
+   * there (`truncated`); one past the end reads nothing. The text is decoded
+   * leniently, so a character cut at either edge reads as U+FFFD.
+   */
+  async readDesignLog(jobId: string, options: { after: number; maxBytes: number }): Promise<DesignLogRead> {
+    const job = this.jobs.get(jobId);
+    if (!job || !isDesign(job)) throw new Error(`There is no design job "${jobId}".`);
+    const state = job.design!;
+    const end = job.view.outputBytes;
+    const oldest = state.rotatedStart ?? state.currentStart;
+    const requested = Math.max(0, Math.floor(Number.isFinite(options.after) ? options.after : 0));
+    const truncated = requested < oldest;
+    const from = Math.min(Math.max(requested, oldest), end);
+    const maxBytes = Math.max(0, Math.floor(options.maxBytes));
+    if (from >= end || maxBytes === 0) return { text: "", from, next: from, end, truncated };
+    const segments = [
+      ...(state.rotatedStart !== undefined ? [{ file: state.rotatedPath, start: state.rotatedStart, end: state.currentStart }] : []),
+      { file: job.logPath, start: state.currentStart, end },
+    ];
+    const chunks: Buffer[] = [];
+    let at = from;
+    let left = Math.min(maxBytes, end - from);
+    for (const segment of segments) {
+      if (left <= 0 || at >= segment.end || at < segment.start) continue;
+      const want = Math.min(left, segment.end - at);
+      const got = await readAt(segment.file, at - segment.start, want);
+      chunks.push(got);
+      at += got.length;
+      left -= got.length;
+      // A short read (output not flushed yet, or a file rotated away) ends here, so nothing is skipped.
+      if (got.length < want) break;
+    }
+    return { text: Buffer.concat(chunks).toString("utf8"), from, next: at, end, truncated };
+  }
+
   private openLog(logPath: string): { log: fs.WriteStream; logClosed: Promise<void> } {
-    const log = fs.createWriteStream(logPath, { flags: "w", mode: 0o600 });
+    const log = openLogStream(logPath);
     log.on("error", (error) => this.options.log?.("A background job log could not be written.", error));
     const logClosed = new Promise<void>((resolve) => log.once("close", () => resolve()));
     return { log, logClosed };
@@ -577,10 +900,11 @@ export class BackgroundJobs {
     job.log = undefined;
     await job.logClosed;
     await fsp.rm(job.logPath, { force: true }).catch(() => undefined);
+    if (job.design) await fsp.rm(job.design.rotatedPath, { force: true }).catch(() => undefined);
   }
 
   async stopChat(chatId: string, reason: BackgroundJobEndReason, forget = false): Promise<void> {
-    const jobs = [...this.jobs.values()].filter((job) => job.view.chatId === chatId);
+    const jobs = [...this.jobs.values()].filter((job) => ownedBy(job, chatId));
     await Promise.all(jobs.map((job) => this.stopRecord(job, reason)));
     if (forget) {
       for (const job of jobs) {
@@ -597,7 +921,7 @@ export class BackgroundJobs {
   /** Whether the chat has a running job that asked to stop once the chat settles. */
   hasSettleStoppable(chatId: string): boolean {
     return [...this.jobs.values()].some(
-      (job) => job.view.chatId === chatId && job.view.state === "running" && job.view.stopWhenChatSettles === true,
+      (job) => ownedBy(job, chatId) && job.view.state === "running" && job.view.stopWhenChatSettles === true,
     );
   }
 
@@ -607,7 +931,7 @@ export class BackgroundJobs {
    */
   async stopSettled(chatId: string): Promise<BackgroundJobView[]> {
     const jobs = [...this.jobs.values()].filter(
-      (job) => job.view.chatId === chatId && job.view.state === "running" && job.view.stopWhenChatSettles === true,
+      (job) => ownedBy(job, chatId) && job.view.state === "running" && job.view.stopWhenChatSettles === true,
     );
     await Promise.all(jobs.map((job) => this.stopRecord(job, "chat-settled")));
     return jobs.map((job) => ({ ...job.view }));
@@ -687,7 +1011,7 @@ export class BackgroundJobs {
     }
     try {
       for (const name of await fsp.readdir(this.options.logDir)) {
-        if (/^job_[0-9a-f]{8}\.log$/u.test(name) || (name === RECORD_FILE && !survivors.length)) {
+        if (/^job_[0-9a-f]{8}(?:\.1)?\.log$/u.test(name) || (name === RECORD_FILE && !survivors.length)) {
           await fsp.rm(path.join(this.options.logDir, name), { force: true });
         }
       }
@@ -698,7 +1022,26 @@ export class BackgroundJobs {
       this.writeRecord();
       await this.recordWrite;
     }
+    // A design job's setsid children left its group, so ending the group missed them: find them by marker.
+    for (const entry of parsed?.jobs ?? []) {
+      if (entry?.design === true && typeof entry.id === "string" && /^job_[0-9a-f]{8}$/u.test(entry.id)) await this.sweepMarked(entry.id);
+    }
     return stopped;
+  }
+
+  /**
+   * Ends every process still carrying a job's marker, wherever it is now:
+   * politely, then forced. A look that fails ends nothing.
+   */
+  private async sweepMarked(jobId: string): Promise<void> {
+    const find = this.options.markedProcesses ?? defaultMarkedProcesses;
+    const entry = `${BACKGROUND_JOB_MARKER}=${jobId}`;
+    const asked = await find(entry).catch((): number[] => []);
+    if (!asked.length) return;
+    signalEach(asked, "SIGTERM");
+    await this.waitUntil(() => asked.every((pid) => !processExists(pid)));
+    const left = await find(entry).catch(() => asked.filter((pid) => processExists(pid)));
+    signalEach(left, "SIGKILL");
   }
 
   /**
@@ -761,6 +1104,11 @@ export class BackgroundJobs {
   private stopRecord(job: JobRecord, reason: BackgroundJobEndReason): Promise<void> {
     if (job.view.state !== "running") return job.exited;
     job.stopRequested ??= reason;
+    const designPid = job.child?.pid;
+    if (isDesign(job) && designPid) {
+      job.designStop ??= this.stopDesignProcesses(job, designPid);
+      return job.designStop.then(() => job.exited);
+    }
     if (job.adoptedGroup !== undefined) {
       const stopping = (job.adoptedStop ??= this.stopAdopted(job, job.adoptedGroup));
       // A stop that could not confirm the end leaves the job running.
@@ -782,6 +1130,28 @@ export class BackgroundJobs {
       job.forceTimer.unref?.();
     }
     return job.exited;
+  }
+
+  /**
+   * A design job's processes are its group plus every descendant by parent
+   * pid (D9), so a `setsid` child, such as a wildcard listener, ends with it.
+   * The descendants are found before anything is signalled, while their
+   * parents still link them to the job.
+   */
+  private async stopDesignProcesses(job: JobRecord, pid: number): Promise<void> {
+    const strays = await (this.options.designStrays ?? defaultDesignStrays)(pid).catch((): number[] => []);
+    signalGroup(pid, "SIGTERM");
+    for (const stray of strays) signalPid(stray, "SIGTERM");
+    job.forceTimer = setTimeout(() => {
+      if (groupExists(pid)) signalGroup(pid, "SIGKILL");
+      for (const stray of strays) signalPid(stray, "SIGKILL");
+      const release = setTimeout(() => {
+        job.child?.stdout?.destroy();
+        job.child?.stderr?.destroy();
+      }, 1_000);
+      release.unref?.();
+    }, this.stopGraceMs);
+    job.forceTimer.unref?.();
   }
 
   /**
@@ -818,9 +1188,9 @@ export class BackgroundJobs {
     job.view.endedAt = this.now();
     delete job.view.ports;
     if (reason) job.view.endReason = reason;
-    this.forgetOldFinished(job.view.chatId);
+    this.forgetOldFinished(job);
     this.writeRecord();
-    this.options.onChange?.(job.view.chatId);
+    this.notifyChange(job);
     job.settleExited?.();
   }
 
@@ -868,7 +1238,7 @@ export class BackgroundJobs {
         if (ports.length === before.length && ports.every((port, index) => port === before[index])) continue;
         if (ports.length) job.view.ports = ports;
         else delete job.view.ports;
-        this.options.onChange?.(job.view.chatId);
+        this.notifyChange(job);
       }
     } catch (error) {
       this.options.log?.("Background job ports could not be read.", error);
@@ -878,6 +1248,10 @@ export class BackgroundJobs {
   }
 
   private capture(job: JobRecord, chunk: Buffer): void {
+    if (job.design) {
+      this.captureDesign(job, chunk);
+      return;
+    }
     job.view.outputBytes += chunk.length;
     if (job.view.outputBytes > this.maxLogBytes) {
       if (!job.stopRequested) {
@@ -890,9 +1264,40 @@ export class BackgroundJobs {
     this.appendTail(job, job.decoder.write(chunk));
   }
 
+  /** A design job's log rotates instead of stopping the job: a dev server that logs every update must not die after hours. */
+  private captureDesign(job: JobRecord, chunk: Buffer): void {
+    const state = job.design!;
+    const inCurrent = job.view.outputBytes - state.currentStart;
+    if (job.log && inCurrent > 0 && inCurrent + chunk.length > this.designLogRotateBytes) {
+      try {
+        // The old stream keeps writing what it holds to the renamed file.
+        fs.renameSync(job.logPath, state.rotatedPath);
+        job.log.end();
+        ({ log: job.log, logClosed: job.logClosed } = this.openLog(job.logPath));
+        state.rotatedStart = state.currentStart;
+        state.currentStart = job.view.outputBytes;
+      } catch (error) {
+        this.options.log?.("A design job log could not be rotated.", error);
+      }
+    }
+    job.view.outputBytes += chunk.length;
+    job.log?.write(chunk);
+    this.appendTail(job, job.decoder.write(chunk));
+  }
+
   private append(job: JobRecord, text: string): void {
+    if (job.design) {
+      this.captureDesign(job, Buffer.from(text, "utf8"));
+      return;
+    }
     job.log?.write(text);
     this.appendTail(job, text);
+  }
+
+  /** Chat jobs tell their chat's list; design jobs tell design mode. */
+  private notifyChange(job: JobRecord): void {
+    if (job.owner.kind === "design") this.options.onDesignChange?.(designView(job));
+    else this.options.onChange?.(job.owner.chatId);
   }
 
   private appendTail(job: JobRecord, text: string): void {
@@ -920,19 +1325,30 @@ export class BackgroundJobs {
     job.view.exitCode = code;
     if (signal) job.view.signal = signal;
     if (reason) job.view.endReason = reason;
-    this.forgetOldFinished(job.view.chatId);
+    this.forgetOldFinished(job);
     this.writeRecord();
-    this.options.onChange?.(job.view.chatId);
+    this.notifyChange(job);
+    if (isDesign(job)) return;
     if ((!reason || reason === "output-limit") && !job.watched) {
       this.options.onEnded?.({ job: { ...job.view }, tail: job.tail });
     }
   }
 
-  private forgetOldFinished(chatId: string): void {
+  private forgetOldFinished(ended: JobRecord): void {
     const oldestFirst = (left: JobRecord, right: JobRecord) => (left.view.endedAt ?? 0) - (right.view.endedAt ?? 0);
+    if (isDesign(ended)) {
+      const finished = [...this.jobs.values()].filter((record) => isDesign(record) && record.view.state !== "running").sort(oldestFirst);
+      for (const job of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED_DESIGN_JOBS))) {
+        this.jobs.delete(job.view.id);
+        void this.removeLog(job);
+        this.options.onDesignChange?.(designView(job));
+      }
+      return;
+    }
+    const chatId = ended.view.chatId;
     const byChat = new Map<string, JobRecord[]>();
     let total = 0;
-    for (const job of [...this.jobs.values()].filter((record) => record.view.state !== "running").sort(oldestFirst)) {
+    for (const job of [...this.jobs.values()].filter((record) => record.view.state !== "running" && !isDesign(record)).sort(oldestFirst)) {
       const list = byChat.get(job.view.chatId) ?? [];
       list.push(job);
       byChat.set(job.view.chatId, list);
@@ -1013,7 +1429,12 @@ export class BackgroundJobs {
         ...this.checkGroups.values(),
         ...[...this.jobs.values()]
           .filter((job) => job.view.state === "running" && job.view.pid)
-          .map((job) => ({ id: job.view.id, pid: job.view.pid!, ...(job.processStart ? { processStart: job.processStart } : {}) })),
+          .map((job) => ({
+            id: job.view.id,
+            pid: job.view.pid!,
+            ...(job.processStart ? { processStart: job.processStart } : {}),
+            ...(isDesign(job) ? { design: true as const } : {}),
+          })),
       ],
     };
     const target = path.join(this.options.logDir, RECORD_FILE);
@@ -1047,4 +1468,24 @@ export function formatDuration(ms: number): string {
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
+}
+
+/** Up to `length` bytes of a file from `position`; fewer at its end, none when it is gone. */
+async function readAt(file: string, position: number, length: number): Promise<Buffer> {
+  let handle: fsp.FileHandle | undefined;
+  try {
+    handle = await fsp.open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const buffer = Buffer.alloc(length);
+    let read = 0;
+    while (read < length) {
+      const { bytesRead } = await handle.read(buffer, read, length - read, position + read);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    return buffer.subarray(0, read);
+  } catch {
+    return Buffer.alloc(0);
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }

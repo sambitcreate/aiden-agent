@@ -15,6 +15,7 @@ import {
   MAX_PROVIDER_ID_CHARS,
 } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { chatRunsDesignApps } from "../../renderer/shared/design-app.js";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -108,6 +109,16 @@ export interface RendererChatMutationDeps {
   skillRegistry: { resolveFresh: Parameters<typeof commitSkillInvocationForAppend>[1]["resolveFresh"] };
   assertChatAccess?: (event: IpcMainInvokeEvent, chatId: string) => void;
   onChatRemoved?: (event: IpcMainInvokeEvent, chatId: string) => void;
+  /**
+   * Design mode's live apps (2b, D4): turning design mode on starts the
+   * workspace's app for the window that turned it on, which shows the run-app
+   * card first. Only while the live flag is on, and only from that window's
+   * main frame; a failure here never fails the toggle.
+   */
+  designApp?: {
+    enabled(): boolean;
+    entered(input: { chatId: string; workspaceId: string; owner: RendererDocumentOwner }): void;
+  };
 }
 
 export function createRendererChatMutationHandlers(deps: RendererChatMutationDeps) {
@@ -159,7 +170,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       ),
 
     /** Turn design mode on or off for one chat, then tell every window. */
-    setDesignMode: async (_event: IpcMainInvokeEvent, id: unknown, enabled: unknown, source: unknown) => {
+    setDesignMode: async (event: IpcMainInvokeEvent, id: unknown, enabled: unknown, source: unknown) => {
       const chatId = asString(id, "id");
       if (typeof enabled !== "boolean") throw new Error('Expected a boolean for "enabled".');
       if (!designModeEnabled()) throw new Error("Design mode is not available.");
@@ -174,6 +185,15 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       broadcastDesignModeChanged({ chatId, designMode: enabled });
       if (wasOn === false && enabled) reportAnalyticsEvent("design_mode_entered", { source: designModeEntrySource(source) });
       else if (wasOn === true && !enabled) reportAnalyticsEvent("design_mode_exited", {});
+      // The designApp:* channels' guard: a Bot's or a feature-owned chat never starts an app.
+      if (chatRunsDesignApps(chat) && wasOn === false && enabled && deps.designApp?.enabled()) {
+        try {
+          const owner = rendererDocumentOwner(event, () => new Error("Active renderer required."));
+          deps.designApp.entered({ chatId, workspaceId: persistedChatWorkspaceId(chat.workspaceId), owner });
+        } catch {
+          // A subframe or a window already gone starts nothing; the toggle itself succeeded.
+        }
+      }
       return chat;
     },
 

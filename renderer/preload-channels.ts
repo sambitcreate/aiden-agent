@@ -17,6 +17,7 @@ export const INVOKE_PREFIXES = [
   "chats:",
   "computerUse:",
   "designCanvas:",
+  "designApp:",
   "dictation:",
   "diagnostics:",
   "formFill:",
@@ -140,6 +141,12 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "designCanvas:consent",
   /** That card stopped waiting (answered, stopped or timed out): `{requestId}`. */
   "designCanvas:consentClosed",
+  /** A run-app card for the window that asked or owns the turn: a `DesignAppConsentRequest`. */
+  "designApp:consent",
+  /** That card stopped waiting (answered, stopped or timed out): `{requestId}`. */
+  "designApp:consentClosed",
+  /** A workspace's live apps changed phase, port or problem: a `DesignAppsSnapshot`. */
+  "designApp:status",
   /** Aiden asks the canvas to fit frames (all when empty): `{chatId, frameIds}`. */
   "designCanvas:focus",
   /** Aiden asks for a picture of the canvas: `{requestId, chatId}`; answered with `designCanvas:snapshotAnswer`. */

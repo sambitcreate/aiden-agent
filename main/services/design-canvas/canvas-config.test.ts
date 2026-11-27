@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -16,6 +16,7 @@ import {
   parseCanvasConfigObject,
   readCanvasConfig,
   readCanvasConfigText,
+  saveCanvasConfigApp,
   type CanvasConfig,
 } from "./canvas-config.js";
 
@@ -224,4 +225,104 @@ test("a missing config is null, and a present one is read", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+// ── saveCanvasConfigApp (2b): the monorepo choice, merged without losing anything ──
+
+async function configRoot(t: test.TestContext): Promise<string> {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "aiden-canvas-save-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+const configFile = (root: string) => path.join(root, CANVAS_CONFIG_PATH);
+const readJson = async (root: string) => JSON.parse(await readFile(configFile(root), "utf8")) as Record<string, unknown>;
+async function writeSavedConfig(root: string, value: unknown): Promise<void> {
+  await mkdir(path.join(root, ".aiden"), { recursive: true });
+  await writeFile(configFile(root), typeof value === "string" ? value : JSON.stringify(value, null, 2));
+}
+
+test("saveCanvasConfigApp creates .aiden/ and canvas.json in an empty workspace, with version 1", async (t) => {
+  const root = await configRoot(t);
+  assert.equal(await saveCanvasConfigApp(root, { root: "apps/web", script: "dev" }), "saved");
+  assert.deepEqual(await readJson(root), { version: 1, apps: [{ root: "apps/web", script: "dev" }] });
+  assert.deepEqual(await readCanvasConfig(root), { version: 1, apps: [{ root: "apps/web", script: "dev" }] });
+});
+
+test("saveCanvasConfigApp merges script into the matching entry, keeping designMd, routes, params, unknown keys and other entries", async (t) => {
+  const root = await configRoot(t);
+  const before = {
+    version: 1,
+    note: { keep: true },
+    apps: [
+      { root: "apps/site", script: "start", routes: ["/"] },
+      { root: "apps/web", designMd: "apps/web/DESIGN.md", routes: ["/", "/pricing"], params: { id: "1" }, future: [1, 2] },
+      "not an entry",
+    ],
+  };
+  await writeSavedConfig(root, before);
+  assert.equal(await saveCanvasConfigApp(root, { root: "apps/web", script: "dev" }), "saved");
+  const after = await readJson(root);
+  const expected = structuredClone(before) as typeof before & { apps: Array<Record<string, unknown> | string> };
+  (expected.apps[1] as Record<string, unknown>).script = "dev";
+  assert.deepEqual(after, expected);
+});
+
+test("saveCanvasConfigApp appends a new entry for a new root", async (t) => {
+  const root = await configRoot(t);
+  await writeSavedConfig(root, { version: 1, apps: [{ root: "apps/site", script: "start" }] });
+  await saveCanvasConfigApp(root, { root: "apps/web", script: "dev" });
+  assert.deepEqual((await readJson(root)).apps, [{ root: "apps/site", script: "start" }, { root: "apps/web", script: "dev" }]);
+});
+
+test("a file without version is known and keeps having no version field", async (t) => {
+  const root = await configRoot(t);
+  await writeSavedConfig(root, { apps: [{ root: ".", designMd: "DESIGN.md" }] });
+  assert.equal(await saveCanvasConfigApp(root, { root: ".", script: "dev" }), "saved");
+  assert.deepEqual(await readJson(root), { apps: [{ root: ".", designMd: "DESIGN.md", script: "dev" }] });
+});
+
+test("saveCanvasConfigApp refuses version 2 and version \"1\" and leaves the file unchanged", async (t) => {
+  for (const version of [2, "1"]) {
+    const root = await configRoot(t);
+    const text = JSON.stringify({ version, apps: [] });
+    await writeSavedConfig(root, text);
+    assert.equal(await saveCanvasConfigApp(root, { root: ".", script: "dev" }), "unknown-version", String(version));
+    assert.equal(await readFile(configFile(root), "utf8"), text);
+  }
+});
+
+test("saveCanvasConfigApp never writes through a symlinked .aiden or canvas.json", { skip: process.platform === "win32" }, async (t) => {
+  const root = await configRoot(t);
+  await mkdir(path.join(root, "real"));
+  await writeFile(path.join(root, "real", "canvas.json"), "{}");
+  await symlink(path.join(root, "real"), path.join(root, ".aiden"));
+  await assert.rejects(saveCanvasConfigApp(root, { root: ".", script: "dev" }));
+  assert.equal(await readFile(path.join(root, "real", "canvas.json"), "utf8"), "{}");
+  await rm(path.join(root, ".aiden"));
+  await mkdir(path.join(root, ".aiden"));
+  await symlink(path.join(root, "real", "canvas.json"), configFile(root));
+  await assert.rejects(saveCanvasConfigApp(root, { root: ".", script: "dev" }));
+  assert.equal(await readFile(path.join(root, "real", "canvas.json"), "utf8"), "{}");
+});
+
+test("a file changed between read and write is not overwritten", async (t) => {
+  const root = await configRoot(t);
+  await writeSavedConfig(root, { version: 1, apps: [] });
+  await assert.rejects(
+    saveCanvasConfigApp(root, { root: ".", script: "dev" }, undefined, {
+      beforeWrite: async () => {
+        await writeFile(configFile(root), JSON.stringify({ version: 1, apps: [{ root: "apps/x", script: "x" }] }));
+      },
+    }),
+    /changed/u,
+  );
+  assert.deepEqual((await readJson(root)).apps, [{ root: "apps/x", script: "x" }]);
+});
+
+test('root "." round-trips', async (t) => {
+  const root = await configRoot(t);
+  await saveCanvasConfigApp(root, { root: ".", script: "dev" });
+  await saveCanvasConfigApp(root, { root: ".", script: "start" });
+  assert.deepEqual(await readCanvasConfig(root), { version: 1, apps: [{ root: ".", script: "start" }] });
 });

@@ -594,6 +594,7 @@ import {
   designPendingEntries,
   designSystemOffers,
   designAppRoots,
+  designAppServers,
   designMdOffers,
   designMdReader,
   recentWrittenPages,
@@ -609,6 +610,7 @@ import {
   designModeToolAllowed,
 } from "./design-canvas/canvas-tools.js";
 import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
+import { createDesignAppTool } from "./design-canvas/app-server/app-tool.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { CANVAS_STATUS_SECTION, canvasPromptLine, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
@@ -3146,6 +3148,19 @@ async function prepareGeneration(
       }),
       // The design_system tool joins the canvas tools, so it is declared, held and refused with them.
       ...(mdTurn ? [mdTurn.tool] : []),
+      // design_app (2b) does too: the workspace's dev server, where background jobs run.
+      ...(designLive && followThroughAvailable && workspace
+        ? [
+            createDesignAppTool({
+              workspaceId: workspace.id,
+              chatId: params.chatId,
+              permission,
+              owner: () => getOwner(),
+              stillAvailable: async () => designLiveEnabled() && (await canvasStillAvailable()),
+              servers: designAppServers,
+            }),
+          ]
+        : []),
     ].filter((tool) => !options.excludeToolNames?.has(tool.name));
     if (canvasTools.length > 0 && !windowless) {
       placeCanvasArtifacts = async (artifacts) => {

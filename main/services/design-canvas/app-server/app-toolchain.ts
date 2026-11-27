@@ -16,15 +16,14 @@ import {
   resolveExecutable,
   type ExecutableResolutionDeps,
 } from "../../node-toolchain.js";
+import {
+  DESIGN_NODE_MIN_MAJOR,
+  toolchainProblemMessage,
+  type ToolchainProblem,
+} from "../../../../renderer/shared/design-app.js";
 import type { DetectedApp, PackageManagerName } from "./app-server-core.js";
 
-export const DESIGN_NODE_MIN_MAJOR = 22;
-
-export type ToolchainProblem =
-  | { problem: "node-missing" }
-  | { problem: "manager-missing"; manager: PackageManagerName }
-  | { problem: "manager-conflict"; conflict: PackageManagerName[]; field?: PackageManagerName }
-  | { problem: "unsupported-manager"; manager: "deno" };
+export { DESIGN_NODE_MIN_MAJOR, toolchainProblemMessage, type ToolchainProblem };
 
 export type AppToolchain =
   | { ok: true; node: string; manager: { name: PackageManagerName; path: string } }
@@ -72,30 +71,4 @@ export function defaultAppToolchainDeps(env: NodeJS.ProcessEnv = process.env): A
     },
     manager: { env, isExecutable: isExecutableFile, loginShellLookup, cache: designExecutableCache },
   };
-}
-
-function listNames(names: readonly string[]): string {
-  if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
-
-/** One fixed sentence per problem, for 2b's tool answers and 2c's chip. */
-export function toolchainProblemMessage(problem: ToolchainProblem): string {
-  switch (problem.problem) {
-    case "node-missing":
-      return `Node.js ${DESIGN_NODE_MIN_MAJOR} or newer wasn't found. Install it from nodejs.org or Homebrew, then try again.`;
-    case "manager-missing":
-      return `This app uses ${problem.manager}, which wasn't found. Install ${problem.manager}, then try again.`;
-    case "manager-conflict": {
-      if (problem.field) {
-        const locked = problem.conflict.filter((name) => name !== problem.field).map((name) => `${name}'s`);
-        const several = locked.length > 1;
-        return `packageManager says ${problem.field}, but the ${several ? "lockfiles are" : "lockfile is"} ${listNames(locked)}. Delete the other ${several ? "lockfiles" : "lockfile"} or change packageManager.`;
-      }
-      const several = problem.conflict.length > 2;
-      return `This app has lockfiles for ${listNames(problem.conflict)}. Delete the ${several ? "ones" : "one"} you don't use, or set packageManager in package.json.`;
-    }
-    case "unsupported-manager":
-      return "This app uses Deno, which design mode can't run yet.";
-  }
 }
