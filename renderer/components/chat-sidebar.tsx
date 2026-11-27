@@ -2150,6 +2150,32 @@ function WorkspaceChatSidebar({
     </SidebarOverflowMenu>
   );
 
+  const chatListHeader = (
+    <SectionHeader
+      label={chatViewTitle}
+      accessory={machineFilterChip}
+      actions={sidebarOrganizationMenu}
+    />
+  );
+
+  const renameDialog = renaming
+    ? {
+        busy: false,
+        description: "Choose the name shown for this conversation in the sidebar.",
+        onClose: () => setRenaming(null),
+        onConfirm: commitRename,
+      }
+    : remoteRenaming
+      ? {
+          busy: remoteRenameBusy,
+          description: `Choose the name shown for this conversation on ${remoteRenaming.hostLabel}.`,
+          onClose: () => {
+            if (!remoteRenameBusy) setRemoteRenaming(null);
+          },
+          onConfirm: commitRemoteRename,
+        }
+      : null;
+
   return (
     <>
       <Sidebar
@@ -2512,15 +2538,7 @@ function WorkspaceChatSidebar({
               )}
             </SidebarListGroup>
           ) : chats.isLoading ? (
-            <SidebarListGroup
-              title={
-                <SectionHeader
-                  label={chatViewTitle}
-                  accessory={machineFilterChip}
-                  actions={sidebarOrganizationMenu}
-                />
-              }
-            >
+            <SidebarListGroup title={chatListHeader}>
               <EmptyState
                 placement="inline"
                 title="Loading chats…"
@@ -2528,15 +2546,7 @@ function WorkspaceChatSidebar({
               />
             </SidebarListGroup>
           ) : chats.isError ? (
-            <SidebarListGroup
-              title={
-                <SectionHeader
-                  label={chatViewTitle}
-                  accessory={machineFilterChip}
-                  actions={sidebarOrganizationMenu}
-                />
-              }
-            >
+            <SidebarListGroup title={chatListHeader}>
               <div role="alert" className="flex flex-col gap-1">
                 <EmptyState
                   placement="inline"
@@ -2577,15 +2587,7 @@ function WorkspaceChatSidebar({
               }
             />
           ) : organized.chatSections.length === 0 ? (
-            <SidebarListGroup
-              title={
-                <SectionHeader
-                  label={chatViewTitle}
-                  accessory={machineFilterChip}
-                  actions={sidebarOrganizationMenu}
-                />
-              }
-            >
+            <SidebarListGroup title={chatListHeader}>
               <EmptyState
                 placement="inline"
                 title={search.trim() ? "No matches" : "No chats yet"}
@@ -2620,35 +2622,14 @@ function WorkspaceChatSidebar({
       </Sidebar>
 
       <Dialog
-        open={renaming !== null}
-        onOpenChange={(open) => !open && setRenaming(null)}
+        open={renameDialog !== null}
+        onOpenChange={(open) => !open && renameDialog?.onClose()}
         title="Rename chat"
-        description="Choose the name shown for this conversation in the sidebar."
+        description={renameDialog?.description}
         confirmLabel="Save"
-        confirmDisabled={!renameValue.trim()}
-        onConfirm={commitRename}
-      >
-        <Input
-          value={renameValue}
-          onChange={(e) => setRenameValue(e.target.value)}
-          placeholder="Chat name"
-          autoFocus
-        />
-      </Dialog>
-
-      <Dialog
-        open={remoteRenaming !== null}
-        onOpenChange={(open) => !open && !remoteRenameBusy && setRemoteRenaming(null)}
-        title="Rename chat"
-        description={
-          remoteRenaming
-            ? `Choose the name shown for this conversation on ${remoteRenaming.hostLabel}.`
-            : undefined
-        }
-        confirmLabel="Save"
-        confirmDisabled={!renameValue.trim() || remoteRenameBusy}
-        busy={remoteRenameBusy}
-        onConfirm={commitRemoteRename}
+        confirmDisabled={!renameValue.trim() || Boolean(renameDialog?.busy)}
+        busy={renameDialog?.busy}
+        onConfirm={renameDialog?.onConfirm}
       >
         <Input
           value={renameValue}
