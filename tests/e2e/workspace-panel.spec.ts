@@ -492,7 +492,7 @@ test("closing a terminal asks first only while a program is running", async ({ a
     "gVisor has no terminal foreground process group",
   );
   const { page } = aiden;
-  const { drawer, run } = await openTerminal(page);
+  const { drawer, output, run } = await openTerminal(page);
   const tab = drawer.getByRole("button", { name: /^Terminal 1/u });
   const closeTab = drawer.getByRole("button", { name: "Close Terminal 1" });
   await run("sleep 60");
@@ -516,7 +516,12 @@ test("closing a terminal asks first only while a program is running", async ({ a
   await drawer.getByRole("button", { name: "New terminal" }).first().click();
   await expect(tab).toBeVisible();
   await expect(drawer.locator("canvas")).toHaveCount(1);
+  // A shell still running its startup files is busy by the same reading, so
+  // the idle case starts at the prompt, as openTerminal does for the first one.
+  await expect(output).toHaveText(/\S/u);
   await closeTab.click();
+  // An open question hides the drawer from the accessibility tree, so the tab
+  // reads as gone either way; the dialog check below is what proves no question.
   await expect(tab).toHaveCount(0);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });

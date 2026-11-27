@@ -1090,6 +1090,7 @@ async function foregroundHarness(t: TestContext) {
     shellIsExecutable: () => true,
     foregroundPollMs: 5,
     readForegroundState: async () => foreground.state,
+    foregroundRunningConfirmMs: 0,
   });
   const session = await service.create("workspace-1", "/tmp", owner.owner);
   const activity = () =>
@@ -1149,6 +1150,42 @@ test("closing notices a loop of shell builtins, which keeps the shell's own grou
   const { owner, child, service, session, foreground } = await foregroundHarness(t);
   foreground.state = { group: child.pty.pid, running: true };
   assert.equal(await service.foregroundCommand(session.id, owner.owner), "zsh");
+});
+
+test("a shell on a CPU for one reading only, as while it starts or draws its prompt, closes without asking", async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  (child.pty as unknown as { process: string }).process = "zsh";
+  const readings: Array<ForegroundState | null> = [];
+  let reads = 0;
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+    shellCandidates: () => ["/bin/zsh"],
+    shellIsExecutable: () => true,
+    readForegroundState: async () => {
+      reads += 1;
+      return readings.shift() ?? null;
+    },
+    foregroundRunningConfirmMs: 0,
+  });
+  const session = await service.create("workspace-1", "/tmp", owner.owner);
+  const pid = child.pty.pid;
+
+  readings.push({ group: pid, running: true }, { group: pid, running: false });
+  assert.equal(await service.foregroundCommand(session.id, owner.owner), null);
+  assert.equal(reads, 2);
+
+  // A program holding the terminal is a process group of its own: one reading is proof.
+  reads = 0;
+  readings.push({ group: pid + 1, running: false });
+  assert.equal(await service.foregroundCommand(session.id, owner.owner), "zsh");
+  assert.equal(reads, 1);
+
+  // A builtin loop still on a CPU at the second reading asks first.
+  readings.push({ group: pid, running: true }, { group: pid, running: true });
+  assert.equal(await service.foregroundCommand(session.id, owner.owner), "zsh");
+  service.close(session.id, owner.owner);
 });
 
 test("ps output reads as the terminal's group and the shell's CPU state", () => {

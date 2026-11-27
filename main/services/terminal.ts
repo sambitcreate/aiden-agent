@@ -28,6 +28,12 @@ const MAX_SESSIONS_PER_WEB_CONTENTS = 8;
 const FOREGROUND_POLL_MS = 1_000;
 const MAX_COMMAND_NAME_CHARS = 64;
 const FOREGROUND_GROUP_TIMEOUT_MS = 1_000;
+/**
+ * How long after a reading that finds the shell itself on a CPU a close looks
+ * again. A shell finishing its startup files or drawing its prompt is on a CPU
+ * for a moment; a loop of builtins still is a moment later.
+ */
+const FOREGROUND_RUNNING_CONFIRM_MS = 100;
 const MIN_COLS = 20;
 const MAX_COLS = 500;
 const MIN_ROWS = 4;
@@ -104,6 +110,8 @@ export interface TerminalServiceOptions {
   foregroundPollMs?: number;
   /** Who holds the shell's terminal and whether the shell is on a CPU, or null when unknown. */
   readForegroundState?: (shellPid: number) => Promise<ForegroundState | null>;
+  /** The wait before a shell seen on a CPU is read again. Test seam. */
+  foregroundRunningConfirmMs?: number;
 }
 
 /**
@@ -576,9 +584,20 @@ export class TerminalService {
     // reads as the shell by name, so its process group tells them apart. A loop
     // of builtins runs in the shell's own group; only its CPU state shows it.
     const shellPid = session.pty.pid;
-    const state = await (this.options.readForegroundState ?? readForegroundState)(shellPid);
-    if (state === null) return null;
-    return state.group !== shellPid || state.running ? commandBaseName(session.resolvedShell) : null;
+    const read = this.options.readForegroundState ?? readForegroundState;
+    const busy = (state: ForegroundState | null) => state !== null && (state.group !== shellPid || state.running);
+    const state = await read(shellPid);
+    if (!busy(state)) return null;
+    // The CPU state is one instant: a shell just started or redrawing its
+    // prompt reads as running too. Like the tab's two-poll rule, a close asks
+    // only when a second reading still finds the shell busy.
+    if (state?.group === shellPid) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, this.options.foregroundRunningConfirmMs ?? FOREGROUND_RUNNING_CONFIRM_MS),
+      );
+      if (!busy(await read(shellPid))) return null;
+    }
+    return commandBaseName(session.resolvedShell);
   }
 
   closeForWebContents(webContentsId: number): void {
