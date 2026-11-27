@@ -1545,23 +1545,29 @@ final class AidenRemoteClient: @unchecked Sendable {
         return components.string ?? url.absoluteString
     }
 
-    static func normalizeManualPairingCode(_ value: String) throws -> String {
-        guard value.unicodeScalars.allSatisfy({ scalar in
+    static let manualPairingCodeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+    private static let manualPairingCodeAlphabetBytes = Set(manualPairingCodeAlphabet.utf8)
+
+    static func isManualPairingCodeInput(_ value: String) -> Bool {
+        value.unicodeScalars.allSatisfy { scalar in
             scalar.isASCII && (scalar.value == 32 || scalar.value == 45
                 || (48...57).contains(scalar.value)
                 || (65...90).contains(scalar.value)
                 || (97...122).contains(scalar.value))
-        }) else {
+        }
+    }
+
+    static func normalizeManualPairingCode(_ value: String) throws -> String {
+        guard isManualPairingCodeInput(value) else {
             throw AidenManualPairingError.invalidCode
         }
         let normalized = value
             .replacingOccurrences(of: "-", with: "")
             .replacingOccurrences(of: " ", with: "")
             .uppercased()
-        let alphabet = Set("0123456789ABCDEFGHJKMNPQRSTVWXYZ".utf8)
         guard normalized.utf8.count == 20,
               normalized.unicodeScalars.allSatisfy({ $0.isASCII }),
-              normalized.utf8.allSatisfy(alphabet.contains) else {
+              normalized.utf8.allSatisfy(manualPairingCodeAlphabetBytes.contains) else {
             throw AidenManualPairingError.invalidCode
         }
         return normalized

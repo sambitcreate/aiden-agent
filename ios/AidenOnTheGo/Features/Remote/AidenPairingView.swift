@@ -50,7 +50,7 @@ enum AidenPairingInputError: Error, Equatable {
 }
 
 enum AidenPairingInputParser {
-    private static let allowedCodeScalars = Set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+    private static let allowedCodeScalars = Set(AidenRemoteClient.manualPairingCodeAlphabet)
 
     /// Detects a full one-time pairing payload pasted into either input field.
     static func fullPayload(from raw: String) -> String? {
@@ -103,12 +103,7 @@ enum AidenPairingInputParser {
         if trimmed.hasPrefix("{") || trimmed.hasPrefix("aiden-") {
             return value
         }
-        guard value.unicodeScalars.allSatisfy({ scalar in
-            scalar.isASCII && (scalar.value == 32 || scalar.value == 45
-                || (48...57).contains(scalar.value)
-                || (65...90).contains(scalar.value)
-                || (97...122).contains(scalar.value))
-        }) else { return value }
+        guard AidenRemoteClient.isManualPairingCodeInput(value) else { return value }
         let characters = value
             .uppercased()
             .filter { $0 != "-" && $0 != " " }
