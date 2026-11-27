@@ -102,7 +102,7 @@ enum AidenRemoteContractError: Error, Equatable {
     case invalidPairingExchange
 }
 
-private struct AidenDynamicCodingKey: CodingKey {
+struct AidenDynamicCodingKey: CodingKey {
     let stringValue: String
     let intValue: Int? = nil
 

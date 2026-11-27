@@ -1631,8 +1631,8 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case let .partial(text): try fields.encode(text, forKey: .text)
         case let .entry(entry): try fields.encode(entry, forKey: .entry)
         case let .unknownEntry(type):
-            var entry = fields.nestedContainer(keyedBy: AidenBotDynamicCodingKey.self, forKey: .entry)
-            if let key = AidenBotDynamicCodingKey(stringValue: "type") { try entry.encode(type, forKey: key) }
+            var entry = fields.nestedContainer(keyedBy: AidenDynamicCodingKey.self, forKey: .entry)
+            if let key = AidenDynamicCodingKey(stringValue: "type") { try entry.encode(type, forKey: key) }
         case let .state(view): try view.encode(to: payload)
         case let .question(question): try fields.encode(question, forKey: .question)
         case let .approval(approval): try fields.encode(approval, forKey: .approval)
@@ -1704,7 +1704,7 @@ struct AidenBotSessionActionRequest: Codable, Equatable, Sendable {
     }
 
     func encode(to encoder: Encoder) throws {
-        _ = encoder.container(keyedBy: AidenBotDynamicCodingKey.self)
+        _ = encoder.container(keyedBy: AidenDynamicCodingKey.self)
     }
 }
 

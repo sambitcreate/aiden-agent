@@ -22,14 +22,6 @@ enum AidenBotContractError: Error, Equatable, LocalizedError {
     }
 }
 
-struct AidenBotDynamicCodingKey: CodingKey {
-    let stringValue: String
-    let intValue: Int? = nil
-
-    init?(stringValue: String) { self.stringValue = stringValue }
-    init?(intValue: Int) { return nil }
-}
-
 enum AidenBotWire {
     static let maxNameLength = 80
     static let maxPurposeLength = 280
@@ -183,7 +175,7 @@ enum AidenBotWire {
         _ decoder: Decoder,
         allowed: Set<String>
     ) throws {
-        let dynamic = try decoder.container(keyedBy: AidenBotDynamicCodingKey.self)
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
         if let unexpected = dynamic.allKeys.first(where: { !allowed.contains($0.stringValue) }) {
             throw AidenBotContractError.invalidField(unexpected.stringValue)
         }
@@ -379,7 +371,7 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
         issueCount = try AidenBotWire.issueCount(values, forKey: .issueCount)
         needsYou = try AidenBotWire.optional(Bool.self, from: values, forKey: .needsYou) ?? false
         // Archive was replaced by Delete in revision 25 (as the host parser).
-        guard try decoder.container(keyedBy: AidenBotDynamicCodingKey.self)
+        guard try decoder.container(keyedBy: AidenDynamicCodingKey.self)
             .allKeys.contains(where: { $0.stringValue == "archivedAt" }) == false else {
             throw AidenBotContractError.invalidField("archivedAt")
         }

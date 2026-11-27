@@ -784,7 +784,7 @@ struct AidenBrowserRecordingRecap: Codable, Equatable, Sendable {
     }
 
     init(from decoder: Decoder) throws {
-        let keys = try decoder.container(keyedBy: AidenChatForkAnyKey.self).allKeys
+        let keys = try decoder.container(keyedBy: AidenDynamicCodingKey.self).allKeys
         let values = try decoder.container(keyedBy: CodingKeys.self)
         guard Set(keys.map(\.stringValue)) == ["id", "mimeType", "durationMs", "sizeBytes"] else {
             throw DecodingError.dataCorruptedError(
@@ -2233,7 +2233,7 @@ struct AidenChatForkSummary: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        let allKeys = try decoder.container(keyedBy: AidenChatForkAnyKey.self).allKeys
+        let allKeys = try decoder.container(keyedBy: AidenDynamicCodingKey.self).allKeys
         guard allKeys.allSatisfy({ CodingKeys(stringValue: $0.stringValue) != nil }) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .state,
@@ -2345,13 +2345,6 @@ struct AidenChatForkLineage: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case chatId, messageId, position, at, summary
     }
-}
-
-private struct AidenChatForkAnyKey: CodingKey {
-    let stringValue: String
-    let intValue: Int? = nil
-    init?(stringValue: String) { self.stringValue = stringValue }
-    init?(intValue: Int) { nil }
 }
 
 /// Only for `before` forks: the chosen prompt to edit and resend in the fork.

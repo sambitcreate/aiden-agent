@@ -7,7 +7,7 @@ import Foundation
 // decodes the pairing types through `AidenRemotePairing`.
 
 private func fixtureRequireKeys(_ decoder: Decoder, _ allowed: Set<String>) throws {
-    let dynamic = try decoder.container(keyedBy: AidenBotDynamicCodingKey.self)
+    let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
     if dynamic.allKeys.contains(where: { !allowed.contains($0.stringValue) }) {
         throw AidenRemoteContractError.unsafePayloadField("fixture")
     }
