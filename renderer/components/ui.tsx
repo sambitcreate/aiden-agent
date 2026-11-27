@@ -2148,6 +2148,7 @@ export function Popover(props: React.ComponentProps<typeof PopoverPrimitive.Root
   return <PopoverPrimitive.Root {...props} {...useRootLayer(props, "popover")} />;
 }
 export const PopoverTrigger = PopoverPrimitive.Trigger;
+export const PopoverAnchor = PopoverPrimitive.Anchor;
 export const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>

@@ -908,6 +908,7 @@ function nodeContext(update: DesignNodeContextValue["update"]): DesignNodeContex
     rename: noop,
     resizeStart: noop,
     activeResize: null,
+    setViewport: noop,
   };
 }
 
@@ -1038,4 +1039,37 @@ test("3c: the end of a resize announces the final size once", () => {
   // Another frame's resize says nothing here.
   view.rerender(<NodeHarness frame={dragged} designLive activeResize={{ frameId: "other", side: "right" }} />);
   assert.equal(said(), "Viewport 1180 by 800");
+});
+
+// ── 3c: the device button in the header (S92) ──
+
+test("3c: with design live on, the device button names the size and the size text isn't shown twice", () => {
+  setup();
+  render(<NodeHarness frame={appFrame({ viewport: { width: 1180, height: 800 }, w: 590 })} designLive />);
+  assert.ok(screen.getByRole("button", { name: "Viewport, 1180 by 800" }));
+  assert.equal(screen.getAllByText("1180 × 800").length, 1);
+});
+
+test("3c flag off: no device button, and the size text stays", () => {
+  setup();
+  render(<NodeHarness frame={appFrame({ viewport: { width: 1180, height: 800 }, w: 590 })} designLive={false} />);
+  assert.equal(screen.queryByRole("button", { name: /^Viewport/u }) === null, true);
+  assert.ok(screen.getByText("1180 × 800"));
+});
+
+test("3c: on a narrow frame every header button stays reachable", () => {
+  setup();
+  // An iPhone at scale 0.25: a 98 px box. happy-dom lays nothing out, so this checks the DOM and tab
+  // order; the E2E checks the real boxes.
+  render(<NodeHarness frame={appFrame({ viewport: { width: 390, height: 844 }, scale: 0.25, w: 98, h: 247 })} designLive />);
+  const header = document.querySelector<HTMLElement>("[data-canvas-chrome-header]")!;
+  const buttons = Array.from(header.querySelectorAll<HTMLButtonElement>("button"));
+  const device = screen.getByRole<HTMLButtonElement>("button", { name: "Viewport, iPhone, 390 by 844" });
+  assert.equal(device.textContent, "", "an icon only");
+  assert.ok(buttons.includes(device));
+  for (const button of buttons) {
+    assert.equal(button.disabled, false, button.getAttribute("aria-label") ?? "");
+    assert.notEqual(button.tabIndex, -1, button.getAttribute("aria-label") ?? "");
+  }
+  assert.ok(buttons.some((button) => button.getAttribute("aria-label")?.startsWith("Download")));
 });

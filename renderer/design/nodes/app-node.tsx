@@ -73,6 +73,12 @@ const IPV6_SENTENCE = "This app runs on IPv6 localhost, which the canvas can't s
 const LOCALHOST_SENTENCE = "Design mode only lets apps reach localhost for now.";
 const ACTION_FAILED = "Aiden couldn't do that.";
 const NO_BREAKPOINTS: readonly number[] = Object.freeze([]);
+/**
+ * Under this box width the header folds (3c, S92): the device button is an
+ * icon. The header is drawn in canvas units, so the box width decides what
+ * fits whatever the zoom.
+ */
+const APP_COMPACT_HEADER_PX = 240;
 
 /** A fixed sentence over the frame's last picture: the app isn't live here. */
 export function AppFrameCard({ title, snapshot, children }: { title: string; snapshot: string | undefined; children: React.ReactNode }) {
@@ -702,7 +708,8 @@ export function AppFrame({
           {shownPath(pageState.path)}
         </span>
       ) : null}
-      <span>{`${viewport.width} × ${viewport.height}`}</span>
+      {/* 3c (S92): with design live on, the device button names the size instead. */}
+      {designLive ? null : <span>{`${viewport.width} × ${viewport.height}`}</span>}
       {pageState.error ? <ErrorLabel error={pageState.error} /> : null}
       <BlockedLabel {...events} />
     </>
@@ -874,7 +881,7 @@ export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
         onLeave={() => canvas.leave(id)}
         onOpenInBrowser={canvas.openInBrowser}
         titleSlot={<FrameTitle frame={frame} />}
-        actions={<FrameActions frame={frame} />}
+        actions={<FrameActions frame={frame} compact={frame.w < APP_COMPACT_HEADER_PX} />}
         ruler={designLive ? ruler : undefined}
       />
       {designLive ? (

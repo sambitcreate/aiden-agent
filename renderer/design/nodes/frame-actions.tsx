@@ -2,7 +2,8 @@
 // full window and Download. Download saves a PNG, a PDF or the original file;
 // the PDF's paper and layout are set in the same menu and kept on the frame.
 // A live app frame (Phase 3a, D16) has a Dark switch and Download (PNG or
-// PDF) only: no full window, no paper or layout, no original file.
+// PDF) only: no full window, no paper or layout, no original file. With
+// design live on (3c, S92), its device button comes first.
 
 import { Download, Maximize2, Moon } from "lucide-react";
 import * as React from "react";
@@ -17,6 +18,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../components/ui";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { AppDeviceMenu } from "../app-frame-menus";
 import { designExportFormats, type DesignExportFormat } from "../../shared/design-canvas/frame-export";
 import type { DesignFrame, DesignPaper, DesignPrintMode } from "../../shared/design-canvas/schema";
 import { useDesignNodeContext } from "./design-node-context";
@@ -27,8 +30,9 @@ const FORMAT_LABELS: Readonly<Record<DesignExportFormat, string>> = {
   source: "Original file",
 };
 
-export function FrameActions({ frame }: { frame: DesignFrame }) {
+export function FrameActions({ frame, compact = false }: { frame: DesignFrame; /** A narrow frame's header (3c). */ compact?: boolean }) {
   const canvas = useDesignNodeContext();
+  const { designLive } = useAppCapabilities();
   const formats = designExportFormats(frame);
   const app = frame.kind === "app";
   const pdf = formats.includes("pdf") && !app;
@@ -38,6 +42,7 @@ export function FrameActions({ frame }: { frame: DesignFrame }) {
   const stop = (event: React.SyntheticEvent) => event.stopPropagation();
   return (
     <div className="flex items-center gap-0.5" onDoubleClick={stop} onPointerDown={stop}>
+      {app && designLive ? <AppDeviceMenu frame={frame} compact={compact} onViewport={(viewport) => canvas.setViewport(frame.id, viewport)} /> : null}
       {app ? (
         <Button
           iconOnly

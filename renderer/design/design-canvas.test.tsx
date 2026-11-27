@@ -1053,3 +1053,40 @@ test("3c: a new resize started before the timer fires keeps its mode", async () 
   await nextTask();
   assert.equal(ruler(), null);
 });
+
+// ── 3c: the device menu (S92) ──
+
+async function chooseDevice(name: RegExp | string) {
+  const trigger = screen.getByRole("button", { name: /^Viewport/u });
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+  fireEvent.click(await screen.findByRole("menuitemradio", { name }));
+}
+
+test("3c: choosing iPad sets 768 × 1024, keeps the scale, and ⌘Z puts it back", async () => {
+  const { saved, region } = await mountLiveApp(canvasWith(liveAppFrame()));
+  await chooseDevice(/iPad/u);
+  await waitFor(() => {
+    const app = saved()?.frames.find((frame) => frame.id === "app-1");
+    assert.deepEqual(app?.viewport, { width: 768, height: 1024 });
+    assert.equal(app?.scale, 0.5);
+    assert.deepEqual({ w: app?.w, h: app?.h }, { w: 384, h: 548 });
+  }, SAVE_WAIT);
+  region.focus();
+  fireEvent.keyDown(region, { key: "z", code: "KeyZ", ...commandKey });
+  await waitFor(() => assert.deepEqual(saved()?.frames.find((frame) => frame.id === "app-1")?.viewport, { width: 1280, height: 800 }), SAVE_WAIT);
+});
+
+test("3c: a grouped frame changed to Desktop still fits its group", async () => {
+  const group: DesignFrame = { id: "g", kind: "group", title: "Set", pageId: "page-1", x: -32, y: -48, w: 704, h: 516, createdBy: "person" };
+  const { saved } = await mountLiveApp(canvasWith(group, liveAppFrame({ groupId: "g" })));
+  await chooseDevice(/Desktop/u);
+  await waitFor(() => {
+    const doc = saved();
+    const app = doc?.frames.find((frame) => frame.id === "app-1");
+    const box = doc?.frames.find((frame) => frame.id === "g");
+    assert.deepEqual(app?.viewport, { width: 1440, height: 900 });
+    assert.ok(app && box);
+    assert.ok(box.x <= app.x && app.x + app.w <= box.x + box.w, "the group holds the wider frame");
+    assert.ok(box.y <= app.y && app.y + app.h <= box.y + box.h, "and the taller one");
+  }, SAVE_WAIT);
+});

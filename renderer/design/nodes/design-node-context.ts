@@ -94,6 +94,8 @@ export type DesignNodeContextValue = {
   resizeStart(id: string, mode: AppResizeMode): void;
   /** The live app frame being resized, and by which control, until the resize ends. */
   activeResize: { frameId: string; side: AppResizeMode } | null;
+  /** 3c (S92): shows a live app frame at another viewport, keeping its scale; one undo step. */
+  setViewport(id: string, viewport: { width: number; height: number }): void;
 };
 
 export const DesignNodeContext = React.createContext<DesignNodeContextValue | null>(null);

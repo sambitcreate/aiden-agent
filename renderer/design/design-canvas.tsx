@@ -13,11 +13,12 @@ import { noteDesignCanvasView } from "../lib/design-mode";
 import { browserApi, designCanvasApi } from "../lib/ipc";
 import { addPage, deletePage, duplicatePage, movePage, renamePage } from "../shared/design-canvas/pages";
 import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
-import type { AppResizeMode } from "../shared/design-canvas/app-frame";
+import { withAppViewport, type AppResizeMode } from "../shared/design-canvas/app-frame";
+import { refitGroups } from "../shared/design-canvas/placement";
 import type { DesignExportFormat } from "../shared/design-canvas/frame-export";
 import { presentationOrder } from "../shared/design-canvas/presentation";
 import { containerAt, regroupFrames } from "../shared/design-canvas/drawing";
-import { framesOnPage, isDesignContainer } from "../shared/design-canvas/schema";
+import { DESIGN_CANVAS_LIMITS, framesOnPage, isDesignContainer } from "../shared/design-canvas/schema";
 import type { DesignCanvas as CanvasDocument, DesignConnectorEnd, DesignFrame } from "../shared/design-canvas/schema";
 import {
   applyNodeChanges,
@@ -230,6 +231,20 @@ function LoadedDesignCanvas({
   const resizeModes = React.useRef(new Map<string, AppResizeMode>());
   const resizeGeneration = React.useRef(0);
   const [activeResize, setActiveResize] = React.useState<{ frameId: string; side: AppResizeMode } | null>(null);
+  // 3c (S92): a device or typed size keeps the frame's scale (refitted to the box limit) and refits its group.
+  const setAppViewport = React.useCallback(
+    (id: string, size: { width: number; height: number }) =>
+      change((current) => {
+        const frame = current.frames.find((entry) => entry.id === id && entry.kind === "app");
+        if (!frame || frame.locked) return current;
+        const next = withAppViewport(frame, size, DESIGN_CANVAS_LIMITS.maxSize);
+        const own = frame.viewport;
+        if (own?.width === next.viewport.width && own.height === next.viewport.height && frame.scale === next.scale) return current;
+        const frames = current.frames.map((entry) => (entry.id === id ? { ...entry, ...next } : entry));
+        return refitGroups(syncConnectors({ ...current, frames }), [frame.groupId]);
+      }),
+    [change],
+  );
   const resizeStart = React.useCallback((id: string, mode: AppResizeMode) => {
     resizeModes.current.set(id, mode);
     resizeGeneration.current += 1;
@@ -1287,6 +1302,7 @@ function LoadedDesignCanvas({
       rename: setRenaming,
       resizeStart,
       activeResize,
+      setViewport: setAppViewport,
       moveEnd,
       editing,
       edit: setEditing,
@@ -1318,6 +1334,7 @@ function LoadedDesignCanvas({
       renaming,
       resizeStart,
       activeResize,
+      setAppViewport,
       moveEnd,
       editing,
       comments.commentOn,
