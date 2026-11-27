@@ -41,6 +41,8 @@ beforeEach(() => {
     chat("guide", "docs", 25),
   ];
   installBotTestIpc({
+    "settings:get": () => null,
+    "shortcut:get": () => null,
     "workspaces:list": () => workspaces,
     "chats:list": () => chats,
     "browser:link-preference": () => "ask",

@@ -350,7 +350,7 @@ These changes are test-only and should land as a separate PR from production ref
 | F14.1 | `deferred<T>()` for 55 sites | 310 | V |
 | F14.3 | Temp-dir helper + fresh per-caller registry (exclude realpath + `/tmp` alias test) | 145 | P |
 | F14.2 | `MemoryPersistence<T>` for 12 suites | 115 | V |
-| F14.5 | `TEST_WORKSPACE`, `createTestQueryClient`, `settle`, 53 IPC defaults | 95 | V |
+| F14.5 | `TEST_WORKSPACE`, `createTestQueryClient`, `settle` (IPC defaults dropped in review: a `null` default for `shortcut:get` broke Quick Chat tests, and `settings:get`/`app:renderer-ready` defaults silently turned rejections into `null` in ~50 untouched suites) | 55 | P |
 | F14.11 | 5 shared DOM doubles/fixtures (modelOption not in test-dom) | 90 | P |
 | F14.4 | One `FakeTimers` for 5 suites | 80 | V |
 | F14.6 | Web-search adapter support with explicit `maxBytes`/request args | 70 | P |

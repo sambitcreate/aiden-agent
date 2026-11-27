@@ -44,6 +44,7 @@ beforeEach(() => {
     return server;
   };
   installBotTestIpc({
+    "shortcut:get": () => null,
     "workspaces:list": () => [WORKSPACE],
     "chats:get": () => ({
       chat: server,

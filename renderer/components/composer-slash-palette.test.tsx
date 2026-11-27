@@ -23,6 +23,9 @@ beforeEach(() => {
   localStorage.clear();
   sends = [];
   installBotTestIpc({
+    "settings:get": () => null,
+    "app:renderer-ready": () => null,
+    "shortcut:get": () => null,
     "pullRequests:list": () => [],
     "pullRequests:current": () => null,
     "pullRequests:pending": () => [],

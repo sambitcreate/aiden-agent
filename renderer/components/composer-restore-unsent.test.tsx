@@ -29,7 +29,7 @@ const NOTES: Attachment = {
 
 beforeEach(() => {
   localStorage.clear();
-  installBotTestIpc();
+  installBotTestIpc({ "settings:get": () => null, "app:renderer-ready": () => null, "shortcut:get": () => null });
   queryClient = createTestQueryClient();
 });
 

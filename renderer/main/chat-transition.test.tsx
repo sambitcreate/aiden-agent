@@ -71,6 +71,9 @@ async function mountRoutedChatPane(
   const { router, queryClient } = await import("./router");
 
   installBotTestIpc({
+    "settings:get": () => null,
+    "app:renderer-ready": () => null,
+    "shortcut:get": () => null,
     "chats:get": (id) => chatReadResponse(String(id)),
     "chats:list": () => [],
     "chats:markRead": () => true,

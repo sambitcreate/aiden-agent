@@ -159,7 +159,7 @@ test("Esc closes the bar and gives focus back to what had it", async () => {
 });
 
 test("⌘F's bar closes on leaving the chat and stays closed on coming back", async () => {
-  installBotTestIpc();
+  installBotTestIpc({ "settings:get": () => null, "app:renderer-ready": () => null, "shortcut:get": () => null });
   const queryClient = createTestQueryClient();
   let run: (commandId: CommandId) => boolean = () => false;
   function Pane({ chatId }: { chatId: string }) {

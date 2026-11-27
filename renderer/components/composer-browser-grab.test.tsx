@@ -95,6 +95,9 @@ beforeEach(() => {
   calls = [];
   rejectSend = null;
   installBotTestIpc({
+    "settings:get": () => null,
+    "app:renderer-ready": () => null,
+    "shortcut:get": () => null,
     "pullRequests:list": () => ({ links: [] }),
     "pullRequests:current": () => null,
     "pullRequests:pending": () => [],

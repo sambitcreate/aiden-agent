@@ -46,6 +46,9 @@ function chat(messages: ChatMessage[], extra: Partial<Chat> = {}): Chat {
 beforeEach(() => {
   localStorage.clear();
   installBotTestIpc({
+    "settings:get": () => null,
+    "app:renderer-ready": () => null,
+    "shortcut:get": () => null,
     "workspaces:files": () => ({
       entries: [{ path: "README.md", name: "README.md", parentPath: "", depth: 0, kind: "file" }],
       truncated: false,

@@ -73,6 +73,7 @@ beforeEach(() => {
     hasRemote: true,
   };
   calls = installBotTestIpc({
+    "settings:get": () => null,
     // A managed worktree has its own branch checked out.
     "git:branches": (workspaceId) =>
       String(workspaceId).startsWith("wt-")

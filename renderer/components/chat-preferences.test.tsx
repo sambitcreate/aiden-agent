@@ -22,7 +22,7 @@ function preference(mode: BusySendPreference) {
 beforeEach(() => {
   localStorage.clear();
   sent = [];
-  installBotTestIpc();
+  installBotTestIpc({ "settings:get": () => null, "app:renderer-ready": () => null, "shortcut:get": () => null });
   queryClient = createTestQueryClient();
 });
 afterEach(() => { cleanup(); queryClient.clear(); localStorage.clear(); });

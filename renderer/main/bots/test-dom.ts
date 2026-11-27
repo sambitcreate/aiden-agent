@@ -105,9 +105,6 @@ const BOT_TEST_IPC_DEFAULTS: Record<string, (...args: unknown[]) => unknown> = {
   "bots:openWork:snapshot": (input) => ({ botId: String((input as { botId?: unknown })?.botId ?? "bot-test"), revision: "empty", items: [], undo: [] }),
   "bots:connectorWatches:list": () => ({ supported: true, templates: [], watches: [] }),
   "bots:getCanonicalPhoto": () => null,
-  "settings:get": () => null,
-  "shortcut:get": () => null,
-  "app:renderer-ready": () => null,
   // The model picker reads custom connection artwork from the providers list.
   "providers:list": () => [],
   // A Bot whose browser isn't reachable: the panel shows no Browser tab.
