@@ -83,6 +83,32 @@ function formatElapsed(totalSeconds: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+function abortActiveCapture(
+  active: ActiveRecording,
+  options?: { cancelBatch?: boolean },
+): Promise<void> | undefined {
+  active.cancelled = true;
+  active.transcriptionController.abort();
+  const liveCancel = active.liveStart?.then((live) => live?.cancel()).catch(() => {});
+  if (options?.cancelBatch && active.batchOperationId && active.batchProvider) {
+    void cancelTranscription(active.batchProvider, active.batchOperationId);
+  }
+  return liveCancel;
+}
+
+function cancelDictationButton(label: string, shrink = true) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={() => void dictationApi.cancel()}
+      className={`flex size-5 ${shrink ? "shrink-0 " : ""}items-center justify-center rounded-full text-tertiary transition-colors duration-150 ease-out hover:bg-control hover:text-primary`}
+    >
+      <X className="size-3.5" />
+    </button>
+  );
+}
+
 export function PillApp() {
   const [phase, setPhase] = React.useState<Phase>("idle");
   const [errorMessage, setErrorMessage] = React.useState("");
@@ -401,9 +427,7 @@ export function PillApp() {
         pendingRecorder = null;
         operationGateRef.current.finishStart(token);
         if (!operationGateRef.current.isCurrent(token)) {
-          active.cancelled = true;
-          active.transcriptionController.abort();
-          void active.liveStart?.then((live) => live?.cancel()).catch(() => {});
+          void abortActiveCapture(active);
           if (active.recorder.state !== "inactive") active.recorder.stop();
           else releaseRecording(active);
           return;
@@ -435,9 +459,7 @@ export function PillApp() {
       } catch (error) {
         const active = recordingRef.current;
         if (active) {
-          active.cancelled = true;
-          active.transcriptionController.abort();
-          await active.liveStart?.then((live) => live?.cancel()).catch(() => {});
+          await abortActiveCapture(active);
           if (active.recorder.state !== "inactive") active.recorder.stop();
           releaseRecording(active);
         }
@@ -472,12 +494,7 @@ export function PillApp() {
     clearStopTimer();
     const active = recordingRef.current;
     if (active) {
-      active.cancelled = true;
-      active.transcriptionController.abort();
-      void active.liveStart?.then((live) => live?.cancel()).catch(() => {});
-      if (active.batchOperationId && active.batchProvider) {
-        void cancelTranscription(active.batchProvider, active.batchOperationId);
-      }
+      void abortActiveCapture(active, { cancelBatch: true });
       if (active.recorder.state !== "inactive") active.recorder.stop();
       else releaseRecording(active);
     }
@@ -485,12 +502,7 @@ export function PillApp() {
     if (active) endSlowLoad(active);
     if (transcribing) endSlowLoad(transcribing);
     if (transcribing && transcribing !== active) {
-      transcribing.cancelled = true;
-      transcribing.transcriptionController.abort();
-      void transcribing.liveStart?.then((live) => live?.cancel()).catch(() => {});
-      if (transcribing.batchOperationId && transcribing.batchProvider) {
-        void cancelTranscription(transcribing.batchProvider, transcribing.batchOperationId);
-      }
+      void abortActiveCapture(transcribing, { cancelBatch: true });
       transcriptionRef.current = null;
     }
     operationIdRef.current = null;
@@ -566,9 +578,7 @@ export function PillApp() {
       if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
       const active = recordingRef.current;
       if (active) {
-        active.cancelled = true;
-        active.transcriptionController.abort();
-        void active.liveStart?.then((live) => live?.cancel()).catch(() => {});
+        void abortActiveCapture(active);
         if (!(active.recorder instanceof PcmRecorder)) active.recorder.ondataavailable = null;
         active.recorder.onstop = null;
         if (active.recorder.state !== "inactive") active.recorder.stop();
@@ -576,12 +586,7 @@ export function PillApp() {
       }
       const transcribing = transcriptionRef.current;
       if (transcribing) {
-        transcribing.cancelled = true;
-        transcribing.transcriptionController.abort();
-        void transcribing.liveStart?.then((live) => live?.cancel()).catch(() => {});
-        if (transcribing.batchOperationId && transcribing.batchProvider) {
-          void cancelTranscription(transcribing.batchProvider, transcribing.batchOperationId);
-        }
+        void abortActiveCapture(transcribing, { cancelBatch: true });
       }
     },
     [recordedRetryConsent, releaseRecording],
@@ -621,14 +626,7 @@ export function PillApp() {
               <span className="text-mini tabular-nums text-secondary">
                 {formatElapsed(elapsed)}
               </span>
-              <button
-                type="button"
-                aria-label="Cancel dictation"
-                onClick={() => void dictationApi.cancel()}
-                className="flex size-5 items-center justify-center rounded-full text-tertiary transition-colors duration-150 ease-out hover:bg-control hover:text-primary"
-              >
-                <X className="size-3.5" />
-              </button>
+              {cancelDictationButton("Cancel dictation", false)}
             </>
           ) : phase === "fallback-consent" ? (
             <>
@@ -642,14 +640,7 @@ export function PillApp() {
               >
                 Retry
               </button>
-              <button
-                type="button"
-                aria-label="Cancel paid Gemini retry"
-                onClick={() => void dictationApi.cancel()}
-                className="flex size-5 shrink-0 items-center justify-center rounded-full text-tertiary transition-colors duration-150 ease-out hover:bg-control hover:text-primary"
-              >
-                <X className="size-3.5" />
-              </button>
+              {cancelDictationButton("Cancel paid Gemini retry")}
             </>
           ) : phase === "finalizing" || phase === "fallback" || phase === "delivering" ? (
             <>
@@ -663,14 +654,7 @@ export function PillApp() {
                     ? "Retrying with recorded audio…"
                     : "Pasting…"}
               </span>
-              <button
-                type="button"
-                aria-label="Cancel dictation"
-                onClick={() => void dictationApi.cancel()}
-                className="flex size-5 shrink-0 items-center justify-center rounded-full text-tertiary transition-colors duration-150 ease-out hover:bg-control hover:text-primary"
-              >
-                <X className="size-3.5" />
-              </button>
+              {cancelDictationButton("Cancel dictation")}
             </>
           ) : phase === "pasted" ? (
             <>
