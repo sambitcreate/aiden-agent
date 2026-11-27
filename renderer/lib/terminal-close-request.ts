@@ -19,7 +19,8 @@ interface Options {
  * first otherwise. The check can take a moment while the main process watches
  * a busy shell, so a second click on the same tab waits for the first, and only
  * the latest click's answer counts. An earlier, slower answer about another tab
- * must not replace the open question or close a terminal behind it.
+ * must not replace the open question or close a terminal behind it, and an
+ * answer that arrives after the drawer went away does nothing.
  */
 export function useTerminalCloseRequest({ sessionIds, foregroundCommand, close }: Options) {
   const [request, setRequest] = React.useState<TerminalCloseRequest | null>(null);
@@ -28,19 +29,28 @@ export function useTerminalCloseRequest({ sessionIds, foregroundCommand, close }
   sessionIdsRef.current = sessionIds;
   const pendingRef = React.useRef(pending);
   pendingRef.current = pending;
-  const checkingRef = React.useRef(new Set<string>());
+  /** The latest click's check while it runs; an older one can no longer count. */
+  const checkingRef = React.useRef<{ id: string; generation: number } | null>(null);
   const generationRef = React.useRef(0);
+  React.useEffect(
+    () => () => {
+      generationRef.current += 1;
+    },
+    [],
+  );
 
   const requestClose = React.useCallback(
     async (id: string, label: string) => {
-      if (checkingRef.current.has(id) || pendingRef.current?.id === id) return;
-      checkingRef.current.add(id);
+      const checking = checkingRef.current;
+      if (checking?.id === id && checking.generation === generationRef.current) return;
+      if (pendingRef.current?.id === id) return;
       const generation = ++generationRef.current;
+      checkingRef.current = { id, generation };
       let command: string | null;
       try {
         command = await foregroundCommand(id).catch(() => null);
       } finally {
-        checkingRef.current.delete(id);
+        if (checkingRef.current?.generation === generation) checkingRef.current = null;
       }
       if (generation !== generationRef.current || !sessionIdsRef.current.includes(id)) return;
       if (command) setRequest({ id, label, command });

@@ -114,3 +114,32 @@ test("a failed check closes the terminal, as there is no program to protect", as
   });
   assert.deepEqual(closed, ["t1"]);
 });
+
+test("a check still running when the drawer goes away closes nothing and asks nothing", async () => {
+  const { hook, checks, closed, request } = harness();
+  await request("t1");
+  await request("t2");
+  hook.unmount();
+  await act(async () => {
+    checks[0]!.resolve(null);
+    checks[1]!.reject(new Error("Terminal session is unavailable."));
+  });
+  assert.deepEqual(closed, []);
+});
+
+test("clicking a tab again after a newer click superseded its check starts a fresh check", async () => {
+  const { hook, checks, closed, answer, request } = harness();
+  await request("t1");
+  await request("t2");
+  await answer(1, null);
+  assert.deepEqual(closed, ["t2"]);
+  hook.rerender({ sessionIds: ["t1"] });
+
+  // Terminal 1's first check is still out but can no longer count; this click must.
+  await request("t1");
+  assert.equal(checks.length, 3);
+  await answer(0, null);
+  assert.deepEqual(closed, ["t2"]);
+  await answer(2, "sleep");
+  assert.deepEqual(hook.result.current.pending, { id: "t1", label: "Terminal 1", command: "sleep" });
+});
