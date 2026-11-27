@@ -72,24 +72,16 @@ final class AidenBotOpenWorkModel {
          store: AidenBotOpenWorkDraftStore? = nil, scope: AidenBotOpenWorkDraftStore.Scope? = nil) {
         self.botID = botID; self.transport = transport; self.isCurrent = isCurrent; self.mayWrite = mayWrite
         self.store = store; self.scope = scope
-        var retained: AidenBotOpenWorkDraftStore.State?
-        var readFailed = false
-        var readErrorMessage: String?
-        if let store, let scope {
-            do { retained = try store.load(scope) }
-            catch {
-                readFailed = true
-                readErrorMessage = "This phone couldn’t read its saved Open work request. Inspect the computer before making changes."
-            }
-        }
-        self.mutation = AidenDurablePendingMutation(
-            restoredAttempt: retained?.attempt,
-            storageReadFailed: readFailed
+        let restored = aidenRestoreBotControl(
+            load: { try store.flatMap { s in try scope.flatMap { try s.load($0) } } },
+            attempt: { $0.attempt },
+            readErrorMessage: "This phone couldn’t read its saved Open work request. Inspect the computer before making changes."
         )
-        if let retained {
+        self.mutation = restored.mutation
+        if let retained = restored.state {
             baseline = retained.baseline; draftRevision = retained.draftRevision; draft = retained.draft
         }
-        if let readErrorMessage { message = readErrorMessage }
+        if let readErrorMessage = restored.message { message = readErrorMessage }
         isRestoring = false
     }
 

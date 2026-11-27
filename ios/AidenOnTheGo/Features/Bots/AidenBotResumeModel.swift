@@ -48,22 +48,17 @@ final class AidenBotResumeModel {
         self.botID = botID; self.transport = transport; self.mayResume = mayResume; self.version = version; self.store = store; self.scope = scope
         let generation = scope.flatMap { store?.generation(for: $0) }
         self.storageGeneration = generation
-        var restored: AidenBotResumeAttempt?
-        var readFailed = false
-        var readErrorMessage: String?
-        if let store, let scope {
-            do { restored = try store.load(scope)?.resume }
-            catch { readFailed = true; readErrorMessage = "This phone couldn’t recover its earlier Resume request. Inspect the computer before resuming." }
-        }
-        self.mutation = AidenDurablePendingMutation(
-            restoredAttempt: restored,
-            storageReadFailed: readFailed,
+        let restored = aidenRestoreBotControl(
+            load: { try store.flatMap { s in try scope.flatMap { try s.load($0) } } },
+            attempt: { $0.resume },
             storageGeneration: generation,
             currentStorageGeneration: scope.flatMap { capturedScope in
                 store.map { capturedStore in { capturedStore.generation(for: capturedScope) } }
-            }
+            },
+            readErrorMessage: "This phone couldn’t recover its earlier Resume request. Inspect the computer before resuming."
         )
-        if let readErrorMessage { self.message = readErrorMessage }
+        self.mutation = restored.mutation
+        if let readErrorMessage = restored.message { self.message = readErrorMessage }
     }
 
     /// Resume authority belongs to one visible, active visit. Backgrounding

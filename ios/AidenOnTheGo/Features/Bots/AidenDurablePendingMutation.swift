@@ -356,3 +356,29 @@ struct AidenDurablePendingMutation<Attempt: AidenDurablePendingAttempt> {
         }
     }
 }
+
+@MainActor
+func aidenRestoreBotControl<State, Attempt: AidenDurablePendingAttempt>(
+    load: () throws -> State?,
+    attempt: (State) -> Attempt?,
+    storageGeneration: String? = nil,
+    currentStorageGeneration: (@MainActor () -> String?)? = nil,
+    readErrorMessage: String
+) -> (state: State?, mutation: AidenDurablePendingMutation<Attempt>, message: String?) {
+    var state: State?
+    var readFailed = false
+    var message: String?
+    do {
+        state = try load()
+    } catch {
+        readFailed = true
+        message = readErrorMessage
+    }
+    let mutation = AidenDurablePendingMutation(
+        restoredAttempt: state.flatMap(attempt),
+        storageReadFailed: readFailed,
+        storageGeneration: storageGeneration,
+        currentStorageGeneration: currentStorageGeneration
+    )
+    return (state: state, mutation: mutation, message: message)
+}
