@@ -45,6 +45,14 @@ const DEFAULT_CACHE_ENTRIES = 64;
 const SNAPSHOT_CACHE_ENTRIES = 4_096;
 const KILL_GRACE_MS = 750;
 const MANAGED_STATUS_PATH_LIMIT = 4_096;
+const MANAGED_STATUS_ARGS = [
+  "status",
+  "--porcelain=v2",
+  "--branch",
+  "-z",
+  "--untracked-files=all",
+  "--ignored=matching",
+] as const;
 const WORKTREE_OWNER_MARKER = "aiden-owner";
 const WORKTREE_OWNER_TOKEN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -6617,12 +6625,7 @@ export class GitService {
           await this.run(repo.cwd, [
             `--git-dir=${activeGitDir}`,
             `--work-tree=${checkoutRemovalPath!}`,
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
+            ...MANAGED_STATUS_ARGS,
           ])
         ).stdout,
       );
@@ -6750,12 +6753,7 @@ export class GitService {
                 await this.run(repo.cwd, [
                   `--git-dir=${adminRemovalPath!}`,
                   `--work-tree=${scannedPath}`,
-                  "status",
-                  "--porcelain=v2",
-                  "--branch",
-                  "-z",
-                  "--untracked-files=all",
-                  "--ignored=matching",
+                  ...MANAGED_STATUS_ARGS,
                 ])
               ).stdout,
             );
@@ -6991,14 +6989,7 @@ export class GitService {
     try {
       const status = parseGitStatus(
         (
-          await this.run(worktreePath, [
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
-          ])
+          await this.run(worktreePath, [...MANAGED_STATUS_ARGS])
         ).stdout,
       );
       let unknownIgnored = status.ignored > status.ignoredPaths.length;
@@ -7430,14 +7421,7 @@ export class GitService {
           }
           const status = parseGitStatus(
             (
-              await this.run(worktreePath, [
-                "status",
-                "--porcelain=v2",
-                "--branch",
-                "-z",
-                "--untracked-files=all",
-                "--ignored=matching",
-              ])
+              await this.run(worktreePath, [...MANAGED_STATUS_ARGS])
             ).stdout,
           );
           const blocked = await this.managedWorktreeDeletionBlocked(
@@ -7871,14 +7855,7 @@ export class GitService {
     await this.requireRepository(await this.repository(cwd));
     const [head, status] = await Promise.all([
       this.run(worktreePath, ["rev-parse", "--verify", "HEAD"]),
-      this.run(worktreePath, [
-        "status",
-        "--porcelain=v2",
-        "--branch",
-        "-z",
-        "--untracked-files=all",
-        "--ignored=matching",
-      ]),
+      this.run(worktreePath, [...MANAGED_STATUS_ARGS]),
     ]);
     const parsed = parseGitStatus(status.stdout);
     return {
