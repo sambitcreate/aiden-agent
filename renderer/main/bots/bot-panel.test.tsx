@@ -1,4 +1,4 @@
-import { emitBotTestNotification, installBotTestIpc } from "./test-dom";
+import { botPanel, emitBotTestNotification, installBotTestIpc } from "./test-dom";
 // Before anything loads react-dom, so React reports its commits to the probe.
 import { countRenders } from "./test-render-probe";
 import assert from "node:assert/strict";
@@ -620,12 +620,6 @@ async function mountBotChat(handlers: Record<string, (...args: unknown[]) => unk
   return { calls, ...mounted };
 }
 
-// A closed panel is aria-hidden, which leaves it without an accessible name; find it by its id.
-const botPanel = (): HTMLElement => {
-  const panel = document.getElementById("bot-panel");
-  assert.ok(panel, "the Bot panel is mounted");
-  return panel;
-};
 const panelTab = (name: string) => within(botPanel()).getByRole("tab", { name });
 
 test("the panel toggle opens the Bot panel with only Bot tabs, focused on the selected tab, and Close gives focus back", async () => {

@@ -4,29 +4,14 @@ import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotChatRoute } from "../bot-chat-route";
 import { mountWithBotRouter } from "./test-providers";
-import { botFixture } from "./test-fixtures";
-import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
+import { botFixture, botLiveSnapshotFixture as snapshot } from "./test-fixtures";
+import type { BotTranscriptEntry } from "../../shared/bot-live";
 import type { BotSessionState } from "./bot-session-state";
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
 
 const PAUSED: BotSessionState = { kind: "paused", since: 1_000, by: "mac" };
-
-function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
-  return {
-    botId: "bot-1",
-    epoch: "epoch-1",
-    seq: 0,
-    entries: [],
-    partial: null,
-    state: { kind: "idle" },
-    question: null,
-    activity: null,
-    queued: [],
-    ...overrides,
-  };
-}
 
 async function mountChat(handlers: Record<string, (...args: unknown[]) => unknown>) {
   const calls = installBotTestIpc({ "bots:get": () => botFixture(), ...handlers });

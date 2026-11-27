@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { DOMImplementation } from "@xmldom/xmldom";
 import * as React from "react";
+import { renderApprovalCard } from "./approval-test-support.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import type {
   SubagentMessageReferenceV1,
@@ -57,8 +58,6 @@ import { SubagentEventProjector } from "../../main/services/subagents/subagent-e
 import { CopyButton } from "./copy-button.js";
 import { SubagentsPanel } from "./subagents-panel.js";
 import { SubagentWorkspaceWriteApproval } from "./subagent-workspace-write-approval.js";
-import { ChatApprovalCard } from "./chat-approval-card.js";
-import type { ApprovalPrompt } from "../lib/ipc.js";
 import {
   SubagentMcpMutationApproval,
   subagentMcpMutationAllowLabel,
@@ -432,27 +431,6 @@ function MountedLiveAnnouncerHarness({
   );
 }
 
-
-function renderApprovalCard(details: unknown, prompt: Partial<ApprovalPrompt> = {}): { markup: string; buttons: string[] } {
-  const markup = renderToStaticMarkup(
-    <ChatApprovalCard
-      pending={{
-        approvalId: "approval-1",
-        toolCallId: "call-1",
-        toolName: "run_command",
-        summary: "summary",
-        details: details as ApprovalPrompt["details"],
-        ...prompt,
-      }}
-      deciding={false}
-      onDecide={() => {}}
-    />,
-  );
-  const buttons = [...markup.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/gu)].map((match) =>
-    (match[1] ?? "").replace(/<[^>]+>/gu, "").trim(),
-  );
-  return { markup, buttons };
-}
 
 test("subagent chips are accessible buttons with live or frozen activity marks", () => {
   const runs = [

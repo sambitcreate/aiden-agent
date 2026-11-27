@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { BotLiveEvent, BotLiveSnapshot } from "../../renderer/shared/bot-live.js";
+import type { BotLiveEvent } from "../../renderer/shared/bot-live.js";
+import { botLiveSnapshotFixture } from "../../renderer/main/bots/test-fixtures.js";
 import type { BotLiveProjection, BotLiveSink } from "../services/bot-runtime/live-projection.js";
 import { isBotChatInFront, registerBotLiveHandlers, type BotChatFrontInput, type BotLiveOwner } from "./bot-live.js";
 
@@ -34,17 +35,7 @@ function fakeProjection() {
     async subscribe(botId, sink) {
       const id = (next += 1);
       sinks.set(id, { botId, sink });
-      const snapshot: BotLiveSnapshot = {
-        botId,
-        epoch: "e1",
-        seq: id,
-        entries: [],
-        partial: null,
-        state: { kind: "idle" },
-        question: null,
-        activity: null,
-        queued: [],
-      };
+      const snapshot = botLiveSnapshotFixture({ botId, epoch: "e1", seq: id });
       return { snapshot, unsubscribe: () => sinks.delete(id) };
     },
     notifyState: () => undefined,

@@ -1,4 +1,5 @@
 import { BOT_FULL_ACCESS_NOTICE_VERSION, type BotCapabilityCatalog } from "../../shared/bot-capabilities";
+import type { BotLiveSnapshot } from "../../shared/bot-live";
 import { DEFAULT_BOT_AVATAR, type BotDefinition } from "../../shared/bots";
 
 export function botFixture(overrides: Partial<BotDefinition> = {}): BotDefinition {
@@ -48,5 +49,20 @@ export function catalogFixture(options: { models?: boolean; accepted?: boolean }
           acceptedAt: "2026-10-01T00:00:00.000Z",
           acceptedDecision: "continue_full",
         },
+  };
+}
+
+export function botLiveSnapshotFixture(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
+  return {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 0,
+    entries: [],
+    partial: null,
+    state: { kind: "idle" },
+    question: null,
+    activity: null,
+    queued: [],
+    ...overrides,
   };
 }
