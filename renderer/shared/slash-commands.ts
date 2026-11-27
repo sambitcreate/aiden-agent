@@ -1,6 +1,7 @@
 import type { CompactionEngine } from "./compaction";
 import type { CommandId } from "./keybindings";
 import type { SettingsSection } from "./settings-section";
+import { isRecord } from "../../main/shared/guards.js";
 
 export const SLASH_LIMITS = Object.freeze({
   queryCharacters: 256,
@@ -619,10 +620,6 @@ export const SLASH_COMMANDS = Object.freeze([
     draftPolicy: "preserve",
   }),
 ] satisfies readonly SlashCommandDefinition[]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 const OPAQUE_SKILL_INVOCATION_ID = /^sk1_[A-Za-z0-9_-]{43}$/u;
 

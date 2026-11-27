@@ -10,6 +10,7 @@
 
 import { isBoundedBotText } from "./bot-capabilities.js";
 import { BOT_LOCKED_RULES } from "./bot-rules.js";
+import { isRecord } from "../../main/shared/guards.js";
 
 export const BOT_HANDOFF_TOOL_NAME = "hand_off";
 export const BOT_SIGN_IN_TOOL_NAME = "sign_in";
@@ -101,10 +102,6 @@ export interface BotHandoffResultDetails {
   toolCallId?: string;
   /** Rule entries: the rule that handed it off. */
   rule?: BotHandoffRule;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function boundedText(value: unknown, maximum: number): value is string {

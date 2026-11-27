@@ -5,9 +5,9 @@
 //   drives it through the ordinary `browser:*` channels; asking for its state
 //   from a window moves the Bot's browser into that window.
 
-export const BOT_BROWSER_WORKSPACE_CHANNEL = "bots:browser:workspace";
+import { parseBotId } from "./bot-params.js";
 
-const MAX_BOT_ID_CHARS = 160;
+export const BOT_BROWSER_WORKSPACE_CHANNEL = "bots:browser:workspace";
 
 export interface BotBrowserHandlerDependencies {
   handle(channel: string, handler: (event: unknown, ...args: unknown[]) => unknown): void;
@@ -15,16 +15,9 @@ export interface BotBrowserHandlerDependencies {
   workspace(botId: string): Promise<string | null>;
 }
 
-function botIdOf(value: unknown): string {
-  if (typeof value !== "string" || !value || value.length > MAX_BOT_ID_CHARS || !/^[A-Za-z0-9._:-]+$/u.test(value)) {
-    throw new Error("Invalid bot id.");
-  }
-  return value;
-}
-
 export function registerBotBrowserHandlers(dependencies: BotBrowserHandlerDependencies): void {
   dependencies.handle(BOT_BROWSER_WORKSPACE_CHANNEL, async (_event, botId) => {
-    const workspaceId = await dependencies.workspace(botIdOf(botId));
+    const workspaceId = await dependencies.workspace(parseBotId(botId));
     return workspaceId === null ? null : { workspaceId };
   });
 }

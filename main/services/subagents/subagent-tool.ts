@@ -14,10 +14,7 @@ import type { SubagentSupervisor } from "./subagent-supervisor.js";
 import { subagentModelKey, type SubagentModelToolOptions } from "./subagent-model-selection.js";
 import { SUBAGENT_PARENT_SECURITY_GUIDANCE } from "./role-catalog.js";
 import { GENERATION_THINKING_LEVELS } from "../../../renderer/shared/generation-thinking.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { isRecord } from "../../shared/guards.js";
 
 function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };

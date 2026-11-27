@@ -1,4 +1,5 @@
 import type { ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
+import { boundedString, hasExactKeys as exactKeys, recordOf as ownRecord } from "../shared/guards.js";
 import { capturePeerProjectRoot, assertPeerProjectRoot, createPeerProjectFile } from "./peer-project-file-io.js";
 import { peerProjectGit } from "./peer-project-source.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -40,28 +41,6 @@ export interface AidenRemoteWorkspaceProjection {
 }
 
 type WorkspaceApplicationService = ReturnType<typeof createWorkspaceApplicationService>;
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function exactKeys(
-  record: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => Object.prototype.hasOwnProperty.call(record, key)) &&
-    Object.keys(record).every((key) => allowed.has(key))
-  );
-}
-
-function boundedString(value: unknown, maximum: number): value is string {
-  return typeof value === "string" && value.length > 0 && [...value].length <= maximum;
-}
 
 function safeWorkspaceId(value: string): string {
   if (!WORKSPACE_ID_PATTERN.test(value)) {

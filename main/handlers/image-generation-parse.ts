@@ -1,7 +1,7 @@
 // Exact-shape request parsers for the imageGeneration:* channels. Anything
 // else is rejected before any store, key or network is touched.
 
-import { hasExactKeys, isRecord } from "../shared/guards.js";
+import { requirePlainShape } from "../shared/guards.js";
 import { INVALID_IMAGE_GENERATION_REQUEST } from "../services/image-generation/action.js";
 import {
   IMAGE_GENERATION_LIMITS,
@@ -19,16 +19,12 @@ function invalid(): never {
   throw new Error(INVALID_IMAGE_GENERATION_REQUEST);
 }
 
-function plain(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value)) return false;
-  const prototype: unknown = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function shape(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
-  if (!plain(value) || !hasExactKeys(value, required, optional)) invalid();
-  return value;
-}
+const shape = (
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> =>
+  requirePlainShape(value, required, optional, INVALID_IMAGE_GENERATION_REQUEST);
 
 function provider(value: unknown): ImageGenerationProviderId {
   return isImageGenerationProviderId(value) ? value : invalid();

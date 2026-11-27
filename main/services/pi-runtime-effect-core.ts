@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { types as utilTypes } from "node:util";
 import type { PiRuntimeReplayPolicy } from "./pi-runtime-tool.js";
+import { isFiniteTimestamp as timestamp } from "../shared/guards.js";
 
 export type { PiRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 
@@ -167,10 +168,6 @@ export function isSafePiRuntimeIdentity(value: unknown): value is string {
     if (code <= 0x1f || code === 0x7f) return false;
   }
   return true;
-}
-
-function timestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function nonnegativeInteger(value: unknown): value is number {

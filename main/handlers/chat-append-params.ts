@@ -1,4 +1,5 @@
 import type { Attachment } from "../services/types.js";
+import { parseUtf8BoundedString, requireAllowedKeys } from "../shared/guards.js";
 import type { SkillInvocationV1 } from "../../renderer/shared/slash-commands.js";
 import { parseSkillInvocationV1 } from "../../renderer/shared/slash-commands.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
@@ -53,58 +54,28 @@ export interface ParsedChatAppend {
   retainedBytes: number;
 }
 
-function recordWithExactKeys(
+const recordWithExactKeys = (
   value: unknown,
   allowed: ReadonlySet<string>,
   label: string,
-): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`Invalid ${label} envelope.`);
-  }
-  const record = value as Record<string, unknown>;
-  let count = 0;
-  for (const key in record) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
-    count += 1;
-    if (count > allowed.size || !allowed.has(key)) {
-      throw new Error(`Invalid ${label} fields.`);
-    }
-  }
-  return record;
-}
-
-function boundedString(
-  value: unknown,
-  label: string,
-  maxChars: number,
-  maxBytes: number,
-  optional = false,
-): { value: string | undefined; bytes: number } {
-  if (value === undefined && optional) return { value: undefined, bytes: 0 };
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > maxChars
-  ) {
-    throw new Error(`Invalid ${label}.`);
-  }
-  const bytes = Buffer.byteLength(value, "utf8");
-  if (bytes > maxBytes) throw new Error(`Invalid ${label}.`);
-  return { value, bytes };
-}
+): Record<string, unknown> =>
+  requireAllowedKeys(value, allowed, {
+    record: `Invalid ${label} envelope.`,
+    fields: `Invalid ${label} fields.`,
+  });
 
 export function parseChatAppend(
   id: unknown,
   message: unknown,
   meta: unknown,
 ): ParsedChatAppend {
-  const parsedChatId = boundedString(
+  const parsedChatId = parseUtf8BoundedString(
     id,
     "chat id",
     MAX_CHAT_ID_CHARS,
     MAX_CHAT_ID_BYTES,
   );
-  const chatId = parsedChatId.value!;
+  const chatId = parsedChatId.value;
   const messageRecord = recordWithExactKeys(
     message,
     MESSAGE_KEYS,
@@ -122,7 +93,7 @@ export function parseChatAppend(
   const { content, bytes: contentBytes } = parseChatMessageContent(
     messageRecord.content,
   );
-  const parsedMessageModel = boundedString(
+  const parsedMessageModel = parseUtf8BoundedString(
     messageRecord.model,
     "message model",
     MAX_MODEL_ID_CHARS,
@@ -150,14 +121,14 @@ export function parseChatAppend(
     return element;
   });
 
-  const parsedProviderId = boundedString(
+  const parsedProviderId = parseUtf8BoundedString(
     metaRecord.providerId,
     "provider id",
     MAX_PROVIDER_ID_CHARS,
     MAX_PROVIDER_ID_BYTES,
     true,
   );
-  const parsedMetaModel = boundedString(
+  const parsedMetaModel = parseUtf8BoundedString(
     metaRecord.model,
     "metadata model",
     MAX_MODEL_ID_CHARS,
@@ -170,13 +141,13 @@ export function parseChatAppend(
   ) {
     throw new Error("Invalid auto-title flag.");
   }
-  const parsedTurnId = boundedString(
+  const parsedTurnId = parseUtf8BoundedString(
     metaRecord.turnId,
     "chat message turn identifier",
     MAX_CHAT_ID_CHARS,
     MAX_CHAT_ID_BYTES,
   );
-  const turnId = parsedTurnId.value!;
+  const turnId = parsedTurnId.value;
   if (!isSafeSubagentIdentifier(turnId)) {
     throw new Error("Invalid chat message turn identifier.");
   }

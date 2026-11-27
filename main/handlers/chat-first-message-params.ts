@@ -1,4 +1,5 @@
 import { isDraftChatId } from "../../renderer/shared/chat-identity.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -38,14 +39,10 @@ export interface ParsedChatFirstMessage extends ParsedChatAppend {
 
 /** Project the complete untrusted envelope before retaining it across awaits. */
 export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new Error("Invalid first-message request.");
-  }
-  const record = input as Record<string, unknown>;
-  for (const key in record) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
-    if (!KEYS.has(key)) throw new Error("Invalid first-message fields.");
-  }
+  const record = requireAllowedKeys(input, KEYS, {
+    record: "Invalid first-message request.",
+    fields: "Invalid first-message fields.",
+  });
   // A dedicated UUID namespace prevents a draft from impersonating bot,
   // Assistant, scheduled, or imported chat identities.
   if (!isDraftChatId(record.draftId)) {

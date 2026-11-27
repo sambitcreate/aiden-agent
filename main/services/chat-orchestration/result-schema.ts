@@ -10,6 +10,7 @@
 
 import { createHash } from "node:crypto";
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
+import { isRecord } from "../../shared/guards.js";
 
 export const RESULT_SCHEMA_MAX_BYTES = 16 * 1024;
 /** The most a submitted result may weigh, as JSON. */
@@ -29,10 +30,6 @@ export const RESULT_CHECK_MAX_WORK = 1_000_000;
 const STRING_CHARS_PER_UNIT = 64;
 
 export type ResultSchemaCheck = { ok: true; validate: ValidateFunction; cost: number } | { ok: false; error: string };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function byteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");

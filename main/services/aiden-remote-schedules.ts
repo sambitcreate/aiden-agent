@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { hasExactKeys as exactKeys, recordOf as ownRecord } from "../shared/guards.js";
 import { redactCredentialTokens } from "../shared/redaction.js";
 import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
@@ -54,22 +55,6 @@ export interface AidenRemoteScheduledTaskProjection {
   lastResult?: string;
   createdAt: string;
   updatedAt: string;
-}
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function exactKeys(
-  record: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return required.every((key) => Object.prototype.hasOwnProperty.call(record, key))
-    && Object.keys(record).every((key) => allowed.has(key));
 }
 
 function boundedString(value: unknown, maximum: number): value is string {

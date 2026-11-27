@@ -14,6 +14,7 @@ import type { McpConfigurationLease } from "./mcp-config-lease.js";
 import type { McpServer } from "./types.js";
 import { mcpResourceImages } from "./mcp-tool-result.js";
 import { truncateMiddle } from "./tool-output-context.js";
+import { isRecord } from "../shared/guards.js";
 
 export const MCP_RESOURCE_LIMITS = Object.freeze({ pages: 4, entries: 128, bytes: 32_000, field: 2048 });
 type ListParams = { cursor?: string } | undefined;
@@ -22,10 +23,6 @@ type ResourceClient = {
   listResourceTemplates(params: ListParams, options?: McpCallOptions): Promise<{ resourceTemplates: readonly Pick<ResourceTemplate, "name" | "uriTemplate">[]; nextCursor?: string | null }>;
   readResource(params: { uri: string }, options?: McpCallOptions): Promise<ReadResourceResult>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 /** One page of a list: the items under `key`; a `null` or empty `nextCursor` ends the list. */
 function listPage(method: string, key: string, value: unknown, isItem: (item: Record<string, unknown>) => boolean) {

@@ -7,6 +7,8 @@
  * resolution type exported from this module.
  */
 
+import { isRecord } from "../shared/guards.js";
+
 export const BOT_MANAGED_WORKSPACE_VERSION = 2 as const;
 export const BOT_MANAGED_WORKSPACE_LIMIT = 256;
 export const BOT_MANAGED_IDENTIFIER_CHARS = 160;
@@ -125,10 +127,6 @@ export class BotManagedWorkspaceRollbackError extends Error {
   ) {
     super(message);
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

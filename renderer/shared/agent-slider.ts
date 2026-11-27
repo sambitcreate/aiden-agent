@@ -10,6 +10,7 @@ import {
   type GenerationThinkingLevel,
 } from "./generation-thinking.js";
 import { isModelHidden, type HiddenModelsByProvider } from "./model-visibility.js";
+import { isRecord } from "../../main/shared/guards.js";
 
 export const AGENT_SLIDER_MIN_STOPS = 3;
 export const AGENT_SLIDER_MAX_STOPS = 7;
@@ -46,10 +47,6 @@ function isForbiddenLabelCodePoint(codePoint: number): boolean {
     (codePoint >= 0x202a && codePoint <= 0x202e) ||
     (codePoint >= 0x2066 && codePoint <= 0x2069)
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export type AgentSliderLabelProblem = "empty" | "too-long" | "control-characters";

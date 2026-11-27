@@ -70,6 +70,7 @@ import {
   isChatSummaryRevision,
   newChatSummaryRevision,
 } from "./chat-summary-revision.js";
+import { hasOwn, isRecord } from "../shared/guards.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
@@ -856,59 +857,34 @@ export function createChatStore(
       if (policy !== "pure") await quarantinePayload(id, policy);
       return null;
     }
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      Object.prototype.hasOwnProperty.call(parsed, "forkedFrom")
-    ) {
+    const record = isRecord(parsed) ? parsed : undefined;
+    if (record && hasOwn(record, "forkedFrom")) {
       // Lineage is display-only provenance: a damaged value is dropped rather
       // than hiding the whole transcript.
-      const record = parsed as Record<string, unknown>;
       const lineage = parseChatForkLineageV1(record.forkedFrom);
       if (lineage) record.forkedFrom = lineage;
       else delete record.forkedFrom;
     }
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      Object.prototype.hasOwnProperty.call(parsed, "startedBy")
-    ) {
+    if (record && hasOwn(record, "startedBy")) {
       // Like fork lineage: a damaged "started by" is dropped, never the transcript.
-      const record = parsed as Record<string, unknown>;
       const startedBy = parseChatStartedByV1(record.startedBy);
       if (startedBy) record.startedBy = startedBy;
       else delete record.startedBy;
     }
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      Object.prototype.hasOwnProperty.call(parsed, "ephemeral") &&
-      (parsed as Record<string, unknown>).ephemeral !== true
-    ) {
-      delete (parsed as Record<string, unknown>).ephemeral;
+    if (record && hasOwn(record, "ephemeral") && record.ephemeral !== true) {
+      delete record.ephemeral;
     }
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      Object.prototype.hasOwnProperty.call(parsed, "designMode") &&
-      (parsed as Record<string, unknown>).designMode !== true
-    ) {
+    if (record && hasOwn(record, "designMode") && record.designMode !== true) {
       // A layout preference only: anything but a literal true reads as off.
-      delete (parsed as Record<string, unknown>).designMode;
+      delete record.designMode;
     }
     if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      Object.prototype.hasOwnProperty.call(parsed, "thinkingLevel") &&
-      !isGenerationThinkingLevel((parsed as Record<string, unknown>).thinkingLevel)
+      record &&
+      hasOwn(record, "thinkingLevel") &&
+      !isGenerationThinkingLevel(record.thinkingLevel)
     ) {
       // An unknown effort falls back to the model's saved level, never the transcript.
-      delete (parsed as Record<string, unknown>).thinkingLevel;
+      delete record.thinkingLevel;
     }
     const messages = (parsed as { messages?: unknown } | null)?.messages;
     if (

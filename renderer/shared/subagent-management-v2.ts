@@ -2,6 +2,7 @@ import {
   parseSubagentRunSnapshotV2,
   type SubagentRunSnapshotV2,
 } from "./subagent-runs";
+import { isRecord } from "../../main/shared/guards.js";
 
 export type SubagentManagementRequestV2 =
   | { version: 2; action: "status" | "stop" | "retry"; runId: string }
@@ -29,10 +30,6 @@ export type SubagentManagementResultV2 =
       snapshot: SubagentRunSnapshotV2;
     }
   | { version: 2; action: "steer"; snapshot: SubagentRunSnapshotV2 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const keys = Object.keys(value);

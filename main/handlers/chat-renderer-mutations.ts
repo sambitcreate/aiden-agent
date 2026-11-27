@@ -36,13 +36,9 @@ import { countBucket } from "../services/analytics/analytics-sanitize.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import type { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { parseChatAppend } from "./chat-append-params.js";
+import { asString } from "./voice-codec.js";
 
-export function asString(value: unknown, name: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Expected non-empty string for "${name}".`);
-  }
-  return value;
-}
+export { asString };
 
 function boundedId(value: unknown, name: string, maxChars: number, maxBytes: number): string {
   const text = asString(value, name);

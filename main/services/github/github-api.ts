@@ -4,6 +4,7 @@
 
 import { normalizeGitHubHost } from "../../../renderer/shared/chat-pull-requests.js";
 import type { GitHubCredential, GitHubCredentialResult } from "./github-credentials.js";
+import { isRecord } from "../../shared/guards.js";
 
 export const GITHUB_API_VERSION = "2022-11-28";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -168,10 +169,6 @@ function boundedMessage(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const text = value.replace(/\p{Cc}+/gu, " ").trim();
   return text ? text.slice(0, MAX_MESSAGE_CHARS) : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function abortError(): Error {

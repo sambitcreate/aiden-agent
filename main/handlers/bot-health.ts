@@ -8,11 +8,10 @@
 
 import { BOT_HEALTH_CHANNELS, type BotHealthReport } from "../../renderer/shared/bot-health.js";
 import { parseBotId } from "./bot-params.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 
 function parseBotHealthInput(input: unknown): { botId: string } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot health fields.");
-  const fields = input as Record<string, unknown>;
-  if (Object.keys(fields).some((key) => key !== "botId")) throw new Error("Invalid bot health fields.");
+  const fields = requireAllowedKeys(input, ["botId"], "Invalid bot health fields.");
   return { botId: parseBotId(fields.botId) };
 }
 

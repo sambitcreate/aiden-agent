@@ -10,6 +10,7 @@ import {
   MAX_ATTACHMENT_INLINE_BYTES,
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "../../renderer/shared/attachment-contract.js";
+import { decodedBase64Bytes } from "../../renderer/shared/base64.js";
 
 const MAX_ATTACHMENT_ID_CHARS = 256;
 const MAX_ATTACHMENT_NAME_CHARS = 512;
@@ -22,37 +23,6 @@ const IMAGE_ATTACHMENT_KEYS = new Set(["id", "name", "mimeType", "kind", "size",
 const TEXT_ATTACHMENT_KEYS = new Set(["id", "name", "mimeType", "kind", "size", "text"]);
 
 type AttachmentParseMode = "append" | "stored";
-
-function base64DecodedBytes(value: string): number | undefined {
-  if (value.length === 0 || value.length % 4 !== 0) return undefined;
-  let padding = 0;
-  if (value.endsWith("=")) padding += 1;
-  if (value.endsWith("==")) padding += 1;
-  const bodyEnd = value.length - padding;
-  for (let index = 0; index < bodyEnd; index += 1) {
-    const code = value.charCodeAt(index);
-    if (base64Value(code) === undefined) return undefined;
-  }
-  for (let index = bodyEnd; index < value.length; index += 1) {
-    if (value.charCodeAt(index) !== 61) return undefined;
-  }
-  if (padding > 2) return undefined;
-  const finalValue = base64Value(value.charCodeAt(bodyEnd - 1));
-  if (finalValue === undefined) return undefined;
-  if ((padding === 2 && (finalValue & 15) !== 0) || (padding === 1 && (finalValue & 3) !== 0)) {
-    return undefined;
-  }
-  return (value.length / 4) * 3 - padding;
-}
-
-function base64Value(code: number): number | undefined {
-  if (code >= 65 && code <= 90) return code - 65;
-  if (code >= 97 && code <= 122) return code - 71;
-  if (code >= 48 && code <= 57) return code + 4;
-  if (code === 43) return 62;
-  if (code === 47) return 63;
-  return undefined;
-}
 
 function boundedString(
   value: unknown,
@@ -143,8 +113,8 @@ function parseAttachment(value: unknown, index: number, mode: AttachmentParseMod
       }
     }
     const decodedBytes =
-      typeof data === "string" && data.length <= MAX_IMAGE_BASE64_CHARS
-        ? base64DecodedBytes(data)
+      typeof data === "string"
+        ? decodedBase64Bytes(data, MAX_IMAGE_BASE64_CHARS)
         : undefined;
     if (
       (mode === "append"

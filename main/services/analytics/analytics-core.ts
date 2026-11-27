@@ -20,6 +20,7 @@ import {
   type SanitizedError,
   type SanitizedException,
 } from "./analytics-sanitize.js";
+import { recordOf } from "../../shared/guards.js";
 
 // The transport-agnostic heart of product analytics: validate against the
 // registry, attach super properties, apply flood control, and hand a finished
@@ -214,10 +215,6 @@ export function createAnalyticsCore(options: AnalyticsCoreOptions): AnalyticsCor
       fingerprintCounts.clear();
     },
   };
-}
-
-function recordOf(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 // Rebuilds a `$exception_list` from scratch, admitting only what

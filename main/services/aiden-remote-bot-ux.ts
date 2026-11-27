@@ -32,18 +32,13 @@ import {
 } from "../../renderer/shared/bot-settings-changes.js";
 import type { BotPreset } from "../../renderer/shared/bot-presets.js";
 import { parseAidenRemoteBotPresetList, type AidenRemoteBotPreset } from "./aiden-remote-protocol.js";
+import { hasOwn as has, isRecord } from "../shared/guards.js";
 
 // ---------------------------------------------------------------------------
 // Strict-parse helpers
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
   for (const key of Object.keys(value)) if (!allowed.includes(key)) throw new Error(`${label} has an unknown field: ${key}.`);
-}
-function has(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
 }
 function text(value: unknown, label: string, max: number, options: { blank?: boolean } = {}): string {
   if (typeof value !== "string") throw new Error(`${label} must be a string.`);

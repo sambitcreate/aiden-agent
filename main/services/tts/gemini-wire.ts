@@ -7,6 +7,7 @@
 
 import type { TtsErrorCode, TtsModelId } from "../../../renderer/shared/tts.js";
 import { TTS_LIMITS } from "../../../renderer/shared/tts.js";
+import { isRecord } from "../../shared/guards.js";
 
 export const TTS_AUDIO_SAMPLE_RATE = 24_000;
 export const TTS_AUDIO_CHANNELS = 1;
@@ -123,10 +124,6 @@ export interface TtsSynthesisUsage {
 export interface TtsUnarySynthesisResult {
   audio: TtsSynthesizedAudio;
   usage: TtsSynthesisUsage;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function decodeBase64Strict(data: string): Uint8Array {

@@ -1,4 +1,5 @@
 import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./managed-worktree-capacity.js";
+import { boundedString, hasExactKeys as exactKeys, recordOf as ownRecord } from "../shared/guards.js";
 import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
@@ -144,22 +145,6 @@ function branchesDigest(value: GitBranches): string {
     detached: value.detached ?? false,
     unborn: value.unborn ?? false,
   }));
-}
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function exactKeys(record: Record<string, unknown>, required: string[]): boolean {
-  return Object.keys(record).length === required.length && required.every(
-    (key) => Object.prototype.hasOwnProperty.call(record, key),
-  );
-}
-
-function boundedString(value: unknown, maximum: number): value is string {
-  return typeof value === "string" && value.length > 0 && [...value].length <= maximum;
 }
 
 function requireConfirmation(record: Record<string, unknown>): void {

@@ -13,6 +13,7 @@ import {
 } from "../../renderer/shared/chat-row-state.js";
 import { DataStore } from "./data-store.js";
 import type { Chat, ChatMeta } from "./types.js";
+import { isTimestamp } from "../shared/guards.js";
 
 interface ChatReadMarkersFile {
   version: 1;
@@ -23,10 +24,6 @@ interface ChatReadMarkersFile {
 }
 
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
-
-function isTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
 
 function normalizeFile(value: unknown): ChatReadMarkersFile {
   const empty: ChatReadMarkersFile = { version: 1, baselineAt: 0, readThrough: {} };

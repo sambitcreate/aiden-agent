@@ -1,6 +1,6 @@
 // Exact-shape request parsers for the Create Images channels. Anything else is
 // rejected with one generic message before any store is touched.
-import { hasExactKeys, isRecord } from "../../shared/guards.js";
+import { isPlainRecord as plain, requirePlainShape } from "../../shared/guards.js";
 import { IMAGE_IMPORT_MAX_BYTES, SAVE_ALL_MAX_IMAGES, type ImageActionRequest } from "../../../renderer/shared/images/ipc-types.js";
 import type { RunScope } from "../../../renderer/shared/images/run-types.js";
 import { IMAGE_WORKFLOW_ID_PATTERN, IMAGE_WORKFLOW_LIMITS } from "../../../renderer/shared/images/schema.js";
@@ -15,17 +15,11 @@ function invalid(): never {
   throw new Error(INVALID);
 }
 
-/** A plain object (what IPC structured clone produces), never a Map, Date or class instance. */
-function plain(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value)) return false;
-  const prototype: unknown = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function shape(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
-  if (!plain(value) || !hasExactKeys(value, required, optional)) invalid();
-  return value;
-}
+const shape = (
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> => requirePlainShape(value, required, optional, INVALID);
 
 /** Workflow and node ids share one opaque pattern: whitespace-only and empty ids never match it. */
 function id(value: unknown): string {

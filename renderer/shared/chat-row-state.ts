@@ -1,4 +1,5 @@
 import { parseProviderFailureV1 } from "./provider-failure.js";
+import { isTimestamp } from "../../main/shared/guards.js";
 
 /**
  * Chat list row state shared by the desktop sidebar and the Aiden Remote chat
@@ -76,10 +77,6 @@ export interface ChatReadMarkersSnapshot {
 
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
 export const MAX_CHAT_READ_MARKERS = 10_000;
-
-function isTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
 
 export function parseChatReadMarkersSnapshot(value: unknown): ChatReadMarkersSnapshot | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;

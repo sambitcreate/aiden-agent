@@ -7,6 +7,7 @@
 // authorization; the model cannot grant access or answer an issue.
 
 import { botAccessAuthorizationOf, BOT_ACCESS_LABEL_MAX_CHARS, type BotAccessAuthorization } from "./bot-access-requests.js";
+import { timestampOf as timestamp } from "../../main/shared/guards.js";
 
 export type BotIssueKind = "preflight_failed" | "routine_failed" | "routine_paused" | "run_stalled" | "access_needed";
 
@@ -104,10 +105,6 @@ function text(value: unknown, limit: number, allowEmpty = false): string | undef
   if (length > limit) return undefined;
   if (!allowEmpty && value.trim().length === 0) return undefined;
   return value;
-}
-
-function timestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 type IssueKindForAccess<Access extends boolean> = Access extends true ? BotIssueKind : Exclude<BotIssueKind, "access_needed">;

@@ -5,6 +5,7 @@
  */
 
 import { localComputerNoun, runtimeComputerPlatform } from "./computer-noun.js";
+import { isRecord } from "../../main/shared/guards.js";
 
 export const BOT_CAPABILITY_STORE_VERSION = 3 as const;
 export const BOT_FULL_ACCESS_NOTICE_VERSION = "bot-full-access-v1" as const;
@@ -189,10 +190,6 @@ export class BotCapabilityValidationError extends Error {
     super(message);
     this.name = "BotCapabilityValidationError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

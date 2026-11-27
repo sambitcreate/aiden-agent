@@ -50,6 +50,7 @@ import type {
   PiRuntimeStopDecision,
   PiRuntimeStopEvent,
 } from "./pi-agent-runtime-harness.js";
+import { isRecord } from "../shared/guards.js";
 
 /** Stop hooks keep one person turn going at most this many times. */
 export const MAX_STOP_HOOK_CONTINUATIONS = 8;
@@ -222,10 +223,6 @@ export function hookContextCustomMessage(text: string): {
 /** `hookContextCustomMessage` as the journaled message that follows the prompt sent at `timestamp`. */
 export function hookContextMessage(text: string, timestamp: number): AgentMessage {
   return { role: "custom", ...hookContextCustomMessage(text), timestamp };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Replace `target`'s own keys with `next`'s, keeping the same object the tool will run with. */

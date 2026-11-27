@@ -10,6 +10,7 @@ import {
   parseBrowserRecordingRecap,
   type BrowserRecordingRecapV1,
 } from "./browser-recording.js";
+import { isFiniteTimestamp as finiteTimestamp } from "../../main/shared/guards.js";
 export const GENERATION_TIMELINE_VERSION = 3 as const;
 
 /** Versions this build can still replay from local chat storage. */
@@ -160,10 +161,6 @@ export const MAX_GENERATION_TIMELINE_STEPS = 200;
 
 export function isToolStep(step: AgentStep): step is AgentToolStep {
   return step.kind === "tool";
-}
-
-function finiteTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function safeStoredTarget(value: unknown): value is string {

@@ -1,5 +1,6 @@
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
 import { SUBAGENT_AUTHORITY_VERSION } from "./authority-v2.js";
+import { isRecord } from "../../shared/guards.js";
 
 export const MAX_SUBAGENT_MANAGEMENT_WAIT_MS = 30_000;
 export const MAX_SUBAGENT_STEERING_CHARS = 8_000;
@@ -8,10 +9,6 @@ export type SubagentManagementRequestV2 =
   | { version: 2; action: "status" | "stop" | "retry"; runId: string }
   | { version: 2; action: "wait"; runId: string; timeoutMs: number }
   | { version: 2; action: "steer"; runId: string; instruction: string };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value);

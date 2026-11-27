@@ -8,6 +8,7 @@ import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { sanitizeSubagentText } from "./safe-text.js";
 import { isHookBlockedPrompt } from "../hook-blocked-prompt.js";
 import { redactCredentialTokens } from "../../shared/redaction.js";
+import { isRecord } from "../../shared/guards.js";
 
 export type SubagentContextMode = "fresh" | "fork";
 
@@ -74,10 +75,6 @@ export interface LiveSubagentContextCaptureInput {
   /** Read exactly once from the live parent Agent at the nested tool boundary. */
   messages: unknown;
   descendantContextWindow: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function boundedString(value: unknown, maximum: number, field: string, allowEmpty = false): string {

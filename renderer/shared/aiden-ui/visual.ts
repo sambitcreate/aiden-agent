@@ -5,6 +5,7 @@ import {
   type AidenUiNodeV1,
   type ChatUiVisualV1,
 } from "./types.js";
+import { isRecord } from "../../../main/shared/guards.js";
 
 /**
  * Keys the shipped Aiden Remote clients treat as private anywhere in a chat
@@ -39,10 +40,6 @@ export function isWireSafeKey(name: string): boolean {
   const normalized = name.replace(/[-_.\s]/gu, "").toLowerCase();
   if (PRIVATE_KEYS.has(normalized)) return false;
   return !PRIVATE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /** Every object key reachable from `value` is wire-safe. */

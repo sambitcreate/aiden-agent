@@ -16,6 +16,7 @@ import {
 import type { WebSearchFetch } from "./web-search-provider-registry.js";
 import { cancelWebSearchResponse, readBoundedWebSearchResponse } from "./web-search-response.js";
 import { WebExtractError, type WebExtractModel, type WebExtractModelResponse } from "./web-extract-core.js";
+import { isRecord } from "../shared/guards.js";
 
 export interface WebExtractModelContext {
   readonly accountId: string;
@@ -30,10 +31,6 @@ export type WebExtractModelFactory = (context: WebExtractModelContext) => WebExt
 /** Clairic accepts 64k tokens; pi-web-access found 200,000 characters reliable. */
 const CLAIRIC_MAX_PAGE_CHARS = 200_000;
 const CLAIRIC_MAX_RESPONSE_BYTES = 1024 * 1024;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 /** Pool failures use Web Search's error kinds; the tool reports extraction kinds. */
 function extractErrorFrom(error: unknown, signal: AbortSignal): unknown {

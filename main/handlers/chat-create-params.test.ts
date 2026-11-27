@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parseChatCreate } from "./chat-create-params.js";
 
@@ -35,10 +34,32 @@ test("chat creation rejects excess keys lazily with constant errors", () => {
       error instanceof Error &&
       error.message === "Invalid chat creation fields.",
   );
-  const source = readFileSync(
-    new URL("./chat-create-params.ts", import.meta.url),
-    "utf8",
+
+  const proxyKeys = [
+    "workspaceId",
+    ...Array.from({ length: 1_000 }, (_, index) => `extra-${index}`),
+  ];
+  let inspected = 0;
+  const hostile = new Proxy(
+    {},
+    {
+      ownKeys: () => proxyKeys,
+      getOwnPropertyDescriptor(_target, key) {
+        inspected += 1;
+        return typeof key === "string"
+          ? { configurable: true, enumerable: true, value: "workspace-1" }
+          : undefined;
+      },
+    },
   );
-  assert.doesNotMatch(source, /Object\.keys/u);
-  assert.match(source, /count > allowed\.size/u);
+  assert.throws(
+    () => parseChatCreate(hostile),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === "Invalid chat creation fields.",
+  );
+  assert.ok(
+    inspected <= 5,
+    `expected lazy key rejection, inspected ${inspected} keys`,
+  );
 });

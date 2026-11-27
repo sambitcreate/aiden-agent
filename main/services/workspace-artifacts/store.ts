@@ -23,6 +23,7 @@ import {
   type WorkspaceArtifactV1,
   type WorkspaceArtifactView,
 } from "../../../renderer/shared/workspace-artifacts.js";
+import { isRecord } from "../../shared/guards.js";
 
 /**
  * Device-local storage for workspace artifacts: one definitions file and one
@@ -87,10 +88,6 @@ function emptySnapshots(): WorkspaceArtifactSnapshotsDocument {
 
 function emptyHistory(): WorkspaceArtifactHistoryDocument {
   return { version: 1, revisions: {} };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /**

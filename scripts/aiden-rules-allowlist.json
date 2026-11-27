@@ -10,7 +10,6 @@
   {"rule":"no-source-grep-test","file":"main/handlers/attachments.contract.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/handlers/bots-platform-contract.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/handlers/bots.contract.test.ts","reason":"legacy; replace with behavioral test"},
-  {"rule":"no-source-grep-test","file":"main/handlers/chat-create-params.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/handlers/chat.parse.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/handlers/chats.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/handlers/ipc-contract.test.ts","reason":"legacy; replace with behavioral test"},

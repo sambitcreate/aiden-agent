@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { hasExactKeys as exactKeys, recordOf as ownRecord } from "../shared/guards.js";
 import {
   attachmentInlineBytes,
   attachmentRepresentationBytes,
@@ -52,22 +53,6 @@ interface PendingAttachmentRecord {
   representationBytes: number;
   /** Held by an in-flight send that may still give it back; it keeps its quota. */
   reserved?: boolean;
-}
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function exactKeys(record: Record<string, unknown>, expected: ReadonlySet<string>): boolean {
-  let count = 0;
-  for (const key in record) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
-    count += 1;
-    if (count > expected.size || !expected.has(key)) return false;
-  }
-  return count === expected.size;
 }
 
 function validDisplayName(value: unknown): value is string {
@@ -163,7 +148,7 @@ function parseUpload(input: unknown, id: string): Attachment {
   try {
     if (record.kind === "image") {
       if (
-        !exactKeys(record, new Set(["name", "mimeType", "kind", "data"])) ||
+        !exactKeys(record, ["name", "mimeType", "kind", "data"]) ||
         (record.mimeType !== "image/png" && record.mimeType !== "image/jpeg") ||
         typeof record.data !== "string" ||
         record.data.length === 0 ||
@@ -187,7 +172,7 @@ function parseUpload(input: unknown, id: string): Attachment {
 
     if (
       record.kind !== "text" ||
-      !exactKeys(record, new Set(["name", "mimeType", "kind", "text"])) ||
+      !exactKeys(record, ["name", "mimeType", "kind", "text"]) ||
       typeof record.mimeType !== "string" ||
       !TEXT_MIME_TYPES.has(record.mimeType.toLowerCase()) ||
       typeof record.text !== "string" ||

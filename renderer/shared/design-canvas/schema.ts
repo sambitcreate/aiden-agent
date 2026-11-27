@@ -14,6 +14,7 @@ import {
   type DesignTweakVersion,
 } from "./tweaks.js";
 import { clippedUnicode } from "../unicode-prefix.js";
+import { isRecord } from "../../../main/shared/guards.js";
 
 export type DesignFrameKind =
   | "file"
@@ -749,10 +750,6 @@ function parseMarks(value: unknown): DesignComment["marks"] {
     if (points.length > 0) marks.push({ points });
   }
   return marks.length > 0 ? marks : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function identifier(value: unknown): string | undefined {

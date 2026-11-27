@@ -12,6 +12,7 @@ import {
   PROVIDER_FAILURE_CATEGORIES,
   type ProviderFailureCategoryV1,
 } from "../../../renderer/shared/provider-failure.js";
+import { isRecord } from "../../shared/guards.js";
 
 export const SUBAGENT_INFERENCE_PROTOCOL_VERSION = 1;
 export const MAX_SUBAGENT_INFERENCE_MESSAGE_BYTES = 32 * 1024 * 1024;
@@ -178,10 +179,6 @@ export function prepareSubagentInferenceOptions(
   assign("reasoning", options.reasoning);
   assign("thinkingBudgets", options.thinkingBudgets);
   return projected;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

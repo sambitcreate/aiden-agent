@@ -4,6 +4,7 @@
 // renderer shows the goal bar and sends the person's actions.
 
 import { MAX_DONE_WHEN_CHECKS, MAX_DONE_WHEN_COMMAND_CHARS } from "./follow-through.js";
+import { isRecord } from "../../main/shared/guards.js";
 
 export const GOAL_VERSION = 1;
 export const MAX_GOAL_OBJECTIVE_CHARS = 2_000;
@@ -239,10 +240,6 @@ export function goalView(goal: GoalRecordV1): GoalView {
 
 const GOAL_STATUSES: readonly GoalStatus[] = ["active", "paused", "needs-you", "done"];
 const GOAL_SOURCES: readonly GoalSource[] = ["slash", "menu", "proposal", "phone", "until"];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function count(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;

@@ -22,6 +22,7 @@
  * session-resource cleanup (chat delete) forgets a chat's head.
  */
 import { registerSessionResourceCleanup, type Api, type AssistantMessageEventStream, type Model, type ProviderStreams, type SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { isRecord } from "../shared/guards.js";
 
 type StreamSimple = ProviderStreams["streamSimple"];
 
@@ -66,10 +67,6 @@ export function stableHeadOf(systemPrompt: string, frozenStateTail: string): str
   if (!frozenStateTail || !systemPrompt.endsWith(`\n\n${frozenStateTail}`)) return undefined;
   const head = systemPrompt.slice(0, systemPrompt.length - frozenStateTail.length - 2);
   return head.trim() ? head : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function countKey(value: unknown, key: string): number {

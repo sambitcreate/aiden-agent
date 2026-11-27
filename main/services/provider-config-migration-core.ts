@@ -10,6 +10,7 @@ import {
 } from "./google-provider.js";
 import { MAX_CONFIG_ID_LENGTH, type AppSettings, type StoredProvider } from "./types.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
+import { ownEntry as ownAlias, setOwnEntry as setAlias } from "../shared/guards.js";
 
 /** IDs Aiden persisted before Pi became the cloud-provider authority. */
 const LEGACY_PI_PROVIDER_IDS = new Set([
@@ -140,19 +141,6 @@ function uniqueCustomId(sourceId: string, usedIds: Set<string>): string {
   }
   usedIds.add(candidate);
   return candidate;
-}
-
-function setAlias(aliases: Record<string, string>, source: string, target: string): void {
-  Object.defineProperty(aliases, source, {
-    value: target,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
-}
-
-function ownAlias(aliases: Readonly<Record<string, string>>, source: string): string | undefined {
-  return Object.prototype.hasOwnProperty.call(aliases, source) ? aliases[source] : undefined;
 }
 
 function terminalAlias(

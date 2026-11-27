@@ -21,6 +21,7 @@ import {
 } from "../../renderer/shared/chat-triage.js";
 import { DataStore } from "./data-store.js";
 import type { HostRunSummary } from "./host-run-registry.js";
+import { isTimestamp } from "../shared/guards.js";
 
 interface ChatTriageFile {
   version: 1;
@@ -34,10 +35,6 @@ const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
  * even if no resume or unlock reported it.
  */
 export const SNOOZE_WAKE_CHECK_MS = 60_000;
-
-function isTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
 
 function normalizeEntry(value: unknown): ChatTriageEntry | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;

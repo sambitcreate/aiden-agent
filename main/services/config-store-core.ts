@@ -118,6 +118,7 @@ import type {
   StoredProvider,
   Workspace,
 } from "./types.js";
+import { isRecord, ownEntry as ownRecordEntry, setOwnEntry as setRecordEntry } from "../shared/guards.js";
 
 /** The slice of the keychain store this module needs. See secrets.ts. */
 export interface SecretsPort {
@@ -151,10 +152,6 @@ function defaultWorkspace(): Workspace {
 
 const PERMISSIONS = new Set(["full", "ask", "none"]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 /** Point every Agent Slider stop at its provider's current id, as `lastProviderId` is. */
 function withResolvedStopProviders(
   slider: AgentSliderSettings,
@@ -166,19 +163,6 @@ function withResolvedStopProviders(
       stop.providerId ? { ...stop, providerId: resolve(stop.providerId) } : stop,
     ),
   };
-}
-
-function ownRecordEntry<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
-  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
-}
-
-function setRecordEntry<T>(record: Record<string, T>, key: string, value: T): void {
-  Object.defineProperty(record, key, {
-    value,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
 }
 
 function providerAliasRoutes(

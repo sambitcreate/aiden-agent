@@ -26,6 +26,7 @@ import {
 import type { AidenTailscaleOwnership } from "./aiden-remote-tailscale-route.js";
 import type { AidenTailscalePendingRouteOutcome } from "./aiden-remote-tailscale.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { boundedString, hasExactKeys as exactKeys, recordOf as ownRecord } from "../shared/guards.js";
 
 const STATE_VERSION = 1 as const;
 const MAX_DEVICES = 32;
@@ -187,31 +188,6 @@ export interface AidenRemoteStateDependencies {
 
 export interface AidenRemoteStateHostPolicy {
   botCapabilitiesSupported(): boolean;
-}
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function exactKeys(
-  record: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => Object.prototype.hasOwnProperty.call(record, key)) &&
-    Object.keys(record).every((key) => allowed.has(key))
-  );
-}
-
-function boundedString(value: unknown, maximum: number): value is string {
-  if (typeof value !== "string" || value.length === 0) return false;
-  let characters = 0;
-  for (const _character of value) characters += 1;
-  return characters <= maximum;
 }
 
 export function normalizeAidenRemoteDisplayName(value: unknown): string {
@@ -775,7 +751,7 @@ export class AidenRemoteStateRegistry {
       const devicesNeedVocabularyMigration = Array.isArray(rawRecord?.devices)
         && rawRecord.devices.some((device) => {
           const record = ownRecord(device);
-          return record !== null
+          return record !== undefined
             && (
               !Object.prototype.hasOwnProperty.call(record, "acceptsBotCapabilities") ||
               (

@@ -2,6 +2,7 @@
 // can be unit-tested without importing Electron. See handlers/chat.ts.
 
 import type { ChatStartParams } from "../services/types.js";
+import { parseUtf8BoundedString } from "../shared/guards.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { isInlineVisualsMode } from "../../renderer/shared/appearance.js";
 import { parseDesignViewState } from "../../renderer/shared/design-canvas/canvas-summary.js";
@@ -28,26 +29,6 @@ const ALLOWED_CHAT_START_KEYS = new Set([
   "designView",
 ]);
 
-function boundedString(
-  value: unknown,
-  label: string,
-  maxChars: number,
-  maxBytes: number,
-  optional = false,
-): string | undefined {
-  if (value === undefined && optional) return undefined;
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > maxChars
-  ) {
-    throw new Error(`Invalid ${label}.`);
-  }
-  if (Buffer.byteLength(value, "utf8") > maxBytes)
-    throw new Error(`Invalid ${label}.`);
-  return value;
-}
-
 export function parseParams(value: unknown): ChatStartParams {
   if (typeof value !== "object" || value === null)
     throw new Error("Invalid generation params.");
@@ -68,31 +49,31 @@ export function parseParams(value: unknown): ChatStartParams {
       throw new Error("Invalid generation fields.");
     }
   }
-  const chatId = boundedString(
+  const chatId = parseUtf8BoundedString(
     p.chatId,
     "chat id",
     MAX_CHAT_ID_CHARS,
     MAX_CHAT_ID_BYTES,
-  )!;
-  const workspaceId = boundedString(
+  ).value;
+  const workspaceId = parseUtf8BoundedString(
     p.workspaceId,
     "workspace id",
     MAX_WORKSPACE_ID_CHARS,
     MAX_WORKSPACE_ID_BYTES,
     true,
-  );
-  const providerId = boundedString(
+  ).value;
+  const providerId = parseUtf8BoundedString(
     p.providerId,
     "provider id",
     MAX_PROVIDER_ID_CHARS,
     MAX_PROVIDER_ID_BYTES,
-  )!;
-  const model = boundedString(
+  ).value;
+  const model = parseUtf8BoundedString(
     p.model,
     "model id",
     MAX_MODEL_ID_CHARS,
     MAX_MODEL_ID_BYTES,
-  )!;
+  ).value;
   if (
     p.thinkingLevel !== undefined &&
     !isGenerationThinkingLevel(p.thinkingLevel)

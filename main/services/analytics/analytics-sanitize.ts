@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { recordOf as record } from "../../shared/guards.js";
 import { builtinModules } from "node:module";
 
 import { stackWithoutMessage } from "../../../renderer/shared/diagnostics.js";
@@ -355,10 +356,6 @@ function sanitizeOne(value: unknown, appRoots: readonly string[]): SanitizedErro
     value: safeMessage(error.message),
     frames: parseStackFrames(error.stack, appRoots, error.message),
   };
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 export function parseSanitizedFrame(raw: unknown): SanitizedFrame | undefined {

@@ -1,4 +1,5 @@
 import { parseBotResumeAcknowledgement } from "../../renderer/shared/bot-execution-resume.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 import { parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import {
   BOT_LIMITS,
@@ -38,18 +39,8 @@ const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
 const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "interruptions", "selfWakeUps", "acceptsBotMessages", "messagesOtherBots", "thinkingLevel", "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
-function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error(`Invalid ${label}.`);
-  const record = value as Record<string, unknown>;
-  let count = 0;
-  for (const key in record) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
-    count += 1;
-    if (count > keys.size || !keys.has(key)) throw new Error(`Invalid ${label}.`);
-  }
-  return record;
-}
+const exact = (value: unknown, keys: ReadonlySet<string>, label: string): Record<string, unknown> =>
+  requireAllowedKeys(value, keys, `Invalid ${label}.`);
 
 function text(value: unknown, label: string, maximum: number, optional = false) {
   if (value === undefined && optional) return undefined;
@@ -91,10 +82,7 @@ const PRESET_ID = /^[a-z0-9][a-z0-9-]{0,63}$/u;
  * person was shown, and optionally the access they confirmed.
  */
 export function parseBotCreateFromPreset(value: unknown): { presetId: string; version?: number; access?: BotAccessUpdate } {
-  const record = value as Record<string, unknown> | null;
-  if (!record || typeof record !== "object" || Array.isArray(record) || !Object.keys(record).every((key) => FROM_PRESET_KEYS.has(key))) {
-    throw new Error("Invalid starter Bot fields.");
-  }
+  const record = exact(value, FROM_PRESET_KEYS, "starter Bot fields");
   if (typeof record.presetId !== "string" || !PRESET_ID.test(record.presetId)) {
     throw new Error("Invalid starter Bot id.");
   }
@@ -188,9 +176,7 @@ export function parseBotSend(input: unknown): {
   whenBusy?: "steer" | "followUp";
   attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
 } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot message fields.");
-  const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every((key) => BOT_SEND_KEYS.has(key))) throw new Error("Invalid bot message fields.");
+  const fields = exact(input, BOT_SEND_KEYS, "bot message fields");
   if (typeof fields.text !== "string" || fields.text.length > BOT_SEND_TEXT_CHARS) {
     throw new Error("Invalid bot message text.");
   }
@@ -234,18 +220,25 @@ export function parseBotSend(input: unknown): {
   };
 }
 
+const BOT_DISMISS_KEYS = new Set(["botId", "requestId"]);
+const BOT_RESUME_KEYS = new Set([
+  "botId",
+  "requestId",
+  "acknowledgeUnknownCost",
+  "expectedSubmissionId",
+  "expectedCostReceiptId",
+]);
+
 /** `{ botId, requestId }` for Resume and Dismiss; the request id makes retries idempotent. */
 export function parseBotSessionAction(
   input: unknown,
   action: "resume" | "dismiss",
 ): { botId: string; requestId: string; acknowledgeUnknownCost?: true; expectedSubmissionId?: string; expectedCostReceiptId?: string } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new Error(`Invalid bot ${action} fields.`);
-  }
-  const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every((key) => key === "botId" || key === "requestId" || action === "resume" && (key === "acknowledgeUnknownCost" || key === "expectedSubmissionId" || key === "expectedCostReceiptId"))) {
-    throw new Error(`Invalid bot ${action} fields.`);
-  }
+  const fields = exact(
+    input,
+    action === "resume" ? BOT_RESUME_KEYS : BOT_DISMISS_KEYS,
+    `bot ${action} fields`,
+  );
   if (typeof fields.requestId !== "string" || !BOT_SESSION_REQUEST_ID.test(fields.requestId)) {
     throw new Error(`Invalid bot ${action} request id.`);
   }
@@ -255,14 +248,11 @@ export function parseBotSessionAction(
 
 /** At most 15 digits, so `Number()` stays exact (below 2^53). */
 const BOT_SUBMISSION_ID = /^\d{1,15}$/u;
+const BOT_WITHDRAW_KEYS = new Set(["botId", "submissionId"]);
 
 /** Remove on a queued message: the Bot and one durable submission id. */
 export function parseBotWithdraw(input: unknown): { botId: string; submissionId: string } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot withdraw fields.");
-  const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every((key) => key === "botId" || key === "submissionId")) {
-    throw new Error("Invalid bot withdraw fields.");
-  }
+  const fields = exact(input, BOT_WITHDRAW_KEYS, "bot withdraw fields");
   if (typeof fields.submissionId !== "string" || !BOT_SUBMISSION_ID.test(fields.submissionId)) {
     throw new Error("Invalid bot submission id.");
   }
@@ -270,13 +260,12 @@ export function parseBotWithdraw(input: unknown): { botId: string; submissionId:
 }
 
 const BOT_APPROVAL_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
+const BOT_APPROVAL_KEYS = new Set(["waitId", "decision", "scope"]);
 
 /** A Bot approval answer: the durable `waitId` and allow or deny. */
 export function parseBotApprovalDecision(input: unknown): { waitId: string; decision: "allow" | "deny"; scope?: "always" } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot approval fields.");
-  const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every((key) => key === "waitId" || key === "decision" || key === "scope") ||
-      (Object.prototype.hasOwnProperty.call(fields, "scope") && (fields.scope !== "always" || fields.decision !== "allow"))) {
+  const fields = exact(input, BOT_APPROVAL_KEYS, "bot approval fields");
+  if (Object.prototype.hasOwnProperty.call(fields, "scope") && (fields.scope !== "always" || fields.decision !== "allow")) {
     throw new Error("Invalid bot approval fields.");
   }
   if (typeof fields.waitId !== "string" || !BOT_APPROVAL_WAIT_ID.test(fields.waitId)) {
@@ -286,19 +275,18 @@ export function parseBotApprovalDecision(input: unknown): { waitId: string; deci
   return { waitId: fields.waitId, decision: fields.decision, ...(fields.scope === "always" ? { scope: "always" } : {}) };
 }
 
+const BOT_ALLOWED_LIST_KEYS = new Set(["botId"]);
+const BOT_ALLOWED_REMOVE_KEYS = new Set(["botId", "entryId"]);
+
 /** Omission selects all Bots; a renderer cannot supply an audience or target. */
 export function parseBotAllowedList(input: unknown): string | undefined {
   if (input === undefined) return undefined;
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot allowed list fields.");
-  const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every(key => key === "botId")) throw new Error("Invalid bot allowed list fields.");
+  const fields = exact(input, BOT_ALLOWED_LIST_KEYS, "bot allowed list fields");
   return fields.botId === undefined ? undefined : parseBotId(fields.botId);
 }
 
 export function parseBotAllowedRemove(input: unknown): { botId: string; entryId: string } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot allowed remove fields.");
-  const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every(key => key === "botId" || key === "entryId")) throw new Error("Invalid bot allowed remove fields.");
+  const fields = exact(input, BOT_ALLOWED_REMOVE_KEYS, "bot allowed remove fields");
   if (typeof fields.entryId !== "string" || !/^[A-Za-z0-9_-]{1,80}$/u.test(fields.entryId)) throw new Error("Invalid bot allowed entry id.");
   return { botId: parseBotId(fields.botId), entryId: fields.entryId };
 }
@@ -542,15 +530,17 @@ export function parseBotRulesUpdate(value: unknown): BotRulesUpdateInput {
   return { botId: parseBotId(record.botId), revision, change: ruleChange(record.change) };
 }
 
+const BOT_SETTINGS_RESPONSE_KEYS = new Set(["botId", "changeId", "decision"]);
+
 /** The person's answer to a settings change from chat (§4.6): exact keys, a known decision. */
 export function parseBotSettingsChangeResponse(input: unknown): { botId: string; changeId: string; decision: "undo" | "apply" | "edited" | "dismiss" } {
-  const fail = (): never => {
+  const fields = exact(input, BOT_SETTINGS_RESPONSE_KEYS, "settings response");
+  if (
+    (fields.decision !== "undo" && fields.decision !== "apply" && fields.decision !== "edited" && fields.decision !== "dismiss") ||
+    typeof fields.changeId !== "string" ||
+    !/^[0-9a-f-]{36}$/iu.test(fields.changeId)
+  ) {
     throw new Error("Invalid settings response.");
-  };
-  if (!input || typeof input !== "object" || Array.isArray(input)) return fail();
-  const fields = input as Record<string, unknown>;
-  if (Object.keys(fields).some((key) => key !== "botId" && key !== "changeId" && key !== "decision")) return fail();
-  if (fields.decision !== "undo" && fields.decision !== "apply" && fields.decision !== "edited" && fields.decision !== "dismiss") return fail();
-  if (typeof fields.changeId !== "string" || !/^[0-9a-f-]{36}$/iu.test(fields.changeId)) return fail();
+  }
   return { botId: parseBotId(fields.botId), changeId: fields.changeId, decision: fields.decision };
 }

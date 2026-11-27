@@ -3,6 +3,7 @@
 // prompt, response, or provider diagnostic ever enters this record.
 
 import type { GenerationTimeline } from "./generation-timeline.js";
+import { isFiniteTimestamp as timestamp } from "../../main/shared/guards.js";
 
 export const ASSISTANT_TURN_STATS_VERSION = 1 as const;
 
@@ -41,10 +42,6 @@ const MAX_TURN_MS = 7 * 24 * 60 * 60 * 1_000;
 
 function count(value: unknown, max = MAX_TOKEN_COUNT): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= max;
-}
-
-function timestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 /** Folds one request's reported usage into the running turn total. */

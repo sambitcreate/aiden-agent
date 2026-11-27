@@ -1,4 +1,5 @@
 import type { AidenRemoteNewWorktreeOptions } from "./aiden-remote-new-worktree.js";
+import { boundedString, hasExactKeys as exactKeys, hasOwn as hasOwnKey, recordOf as ownRecord } from "../shared/guards.js";
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import type { WorkspaceChatAssignment } from "./workspace-application-service.js";
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
@@ -494,22 +495,6 @@ export interface AidenRemoteBotTurnAuthorityPreflightRequest {
 export type AidenRemoteBotTurnAuthorityPreflight = (
   request: Readonly<AidenRemoteBotTurnAuthorityPreflightRequest>,
 ) => Promise<{ supportsCompanionImages: boolean } | void>;
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function exactKeys(record: Record<string, unknown>, required: string[], optional: string[] = []): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return required.every((key) => Object.prototype.hasOwnProperty.call(record, key))
-    && Object.keys(record).every((key) => allowed.has(key));
-}
-
-function boundedString(value: unknown, maximum: number): value is string {
-  return typeof value === "string" && value.length > 0 && Array.from(value).length <= maximum;
-}
 
 /** Return at most `maximum` Unicode scalars without splitting a surrogate pair. */
 function boundedUnicodeScalarPrefix(value: string, maximum: number): string {
@@ -1261,10 +1246,6 @@ export function parseAidenRemoteChatTriage(input: unknown): { patch: ChatTriageP
   const ifRevision = record.ifRevision;
   if (typeof ifRevision !== "number" || !Number.isSafeInteger(ifRevision) || ifRevision < 0) throw invalid();
   return { patch, ifRevision };
-}
-
-function hasOwnKey(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
 }
 
 function parseTurn(input: unknown): {
