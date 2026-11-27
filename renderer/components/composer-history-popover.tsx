@@ -3,7 +3,6 @@ import { CornerDownRight, History, Paperclip } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import { revealInList } from "../lib/reveal-in-list";
 import { useDebouncedAnnouncement } from "../lib/use-debounced-announcement";
-import { usePresence } from "../lib/use-presence";
 import { clippedUnicode } from "../shared/unicode-prefix";
 import type { ComposerHistoryEntry, ComposerHistoryReplyStatus } from "../lib/composer-history";
 
@@ -29,28 +28,7 @@ interface ComposerHistoryPopoverProps {
   presenceRef?: React.Ref<HTMLDivElement>;
 }
 
-export function ComposerHistoryPopoverPresence({
-  present,
-  immediate = false,
-  children,
-}: {
-  present: boolean;
-  immediate?: boolean;
-  children: React.ReactElement<ComposerHistoryPopoverProps> | null;
-}) {
-  const lastContentRef = React.useRef(children);
-  const ref = React.useRef<HTMLDivElement>(null);
-  const { rendered, exiting } = usePresence(present, ref);
-  React.useLayoutEffect(() => {
-    if (present && children) lastContentRef.current = children;
-  }, [children, present]);
-
-  if (!rendered || (!present && immediate)) return null;
-  const content = present ? children : lastContentRef.current;
-  return content
-    ? React.cloneElement(content, { presenceState: exiting ? "exiting" : "visible", presenceRef: ref })
-    : null;
-}
+export { ComposerPopoverPresence as ComposerHistoryPopoverPresence } from "./composer-presence";
 
 function replyStatusLabel(status: ComposerHistoryReplyStatus): string {
   switch (status) {

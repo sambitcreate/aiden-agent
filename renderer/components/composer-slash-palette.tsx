@@ -40,7 +40,6 @@ import { titleRanges } from "../lib/text-match";
 import { revealInList } from "../lib/reveal-in-list";
 import { useDebouncedAnnouncement } from "../lib/use-debounced-announcement";
 import { MatchText } from "./match-text";
-import { usePresence } from "../lib/use-presence";
 
 export const COMPOSER_SLASH_PALETTE_ID = "composer-slash-palette";
 export const COMPOSER_SLASH_RETRY_ID = "slash-option-skills-retry";
@@ -97,29 +96,7 @@ interface ComposerSlashPaletteProps {
   presenceRef?: React.Ref<HTMLDivElement>;
 }
 
-export function ComposerSlashPalettePresence({
-  present,
-  immediate = false,
-  children,
-}: {
-  present: boolean;
-  immediate?: boolean;
-  children: React.ReactElement<ComposerSlashPaletteProps> | null;
-}) {
-  const lastContentRef = React.useRef(children);
-  const ref = React.useRef<HTMLDivElement>(null);
-  const { rendered, exiting } = usePresence(present, ref);
-  React.useLayoutEffect(() => {
-    if (present && children) lastContentRef.current = children;
-  }, [children, present]);
-
-  // An immediate close (a command ran, the draft was sent) skips the exit.
-  if (!rendered || (!present && immediate)) return null;
-  const content = present ? children : lastContentRef.current;
-  return content
-    ? React.cloneElement(content, { presenceState: exiting ? "exiting" : "visible", presenceRef: ref })
-    : null;
-}
+export { ComposerPopoverPresence as ComposerSlashPalettePresence } from "./composer-presence";
 
 function sourceLabel(source: Extract<SlashResult, { kind: "skill" }>["skill"]["source"]): string {
   return source === "configured" ? "Configured" : source === "workspace" ? "Workspace" : "Global";
