@@ -1460,6 +1460,8 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
     - `app-network-main.ts` passes live workspace ownership as `keep`.
     - The 64 bound is now soft. With every origin owned, the list grows, and it shrinks again as workspaces end.
 
+26. **Focus-guard flake (#966 CI run 46054292686, 2026-11-27).** `app-node.test.tsx`'s Chromium-order test failed once in CI, on attempt 1. Root cause: `AppFrame` held the S75 focus guard in a passive `useEffect`, which runs a task after the commit that puts the iframe in the DOM. Testing Library's `waitFor` resolves from its mutation observer at that commit, so under load the composer's `focusout` could fire before the guard existed and go unremembered. The window blur then blurred the iframe to the body. A page could hit the same gap in the app: focus taken in the task between the commit and the effect would go unanswered. The guard is now held in a `useLayoutEffect`, so it is up in the same commit. A new test catches the iframe at insertion with a mutation observer. It failed every run before the fix and passes after. Under full CPU load, the original test failed 4 of 40 runs before the fix and 0 of 80 after.
+
 ### Build status (2026-11-27)
 
 Built: Tasks 0–15. Task 11 was unblocked by the S75 decision (deviation 15), and Task 14's live-frames spec runs (deviation 17). K1 and S1/D1 were decided and built, and review-p3a-2's findings are fixed (deviation 18). **Open:** Task 5's frameless audit. The allowlist is empty, and it is checked against real traffic once live frames can load.
