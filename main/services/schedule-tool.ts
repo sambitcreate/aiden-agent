@@ -969,6 +969,27 @@ export async function resolveAssistantScheduleProject(
   return { workspaceId: workspace.id, workspaceName };
 }
 
+async function selectedScheduleMcpServers(
+  ids: readonly string[],
+  listMcpServers: ScheduleToolDependencies["listMcpServers"],
+): Promise<Array<{ server: McpServer; name: string }>> {
+  const configured = await listMcpServers();
+  const byId = new Map(configured.map((server) => [server.id, server]));
+  return ids.map((id) => {
+    const server = byId.get(id);
+    if (!server) throw new Error(`MCP server ${id} was not found.`);
+    if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
+    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
+    const name = bounded(
+      required(server.name, "MCP server name"),
+      "MCP server name",
+      ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT,
+    );
+    assertSafeDisplayText(name, "MCP server name");
+    return { server, name };
+  });
+}
+
 export async function resolveAssistantScheduleMcpServers(
   proposal: AssistantScheduleProposal,
   listMcpServers: ScheduleToolDependencies["listMcpServers"] = defaultDependencies.listMcpServers,
@@ -982,21 +1003,7 @@ export async function resolveAssistantScheduleMcpServers(
   if (mcpServerIds.length === 0) {
     return { mcpServerIds: [], mcpServerNames: [], mcpServerBindings: [] };
   }
-  const configured = await listMcpServers();
-  const byId = new Map(configured.map((server) => [server.id, server]));
-  const servers = mcpServerIds.map((id) => {
-    const server = byId.get(id);
-    if (!server) throw new Error(`MCP server ${id} was not found.`);
-    if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
-    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
-    const name = bounded(
-      required(server.name, "MCP server name"),
-      "MCP server name",
-      ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT,
-    );
-    assertSafeDisplayText(name, "MCP server name");
-    return { server, name };
-  });
+  const servers = await selectedScheduleMcpServers(mcpServerIds, listMcpServers);
   const mcpServerBindings = servers.map(({ server }) => scheduledMcpServerBinding(server));
   if (expectedBindings) {
     assertScheduledMcpServerBindings(
@@ -1020,10 +1027,6 @@ interface PreparedStandardScheduleApproval {
 }
 
 const preparedStandardByArguments = new WeakMap<object, PreparedStandardScheduleApproval>();
-
-function sameIds(left: readonly string[] | undefined, right: readonly string[]): boolean {
-  return (left?.length ?? 0) === right.length && right.every((id, index) => left?.[index] === id);
-}
 
 const NO_PROVIDER_SET = "No provider set";
 const APP_DEFAULT = "App default";
@@ -1132,21 +1135,7 @@ async function standardScope(
   if (ids.length === 0) {
     return { workspaceName, mcpServerNames: [], mcpServerBindings: [] };
   }
-  const configured = await dependencies.listMcpServers();
-  const byId = new Map(configured.map((server) => [server.id, server]));
-  const selected = ids.map((id) => {
-    const server = byId.get(id);
-    if (!server) throw new Error(`MCP server ${id} was not found.`);
-    if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
-    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
-    const name = bounded(
-      required(server.name, "MCP server name"),
-      "MCP server name",
-      ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT,
-    );
-    assertSafeDisplayText(name, "MCP server name");
-    return { server, name };
-  });
+  const selected = await selectedScheduleMcpServers(ids, () => dependencies.listMcpServers());
   return {
     workspaceName,
     mcpServerNames: selected.map(({ name }) => name),
@@ -1421,7 +1410,7 @@ async function resolveStandardScheduleApproval(
   }
 
   const scope = await standardScope(input, dependencies);
-  if (sameIds(existing?.mcpServerIds, input.mcpServerIds ?? [])) {
+  if (sameStringList(existing?.mcpServerIds, input.mcpServerIds ?? [])) {
     input.mcpServerBindings = existing?.mcpServerBindings;
   } else if ((input.mcpServerIds?.length ?? 0) > 0) {
     input.mcpServerBindings = scope.mcpServerBindings;
