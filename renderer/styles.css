@@ -2075,26 +2075,6 @@ textarea {
   flex: 0 0 auto;
 }
 
-.appearance-heading {
-  margin: 0 4px 26px;
-}
-
-.appearance-heading h1 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-  line-height: 32px;
-}
-
-.appearance-heading p {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
-  font-size: var(--text-small);
-  line-height: 1.5;
-}
-
 .appearance-theme-section > h2 {
   margin: 0 4px 12px;
   color: var(--text-primary);
