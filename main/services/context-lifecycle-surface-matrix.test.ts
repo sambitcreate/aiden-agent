@@ -50,7 +50,7 @@ test("conversation surface matrix converges every authorized turn on the managed
   assert.match(telegram, /beginChatTurn\(chatId, streamId, background\.owner\.documentId\)/u);
   assert.match(telegram, /deps\.llmClient\.start\(/u);
   assert.match(remote, /startSurfaceGeneration\(/u);
-  assert.match(remote, /authoritative\.botId \? \{ botAudienceId: deviceId \}/u);
+  assert.match(remote, /authoritative\.botId \? \{ botAudienceId: this\.botAudienceFor\(deviceId\) \}/u);
   assert.match(scheduled, /beginSurfaceGeneration\(llmClient\.beginChatTurn\.bind\(llmClient\), surface\)/u);
   assert.match(scheduled, /startSurfaceGeneration\(/u);
   assert.match(child, /agent\.runManaged\(/u);

@@ -1866,12 +1866,24 @@ const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES: readonly string[] = [
   ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
 ];
 
+/** True when `/server` sends this device the additive `serverCapabilities` inventory. */
+function receivesServerCapabilities(
+  device: Pick<AidenRemoteRouterAuthenticatedDevice, "acceptsBotCapabilities" | "acceptsProgressCapabilities">,
+): boolean {
+  return device.acceptsBotCapabilities === true || device.acceptsProgressCapabilities === true;
+}
+
 /**
- * A device's grants as this host projects them: a progress grant the host
- * does not serve (a host that stopped advertising skills, or one granted
- * before pairing was filtered) and a Bot opt-in the host does not advertise
- * to this device are left out, so `capabilities` stays within
- * `serverCapabilities`, which iOS and Android require. Routes still refuse it.
+ * A device's grants as this host projects them. Only the projection changes:
+ * the stored grants stay, so one comes back when the host serves it again.
+ *
+ * A device sent `serverCapabilities` sees only grants that list holds for it,
+ * because iOS and Android reject a `/server` whose `capabilities` reach
+ * outside it: a negotiated grant the host stopped advertising (background
+ * jobs turned off, a simulator host gone, a Bot route unwired) is left out.
+ * A legacy device is sent no inventory and no client checks it, so it keeps
+ * its grants, less a progress grant or Bot opt-in this host does not serve.
+ * Routes still check the stored grant and refuse what is not served.
  */
 function servedDeviceCapabilities(
   device: AidenRemoteRouterAuthenticatedDevice,
@@ -1879,6 +1891,9 @@ function servedDeviceCapabilities(
   dependencies: AidenRemoteRouterDependencies,
 ): AidenRemoteCapability[] {
   const advertised = new Set<string>(advertisedServerCapabilities(device, dependencies));
+  if (receivesServerCapabilities(device)) {
+    return [...capabilities].filter((capability) => advertised.has(capability));
+  }
   return [...capabilities].filter((capability) =>
     ((AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability)
       ? progressCapabilitySupported(dependencies, capability as AidenRemoteProgressCapability)
@@ -2822,8 +2837,7 @@ export function createAidenRemoteRequestHandler(
           ...(peerRoutes === undefined ? {} : { peerRoutes }),
           capabilities: servedDeviceCapabilities(device, device.capabilities, dependencies),
           ...(device.name ? { deviceName: device.name } : {}),
-          ...(device.acceptsBotCapabilities === true ||
-            device.acceptsProgressCapabilities === true
+          ...(receivesServerCapabilities(device)
             ? {
                 serverCapabilities: advertisedServerCapabilities(
                   device,
@@ -3081,7 +3095,13 @@ export function createAidenRemoteRequestHandler(
             403,
           );
         }
-        writeJson(response, 200, { capabilities: servedDeviceCapabilities(device, updated.capabilities, dependencies) });
+        // Negotiating a progress grant opts the device into `serverCapabilities`.
+        const negotiated = {
+          ...device,
+          acceptsProgressCapabilities: device.acceptsProgressCapabilities === true ||
+            input.accepts.some((capability) => (AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability)),
+        };
+        writeJson(response, 200, { capabilities: servedDeviceCapabilities(negotiated, updated.capabilities, dependencies) });
         return;
       }
       if (path === "/bots/messaging" && request.method === "PUT") {

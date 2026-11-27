@@ -89,7 +89,7 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
   // (which has no notice record) and every write there is refused.
   const botAudience = (deviceId: string) => bots.legacyChatsAllowed() ? CLI_BOT_OWNER_AUDIENCE_ID : deviceId;
   const chats = new AidenRemoteChatService({ application, chatStore: daemon.chatStore, generation: daemon.llmClient,
-    streams, models: modelService, bots: bots.botStore, botMutations: bots.mutationGate,
+    streams, models: modelService, bots: bots.botStore, botMutations: bots.legacyChatMutations,
     isFolderWorkspace: async (workspaceId) => analyticsWorkspaceKind(await workspace.configStore.getWorkspace(workspaceId)) !== "none",
     // Refused before the message is kept, so the same key runs once the folder is back (desktop parity).
     workspaceFolderRefusal: async (workspaceId) => {

@@ -1135,6 +1135,74 @@ test("once durable Bot sessions are switched on, a paired device's old Bot chat 
   assert.equal(stored.messages.length, 0, "nothing was appended");
 });
 
+test("a Bot chat write admitted before enable-durable lands in the backup, and one arriving during the switch is refused", async (t) => {
+  const dir = temporary(t);
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const daemon = api.createDaemonChats(dir), scheduler = api.createCliScheduler(dir);
+  const runtime = await api.createCliBots(dir, daemon);
+  const remote = await api.createCliRemote(dir, daemon, scheduler, { bots: runtime, discovery: { async start() {}, stop() {} } });
+  t.after(async () => { await remote.stop(); await scheduler.service.stopAndSettle(); await runtime.stop(); });
+  await remote.start();
+  const owner = "cli:local", app = runtime.application;
+  const notice = await app.noticeStatus(owner);
+  await app.acknowledgeNotice(owner, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await app.capabilityCatalog(owner);
+  const model = catalog.providers.find((item) => item.label === "cli-test"); assert.ok(model);
+  const bot = await app.createBot({ audienceId: owner, bot: { name: "Ada", instructions: "Help briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision,
+    custom: { providerId: model.id, modelId: model.models[0].id, fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } } });
+  const chat = await app.createChat({ audienceId: owner, botId: bot.id, providerId: "cli-test", model: "test" });
+  const status = await remote.service.status();
+  const issued = await remote.state.issueDevice({ name: "Test phone", type: "iphone", clientVersion: "test", capabilities: ["server:read", "chat:read", "chat:write", "bot:read", "bot:write"], acceptsBotCapabilities: true });
+  const ca = readFileSync(join(dir, "remote-tls/ca-certificate.pem"));
+  const request = (path, method = "GET", body, headers = {}) => new Promise((resolve, reject) => {
+    const sent = httpsRequest({ hostname: "127.0.0.1", port: status.lanPort, ca, path: `/api/aiden/v1${path}`, method,
+      headers: { authorization: `Bearer ${issued.credential}`, "aiden-protocol-version": "1", ...(body ? { "content-type": "application/json" } : {}), ...headers } }, (response) => {
+      let data = ""; response.on("data", (chunk) => { data += chunk; }); response.on("end", () => resolve({ status: response.statusCode, data: response.headers["content-type"]?.includes("json") ? JSON.parse(data) : data }));
+    });
+    sent.setTimeout(15000, () => sent.destroy(new Error(`Remote request timed out: ${method} ${path}`)));
+    sent.on("error", reject); sent.end(body ? JSON.stringify(body) : undefined);
+  });
+  const revision = (await request(`/chats/${chat.id}`)).data.revision;
+  // A device write already admitted, held open across the switch.
+  let entered, release;
+  const inside = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const held = runtime.legacyChatMutations.run(bot.id, async () => {
+    entered(); await gate;
+    await daemon.chatStore.appendMessage(chat.id, { role: "user", content: "Admitted before the switch" });
+  });
+  await inside;
+  const switching = runtime.command(["enable-durable"]);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(existsSync(join(dir, "bot-durable-v1.json")), false, "the switch waits for the admitted write");
+  // A write arriving now waits behind the switch, then sees it.
+  const late = request(`/chats/${chat.id}`, "PATCH", { title: "Renamed during the switch" }, { "if-match": revision });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  release();
+  await held;
+  const migrated = await switching;
+  const backup = JSON.parse(readFileSync(join(migrated.backup, "legacy-chats.json"), "utf8")).chats.find((entry) => entry.chat.id === chat.id);
+  assert.ok(backup.chat.messages.some((message) => message.content === "Admitted before the switch"), JSON.stringify(backup.chat.messages));
+  const refused = await late;
+  assert.equal(refused.status, 404, JSON.stringify(refused));
+  assert.equal((await daemon.chatStore.get(chat.id)).title, backup.chat.title);
+  assert.notEqual(backup.chat.title, "Renamed during the switch");
+});
+
+test("enable-durable gives up, changing nothing, when an admitted Bot chat write does not finish", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir), fence = new api.LegacyBotChatFence();
+  let release;
+  const held = fence.shared(() => new Promise((resolve) => { release = resolve; }));
+  await assert.rejects(api.enableCliDurableBots(dir, daemon, fence, 50), /still saving a change to a Bot chat\. Nothing was changed/u);
+  assert.equal(existsSync(join(dir, "bot-durable-v1.json")), false);
+  assert.equal(existsSync(join(dir, "bot-migration-backups")), false);
+  release(); await held;
+  // Once the write is done, the switch goes through.
+  assert.equal((await api.enableCliDurableBots(dir, daemon, fence, 50)).enabled, true);
+});
+
 test("an unreadable durable Bot marker refuses Bot chat writes and leaves ordinary chats working", async (t) => {
   const dir = temporary(t);
   // The provider is never reached by a Bot turn; an ordinary turn is accepted and then fails to connect.

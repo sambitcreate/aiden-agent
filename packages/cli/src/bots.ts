@@ -7,6 +7,7 @@ import { createBotOpenWorkRoutineOrigin, createBotRoutineOriginSender } from "..
 import { createBotRoutineService } from "../../../main/services/scheduled-bot-routines.js";
 import type { createCliScheduler } from "./schedules.ts";
 import { cliDurableBotMarker, enableCliDurableBots } from "./bot-durable-migration.ts";
+import { LegacyBotChatFence } from "./legacy-bot-chat-fence.ts";
 import { createCliDurableBots, type CliDurableBotToolContext } from "./bot-durable.ts";
 import { subagentsEnabled } from "../../../main/services/subagents/feature-flag.js";
 import { createBotSubagentTool, deleteCliBotSubagentHistory } from "./bot-subagents.ts";
@@ -147,7 +148,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     return { botId, paused: true as const, since: record.since };
   }
   const managedWorkspace = createBotManagedWorkspaceService({ root });
-  const mutationGate = new BotMutationGate(), inventoryLeases = new BotRuntimeInventoryLeaseRegistry();
+  const mutationGate = new BotMutationGate(), inventoryLeases = new BotRuntimeInventoryLeaseRegistry(), legacyChatFence = new LegacyBotChatFence();
   const approvedRoots = () => readJson<Pick<AidenRemoteStateDocument, "approvedRoots">>(join(agentDir, "remote.json"), { approvedRoots: [] }).approvedRoots;
   const incarnations = createBotCapabilityIncarnationStore(capabilities);
   const mcp = createCliMcpPool(agentDir), web = createCliWebSearch(agentDir);
@@ -299,6 +300,8 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   }) : undefined;
   let routines: ReturnType<typeof createBotRoutineService> | undefined;
   return { application, botStore, capabilities, catalog, managedWorkspace, mutationGate, inventoryLeases, authority, tools, durable, isPaused, assertNotPaused,
+    /** A paired device's Bot-chat writes: one Bot at a time, and ordered against `enable-durable`. */
+    legacyChatMutations: { run: <T>(botId: string, operation: () => Promise<T>) => legacyChatFence.shared(() => mutationGate.run(botId, operation)) },
     get routines() { return routines; },
     setScheduler(scheduler: ReturnType<typeof createCliScheduler>) {
       if (!durable) return;
@@ -348,7 +351,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     async command(args: string[]) {
       const [action = "list", id, input] = args, audienceId = CLI_BOT_OWNER_AUDIENCE_ID;
       switch (action) {
-        case "enable-durable": return enableCliDurableBots(agentDir, daemon);
+        case "enable-durable": return enableCliDurableBots(agentDir, daemon, legacyChatFence);
         case "session": if (!durable) throw new Error("Run bots enable-durable, then restart the daemon."); return durable.runtime.state(id);
         case "send": {
           if (!durable || !id || !input) throw new Error(BOTS_USAGE.send);

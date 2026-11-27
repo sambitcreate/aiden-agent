@@ -170,7 +170,12 @@ test("an approved request round-trips over HTTP and its credential authenticates
     const projection = await server.json();
     assert.equal(projection.instanceId, grant.instanceId);
     assert.equal(projection.deviceName, "Travel MacBook");
-    assert.ok(projection.capabilities.includes("runs:control"));
+    // The approved Mac holds the run grants; this host serves no runs, so
+    // `/server` leaves them out and stays within `serverCapabilities`.
+    const stored = (await app.registry.listDevices()).find((device) => device.name === "Travel MacBook");
+    assert.ok(stored?.capabilities.includes("runs:control"));
+    assert.equal(projection.capabilities.includes("runs:control"), false);
+    assert.ok(projection.capabilities.every((capability: string) => projection.serverCapabilities.includes(capability)), JSON.stringify(projection));
     assert.ok(projection.features.includes("pairing-requests-v1"));
 
     // Request logs carry the route template, never the request id.

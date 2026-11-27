@@ -2751,6 +2751,38 @@ test("a Bot opt-in the host does not advertise is neither granted nor projected,
   }
 });
 
+test("a negotiated grant the host stopped serving drops out of /server and returns once served again", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  // A desktop that negotiated background jobs and simulator control while the host served both.
+  const held: AidenRemoteCapability[] = ["server:read", "chat:read", "chat:write", "tasks:read", "chat:jobs", "simulators:control"];
+  const subset = (server: { capabilities: string[]; serverCapabilities: string[] }) =>
+    server.capabilities.every((capability) => server.serverCapabilities.includes(capability));
+  // The host has since turned off background jobs and has no simulators.
+  const off = await fixture({ capabilities: held, acceptsProgressCapabilities: true, deviceType: "mac" });
+  try {
+    const server = await (await fetch(`${off.base}/server`, { headers })).json();
+    assert.ok(subset(server), JSON.stringify(server));
+    assert.equal(server.capabilities.includes("chat:jobs"), false);
+    assert.equal(server.capabilities.includes("simulators:control"), false);
+    // Base grants are always offered, so they stay.
+    assert.deepEqual(["server:read", "chat:read", "chat:write", "tasks:read"].filter((capability) => server.capabilities.includes(capability)), ["server:read", "chat:read", "chat:write", "tasks:read"]);
+    // Reading `/server` rewrites no grant.
+    assert.equal(off.calls.some((call) => call.startsWith("device-capabilities:")), false);
+  } finally {
+    await off.close();
+  }
+  // With jobs served again, the same stored grant is projected again.
+  const on = await fixture({ capabilities: held, acceptsProgressCapabilities: true, deviceType: "mac",
+    backgroundJobs: {} as import("./aiden-remote-router.js").AidenRemoteRouterDependencies["backgroundJobs"] });
+  try {
+    const server = await (await fetch(`${on.base}/server`, { headers })).json();
+    assert.ok(subset(server), JSON.stringify(server));
+    assert.equal(server.capabilities.includes("chat:jobs"), true);
+  } finally {
+    await on.close();
+  }
+});
+
 test("Bot capability catalogs strictly route optional authenticated Bot targets", async () => {
   const app = await fixture({
     capabilities: ["bot:read"],
