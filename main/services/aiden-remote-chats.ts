@@ -818,6 +818,17 @@ function remoteMessageText(message: ChatMessage): string {
   return notice ? agentNoticeDisplayText(notice) : message.content;
 }
 
+function withoutThinkingOffsets(timeline: GenerationTimeline): GenerationTimeline {
+  return {
+    ...timeline,
+    steps: timeline.steps.map((step) => {
+      if (step.kind !== "thinking") return step;
+      const { reasoningStartOffset: _start, reasoningEndOffset: _end, ...safeStep } = step;
+      return safeStep;
+    }),
+  };
+}
+
 function projectMessage(
   chat: Chat,
   message: ChatMessage & { role: "user" | "assistant" },
@@ -841,11 +852,7 @@ function projectMessage(
   // pointing beyond the prefix exposed to Remote. Omit it as a unit in
   // that case instead of clamping or fabricating offsets.
   const publicTimeline = storedTimeline && !reasoning
-    ? { ...storedTimeline, steps: storedTimeline.steps.map((step) => {
-        if (step.kind !== "thinking") return step;
-        const { reasoningStartOffset: _start, reasoningEndOffset: _end, ...safeStep } = step;
-        return safeStep;
-      }) }
+    ? withoutThinkingOffsets(storedTimeline)
     : storedTimeline;
   const timeline = publicTimeline
     ? parseGenerationTimeline(publicTimeline, text.length, reasoning?.length ?? 0) ?? undefined
@@ -887,12 +894,32 @@ function withoutReasoning(message: AidenRemoteMessageProjection): void {
   if (!message.reasoning) return;
   delete message.reasoning;
   if (message.timeline) {
-    message.timeline.steps = message.timeline.steps.map((step) => {
-      if (step.kind !== "thinking") return step;
-      const { reasoningStartOffset: _start, reasoningEndOffset: _end, ...safeStep } = step;
-      return safeStep;
-    });
+    message.timeline = withoutThinkingOffsets(message.timeline);
   }
+}
+
+function projectChatHeader<
+  Middle extends Record<string, unknown> = Record<never, never>,
+  AfterTimestamps extends Record<string, unknown> = Record<never, never>,
+>(
+  chat: Chat,
+  options: { titlePending?: boolean },
+  middle: Middle = {} as Middle,
+  afterTimestamps: AfterTimestamps = {} as AfterTimestamps,
+) {
+  const forkedFrom = projectForkLineage(chat, true);
+  return {
+    workspaceId: persistedChatWorkspaceId(chat.workspaceId),
+    ...(chat.botId ? { botId: chat.botId } : {}),
+    title: boundedUnicodeScalarPrefix(chat.title, 1_024),
+    ...projectChatModelSelection(chat),
+    ...middle,
+    createdAt: new Date(chat.createdAt).toISOString(),
+    updatedAt: new Date(chat.updatedAt).toISOString(),
+    ...afterTimestamps,
+    ...(options.titlePending === true ? { titlePending: true as const } : {}),
+    ...(forkedFrom ? { forkedFrom } : {}),
+  };
 }
 
 export interface AidenRemoteChatMessagesWindow {
@@ -948,20 +975,12 @@ export function projectAidenRemoteChatMessagesWindow(
   let first = Math.max(0, end - input.limit);
   try {
     const messages = visible.slice(first, end).map((message) => projectMessage(chat, message));
-    const forkedFrom = projectForkLineage(chat, true);
     const window: AidenRemoteChatMessagesWindow = {
       chatId: chat.id,
       revision: chatRevision(chat),
       messages,
       hasOlder: first > 0,
-      workspaceId: persistedChatWorkspaceId(chat.workspaceId),
-      ...(chat.botId ? { botId: chat.botId } : {}),
-      title: boundedUnicodeScalarPrefix(chat.title, 1_024),
-      ...projectChatModelSelection(chat),
-      createdAt: new Date(chat.createdAt).toISOString(),
-      updatedAt: new Date(chat.updatedAt).toISOString(),
-      ...(options.titlePending === true ? { titlePending: true as const } : {}),
-      ...(forkedFrom ? { forkedFrom } : {}),
+      ...projectChatHeader(chat, options),
     };
     let bytes = Buffer.byteLength(JSON.stringify(window), "utf8");
     let dropped = 0;
@@ -1010,18 +1029,13 @@ export function projectAidenRemoteChat(
     }
     const projection: AidenRemoteChatProjection = {
       id: chat.id,
-      workspaceId: persistedChatWorkspaceId(chat.workspaceId),
-      ...(chat.botId ? { botId: chat.botId } : {}),
-      title: boundedUnicodeScalarPrefix(chat.title, 1_024),
-      ...projectChatModelSelection(chat),
-      messages: visibleMessages.map((message) => projectMessage(chat, message)),
-      createdAt: new Date(chat.createdAt).toISOString(),
-      updatedAt: new Date(chat.updatedAt).toISOString(),
-      revision: chatRevision(chat),
-      ...(options.titlePending === true ? { titlePending: true as const } : {}),
+      ...projectChatHeader(
+        chat,
+        options,
+        { messages: visibleMessages.map((message) => projectMessage(chat, message)) },
+        { revision: chatRevision(chat) },
+      ),
     };
-    const forkedFrom = projectForkLineage(chat, true);
-    if (forkedFrom) projection.forkedFrom = forkedFrom;
     // Reasoning is optional presentation data. Keep the existing chat available
     // when several otherwise valid assistant messages exceed the response cap.
     let responseBytes = Buffer.byteLength(JSON.stringify(projection), "utf8");
@@ -1903,10 +1917,7 @@ export class AidenRemoteChatService {
     return { chats: chats.map((chat) => this.project(chat)) };
   }
 
-  async listSummaries(
-    limit = AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
-    cursor?: string,
-  ): Promise<AidenRemoteChatSummaryPage> {
+  private requireSummaryMetadata() {
     const listSummaryMetadata = this.options.application.listSummaryMetadata;
     if (!listSummaryMetadata) {
       throw new AidenRemoteServiceError(
@@ -1915,6 +1926,14 @@ export class AidenRemoteChatService {
         500,
       );
     }
+    return listSummaryMetadata;
+  }
+
+  async listSummaries(
+    limit = AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
+    cursor?: string,
+  ): Promise<AidenRemoteChatSummaryPage> {
+    const listSummaryMetadata = this.requireSummaryMetadata();
     if (!Number.isInteger(limit) || limit < 1 || limit > AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT) {
       throw new AidenRemoteServiceError(
         "invalid_request",
@@ -2003,14 +2022,7 @@ export class AidenRemoteChatService {
     summaries: AidenRemoteChatSummaryProjection[];
     botChatIds: Set<string>;
   }> {
-    const listSummaryMetadata = this.options.application.listSummaryMetadata;
-    if (!listSummaryMetadata) {
-      throw new AidenRemoteServiceError(
-        "internal_error",
-        "The transcript-free chat summary index is unavailable.",
-        500,
-      );
-    }
+    const listSummaryMetadata = this.requireSummaryMetadata();
     const metadata = await listSummaryMetadata();
     return {
       summaries: await this.freezeSummaryPage(safeSummaryRows(metadata)),
