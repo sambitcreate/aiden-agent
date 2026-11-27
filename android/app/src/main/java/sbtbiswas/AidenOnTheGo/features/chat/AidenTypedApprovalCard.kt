@@ -98,21 +98,7 @@ fun AidenTypedApprovalCardContent(
 ) {
     val palette = AidenTheme.palette
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            Modifier.size(44.dp).background(palette.accentFill.fill, RoundedCornerShape(13.dp)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(typedCardIcon(card), contentDescription = null, tint = palette.accentFill.content, modifier = Modifier.size(22.dp))
-        }
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = card.title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = palette.foreground,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.semantics { heading() }
-        )
+        AidenApprovalHeader(typedCardIcon(card), card.title)
         val sections = buildList<@Composable () -> Unit> {
             if (card.arguments.isNotEmpty()) add { TypedPairs(card.arguments.map { it.key to it.value }) }
             card.body?.let { body ->

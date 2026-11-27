@@ -191,7 +191,7 @@ internal fun AidenApprovalCardContent(
 
 /** The decorative icon tile and the card's question, read first as its heading. */
 @Composable
-private fun AidenApprovalHeader(icon: ImageVector, title: String) {
+internal fun AidenApprovalHeader(icon: ImageVector, title: String) {
     val palette = AidenTheme.palette
     Box(
         modifier = Modifier
