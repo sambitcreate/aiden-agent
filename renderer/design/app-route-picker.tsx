@@ -48,6 +48,8 @@ const SOURCE_LINES: Record<AppRouteList["source"], string> = {
   fallback: "Only / found: list routes in .aiden/canvas.json",
 };
 
+const TRUNCATED_LINE = "Not every route is listed: type /path, or list routes in .aiden/canvas.json";
+
 /**
  * The person's Add, in order (M6.3): the canvas's pending save lands first, so
  * main's write can't conflict with it, then main places on the page on screen.
@@ -71,7 +73,10 @@ function prefilled(pattern: string, routes: readonly AppRouteEntry[]): Record<st
   if (params.length !== 1) return {};
   const filled = routes.find((entry) => entry.pattern === pattern && isConcreteRoute(entry.route));
   if (!filled) return {};
-  const index = pattern.split("/").findIndex((segment) => segment.includes("["));
+  const parts = pattern.split("/");
+  const index = parts.findIndex((segment) => segment.includes("["));
+  // A catch-all stops where the pattern's own segments after it begin.
+  const after = parts.length - 1 - index;
   const segments = filled.route.split("/");
   const decode = (part: string) => {
     try {
@@ -80,7 +85,7 @@ function prefilled(pattern: string, routes: readonly AppRouteEntry[]): Record<st
       return part;
     }
   };
-  const value = params[0]!.catchAll ? segments.slice(index).map(decode).join("/") : decode(segments[index] ?? "");
+  const value = params[0]!.catchAll ? segments.slice(index, after > 0 ? -after : undefined).map(decode).join("/") : decode(segments[index] ?? "");
   return { [params[0]!.name]: value };
 }
 
@@ -132,15 +137,20 @@ export function AppRoutePicker({
   const [problem, setProblem] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const listId = React.useId();
+  // Only the newest load answers: a slower one for another app, or from before the dialog closed, is dropped.
+  const loadSeq = React.useRef(0);
+  // Set by an arrow key, so only keyboard moves scroll the list.
+  const keyedMove = React.useRef(false);
 
   const load = React.useCallback(
     (appRoot?: string) => {
-      let live = true;
+      const seq = ++loadSeq.current;
+      const live = () => seq === loadSeq.current;
       setAnswer(null);
       setProblem(null);
       source.load(appRoot).then(
         (next) => {
-          if (!live) return;
+          if (!live()) return;
           setAnswer(next);
           setActive(0);
           if (!("error" in next)) {
@@ -152,11 +162,12 @@ export function AppRoutePicker({
           }
         },
         () => {
-          if (live) setAnswer({ error: "unavailable" });
+          if (live()) setAnswer({ error: "unavailable" });
         },
       );
+      // Closing drops every load still reading, this one or a later app switch's.
       return () => {
-        live = false;
+        loadSeq.current += 1;
       };
     },
     [source],
@@ -173,6 +184,13 @@ export function AppRoutePicker({
   const index = Math.min(active, Math.max(0, rows.length - 1));
   const current = rows[index];
   const currentRoute = current ? routeOf(current, values[current.route] ?? {}) : null;
+  const optionId = (at: number) => `${listId}-option-${at}`;
+
+  React.useEffect(() => {
+    if (!keyedMove.current) return;
+    keyedMove.current = false;
+    document.getElementById(`${listId}-option-${index}`)?.scrollIntoView({ block: "nearest" });
+  }, [index, listId]);
 
   const add = async (row: Row | undefined = current) => {
     if (!loaded || !row || busy) return;
@@ -195,14 +213,13 @@ export function AppRoutePicker({
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       if (rows.length === 0) return;
+      keyedMove.current = true;
       setActive((index + (event.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length);
     } else if (event.key === "Enter") {
       event.preventDefault();
       void add();
     }
   };
-
-  const optionId = (at: number) => `${listId}-option-${at}`;
 
   return (
     <Dialog
@@ -267,11 +284,16 @@ export function AppRoutePicker({
                     role="option"
                     aria-selected={selected}
                     data-selected={selected || undefined}
-                    onPointerMove={() => setActive(at)}
+                    onPointerMove={() => {
+                      // A pointer passing over never takes the row the person is typing a value into.
+                      const focused = document.activeElement;
+                      if (focused instanceof HTMLInputElement && focused.closest('[role="option"]')) return;
+                      setActive(at);
+                    }}
                     onClick={() => setActive(at)}
                     onDoubleClick={() => void add(row)}
                     className={cn(
-                      "flex min-h-9 cursor-default flex-wrap items-center gap-2 rounded-menu px-2.5 py-1 transition-colors duration-100",
+                      "flex min-h-9 cursor-default flex-wrap items-center gap-2 rounded-menu px-2.5 py-1 transition-colors",
                       selected ? "bg-control" : "hover:bg-list-hover",
                     )}
                   >
@@ -284,6 +306,8 @@ export function AppRoutePicker({
                         value={rowValues[param.name] ?? ""}
                         className="h-7 w-32"
                         onFocus={() => setActive(at)}
+                        // Double-clicking selects a word to edit; only the row itself adds on double-click.
+                        onDoubleClick={(event) => event.stopPropagation()}
                         onChange={(event) =>
                           setValues((all) => ({ ...all, [row.route]: { ...(all[row.route] ?? {}), [param.name]: event.target.value } }))
                         }
@@ -300,6 +324,7 @@ export function AppRoutePicker({
               })}
             </div>
             {hidden > 0 ? <p className="text-small text-secondary">{`${hidden} more: refine the filter`}</p> : null}
+            {loaded!.list.truncated ? <p className="text-small text-secondary">{TRUNCATED_LINE}</p> : null}
             <p className="text-small text-tertiary">{SOURCE_LINES[loaded!.list.source]}</p>
           </>
         )}

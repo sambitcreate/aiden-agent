@@ -213,6 +213,116 @@ test("Escape closes the dialog without placing anything", async () => {
   assert.deepEqual(places, []);
 });
 
+test("a list main cut short says so, and points to typing a path or canvas.json", async () => {
+  const cut = { ...list([{ route: "/", source: "discovered" }]), truncated: true };
+  const { source } = fakeSource({ answer: { apps: [{ appRoot: ".", label: "App" }], appRoot: ".", list: cut } });
+  render(<Picker source={source} />);
+  await until(() => screen.getByText("Not every route is listed: type /path, or list routes in .aiden/canvas.json"));
+  cleanup();
+  render(<Picker source={fakeSource().source} />);
+  await until(() => optionTexts());
+  assert.equal(screen.queryByText(/Not every route is listed/u), null);
+});
+
+test("a load still reading when the dialog closes never replaces the list of the next opening", async () => {
+  const apps = [{ appRoot: "apps/a", label: "a" }, { appRoot: "apps/b", label: "b" }];
+  const answerFor = (appRoot: string): AppRoutesAnswer => ({ apps, appRoot, list: list([{ route: appRoot === "apps/a" ? "/from-a" : "/from-b", source: "discovered" }]) });
+  let releaseB: () => void = () => undefined;
+  const places: Array<[string, string]> = [];
+  const source: AppRouteSource = {
+    load: (appRoot) =>
+      appRoot === "apps/b" ? new Promise((resolve) => (releaseB = () => resolve(answerFor("apps/b")))) : Promise.resolve(answerFor("apps/a")),
+    place: async (appRoot, route) => {
+      places.push([appRoot, route]);
+      return { placed: "f", pageId: "p" };
+    },
+  };
+  const view = render(<AppRoutePicker open onOpenChange={() => undefined} source={source} />);
+  const picker = await until(() => screen.getByRole("combobox", { name: "App" }));
+  await act(async () => {
+    fireEvent.keyDown(picker, { key: "Enter" });
+  });
+  const b = await until(() => screen.getByRole("option", { name: "b" }));
+  await act(async () => {
+    fireEvent.click(b);
+  });
+  view.rerender(<AppRoutePicker open={false} onOpenChange={() => undefined} source={source} />);
+  view.rerender(<AppRoutePicker open onOpenChange={() => undefined} source={source} />);
+  await until(() => assert.deepEqual(optionTexts(), ["/from-a"]));
+  await act(async () => releaseB());
+  await act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+  assert.deepEqual(optionTexts(), ["/from-a"]);
+  await key(filter(), "Enter");
+  await until(() => assert.deepEqual(places, [["apps/a", "/from-a"]]));
+});
+
+test("double-clicking inside a value field selects text there and adds nothing", async () => {
+  const { source, places } = fakeSource();
+  let closed = 0;
+  render(<Picker source={source} onClose={() => (closed += 1)} />);
+  const slug = await until(() => screen.getByRole("textbox", { name: "slug" }));
+  await act(async () => {
+    fireEvent.doubleClick(slug);
+  });
+  await act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+  assert.deepEqual(places, []);
+  assert.equal(closed, 0);
+});
+
+test("a catch-all in the middle of a pattern prefills only its own segments", async () => {
+  const { source, places } = fakeSource({
+    answer: {
+      apps: [{ appRoot: ".", label: "App" }],
+      appRoot: ".",
+      list: list(
+        [
+          { route: "/docs/[...rest]/edit", pattern: "/docs/[...rest]/edit", source: "config" },
+          { route: "/docs/guide/intro/edit", pattern: "/docs/[...rest]/edit", source: "config" },
+        ],
+        "config",
+      ),
+    },
+  });
+  render(<Picker source={source} />);
+  const rest = (await until(() => screen.getByRole("textbox", { name: "rest" }))) as HTMLInputElement;
+  assert.equal(rest.value, "guide/intro");
+  await key(rest, "Enter");
+  await until(() => assert.deepEqual(places, [[".", "/docs/guide/intro/edit"]]));
+});
+
+test("arrow keys bring the active row into view, and a pointer passing over another row leaves the row being typed into active", async () => {
+  const scrolled: string[] = [];
+  const original = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+    scrolled.push(this.textContent ?? "");
+  };
+  try {
+    const { source, places } = fakeSource();
+    render(<Picker source={source} />);
+    await until(() => optionTexts());
+    await key(filter(), "ArrowDown");
+    await until(() => assert.equal(scrolled[scrolled.length - 1], "/pricing"));
+
+    const slug = screen.getByRole("textbox", { name: "slug" });
+    await act(async () => {
+      slug.focus();
+      fireEvent.focus(slug);
+    });
+    const slugRow = screen.getAllByRole("option")[2]!;
+    assert.equal(slugRow.getAttribute("aria-selected"), "true");
+    await act(async () => {
+      fireEvent.pointerMove(screen.getAllByRole("option")[0]!);
+    });
+    assert.equal(slugRow.getAttribute("aria-selected"), "true", "the typed-into row stays active");
+    await act(async () => {
+      fireEvent.click(addButton());
+    });
+    await until(() => assert.deepEqual(places, [[".", "/blog/hello-world"]]));
+  } finally {
+    HTMLElement.prototype.scrollIntoView = original;
+  }
+});
+
 // ── The Add menu ──
 
 function snapshot(overrides: Partial<DesignAppsSnapshot> = {}): DesignAppsSnapshot {
