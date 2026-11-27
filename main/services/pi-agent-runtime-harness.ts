@@ -1911,11 +1911,6 @@ export class PiAgentRuntimeHarness {
     return this.contributionRevision;
   }
 
-  observeRuntime(observer: PiRuntimeEventObserver): () => void {
-    if (!this.runtimeEvents) throw new Error("Pi runtime canonical events are not configured.");
-    return this.runtimeEvents.observe(observer);
-  }
-
   runtimeEventState(): PiRuntimeEventState | undefined {
     return this.runtimeEvents?.snapshot();
   }

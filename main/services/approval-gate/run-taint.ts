@@ -273,11 +273,6 @@ export class RunTaint {
     this.holdOutside();
   }
 
-  /** The person named another site mid-run (a steering message). */
-  addPersonText(text: string): void {
-    for (const host of namedHosts(text)) this.hosts.add(host);
-  }
-
   /** Whether the gate should treat this call as a new destination. */
   isNewDestination(call: RunTaintCall): boolean {
     if (!this.outside) return false;
