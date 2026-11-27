@@ -220,6 +220,27 @@ test("no iframe exists until main answers the mount, which names the frame and a
   await liveIframe();
 });
 
+test("3c: a frame the canvas hasn't saved yet (one an undo brought back) is saved before main is asked to mount it", async () => {
+  // Main finds the frame on the saved canvas, so it can't mount one that isn't saved.
+  let saved = false;
+  let finishSave: () => void = noop;
+  const { mounts } = setup({ mount: () => (saved ? { origin: ORIGIN } : { error: "unavailable" }) });
+  const beforeMount = () =>
+    new Promise<void>((resolve) => {
+      finishSave = () => {
+        saved = true;
+        resolve();
+      };
+    });
+  render(<Harness frame={appFrame()} beforeMount={beforeMount} />);
+  await settleFocus();
+  assert.equal(mounts().length, 0, "main isn't asked while the save is pending");
+  act(() => finishSave());
+  await liveIframe();
+  assert.equal(mounts().length, 1);
+  assert.equal(screen.queryByText("This frame can't show the app."), null);
+});
+
 test("an IPv6 origin isn't framed: the frame asks to restart the app on 127.0.0.1", async () => {
   setup({ apps: [app({ origin: "http://[::1]:5173" })], mount: () => ({ origin: "http://[::1]:5173" }) });
   render(<Harness frame={appFrame()} />);
@@ -913,6 +934,7 @@ function nodeContext(update: DesignNodeContextValue["update"]): DesignNodeContex
     duplicateAppPage: noop,
     trashAppPage: noop,
     trashing: new Set(),
+    flushCanvas: async () => true,
   };
 }
 

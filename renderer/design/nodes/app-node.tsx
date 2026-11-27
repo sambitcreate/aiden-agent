@@ -389,6 +389,8 @@ export type AppFrameProps = {
   ruler?: (breakpoints: readonly number[]) => React.ReactNode;
   /** 3c (S96): dimmed while its page's file goes to the Trash. */
   busy?: boolean;
+  /** Settles once the canvas holding this frame is saved, before main is asked to mount it. */
+  beforeMount?: () => Promise<unknown>;
 };
 
 /** An app frame's body and title row. */
@@ -406,6 +408,7 @@ export function AppFrame({
   now = monotonicNow,
   ruler,
   busy = false,
+  beforeMount,
 }: AppFrameProps) {
   const { designLive } = useAppCapabilities();
   const snapshotOfApps = useDesignAppsSnapshot(chatId, designLive);
@@ -450,6 +453,8 @@ export function AppFrame({
   const [mount, setMount] = React.useState<{ key: string; token: string; revision: number; result: DesignAppFrameMountResult | null } | null>(null);
   const revisionRef = React.useRef(app?.revision ?? 0);
   revisionRef.current = app?.revision ?? 0;
+  const beforeMountRef = React.useRef(beforeMount);
+  beforeMountRef.current = beforeMount;
   React.useEffect(() => {
     if (mountKey === null) {
       setMount(null);
@@ -458,14 +463,18 @@ export function AppFrame({
     let alive = true;
     const token = newMountToken();
     setMount({ key: mountKey, token, revision: revisionRef.current, result: null });
-    designCanvasApi.mountDesignAppFrame(chatId, frame.id, token).then(
-      (result) => {
-        if (alive) setMount((current) => (current?.token === token ? { ...current, result } : current));
-      },
-      () => {
-        if (alive) setMount((current) => (current?.token === token ? { ...current, result: { error: "unavailable" } } : current));
-      },
-    );
+    // Main finds the frame on the saved canvas: a frame an undo or redo brought back is saved first.
+    const saved = beforeMountRef.current ? beforeMountRef.current().catch(() => undefined) : Promise.resolve();
+    void saved
+      .then(() => (alive ? designCanvasApi.mountDesignAppFrame(chatId, frame.id, token) : null))
+      .then(
+        (result) => {
+          if (alive && result) setMount((current) => (current?.token === token ? { ...current, result } : current));
+        },
+        () => {
+          if (alive) setMount((current) => (current?.token === token ? { ...current, result: { error: "unavailable" } } : current));
+        },
+      );
     return () => {
       alive = false;
     };
@@ -887,6 +896,7 @@ export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
         actions={<FrameActions frame={frame} compact={frame.w < APP_COMPACT_HEADER_PX} />}
         ruler={designLive ? ruler : undefined}
         busy={designLive && canvas.trashing.has(id)}
+        beforeMount={canvas.flushCanvas}
       />
       {designLive ? (
         <span role="status" aria-live="polite" className="sr-only">

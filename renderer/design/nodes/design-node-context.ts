@@ -105,6 +105,12 @@ export type DesignNodeContextValue = {
   trashAppPage(id: string): void;
   /** The frames dimmed while their page's file goes to the Trash. */
   trashing: ReadonlySet<string>;
+  /**
+   * Saves the canvas's pending edits now. A live app frame waits for it before
+   * asking main for its origin, since main finds the frame on the saved canvas:
+   * one an undo or redo brought back is otherwise not saved yet.
+   */
+  flushCanvas(): Promise<boolean>;
 };
 
 export const DesignNodeContext = React.createContext<DesignNodeContextValue | null>(null);
