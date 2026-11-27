@@ -354,6 +354,14 @@ function AssistantResponse({
   ) : (
     proselessActions(footer, fork)
   );
+  const trailing = (
+    <>
+      {media}
+      {visualNodes(slots.trailing)}
+      {uiNodes(uiSlots.trailing, false)}
+      {actions}
+    </>
+  );
   const showReasoning = Boolean(reasoning);
   if (!rows || !timeline) {
     const activityTimeline = timeline
@@ -405,10 +413,7 @@ function AssistantResponse({
             />
           ) : null,
         ]}
-        {media}
-        {visualNodes(slots.trailing)}
-        {uiNodes(uiSlots.trailing, false)}
-        {actions}
+        {trailing}
       </>
     );
   }
@@ -447,6 +452,7 @@ function AssistantResponse({
           return <BrowserRecordingCard key={row.key} recording={row.step.recording} />;
         }
         if (row.kind === "activity") {
+          const rowImages = imageSlots.byRowKey.get(row.key);
           return (
             <React.Fragment key={row.key}>
               <ActivityFeed
@@ -461,9 +467,7 @@ function AssistantResponse({
               />
               {visualNodes(slots.byRowKey.get(row.key))}
               {draftNodes(slots.draftsByRowKey.get(row.key))}
-              {imageSlots.byRowKey.has(row.key)
-                ? mediaNodes(imageSlots.byRowKey.get(row.key)?.slots, imageSlots.byRowKey.get(row.key)?.attachments)
-                : null}
+              {rowImages ? mediaNodes(rowImages.slots, rowImages.attachments) : null}
               {uiNodes(uiSlots.byRowKey.get(row.key), false)}
               {uiNodes(uiSlots.draftsByRowKey.get(row.key), true)}
               {subagentActivityKey === row.key ? subagentChips : null}
@@ -489,10 +493,7 @@ function AssistantResponse({
           />
         );
       })}
-      {media}
-      {visualNodes(slots.trailing)}
-      {uiNodes(uiSlots.trailing, false)}
-      {actions}
+      {trailing}
     </>
   );
 }
@@ -577,14 +578,15 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   keepForkWrapper = false,
 }: SettledMessageRowProps) {
   const placements = message?.htmlArtifactPlacements;
-  const visualPlacements = React.useMemo(
-    () => new Map((placements ?? []).map((p) => [p.mediaId, p.toolCallId])),
-    [placements],
-  );
-  const wideVisuals = React.useMemo(
-    () => new Set((placements ?? []).flatMap((p) => (p.layout === "wide" ? [p.mediaId] : []))),
-    [placements],
-  );
+  const { visualPlacements, wideVisuals } = React.useMemo(() => {
+    const byMediaId = new Map<string, string>();
+    const wide = new Set<string>();
+    for (const placement of placements ?? []) {
+      byMediaId.set(placement.mediaId, placement.toolCallId);
+      if (placement.layout === "wide") wide.add(placement.mediaId);
+    }
+    return { visualPlacements: byMediaId, wideVisuals: wide };
+  }, [placements]);
   const renderUiVisual = React.useCallback<RenderUiVisual>(
     (visual) => (message ? renderSettledUiVisual?.(visual, message) : null),
     [message, renderSettledUiVisual],
