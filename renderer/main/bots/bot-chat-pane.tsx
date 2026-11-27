@@ -1214,21 +1214,27 @@ export function BotChatPane({ botId }: { botId: string }) {
       ),
     });
   }
+  const respondToPlan = async (
+    planId: string,
+    decision: Parameters<typeof botsApi.respondPlan>[0]["decision"],
+  ) => {
+    const { result } = await botsApi.respondPlan({ botId: current.id, planId, decision });
+    if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+  };
+  const renderPlanCard = (activePlan: NonNullable<typeof plan>) => (
+    <PlanCard
+      plan={activePlan}
+      botName={current.name}
+      avatar={current.avatar}
+      onRespond={(decision) => respondToPlan(activePlan.planId, decision)}
+    />
+  );
+
   if (plan && pendingPlan) {
     slotItems.push({
       key: `plan:${plan.planId}:${plan.revision}`,
       kind: "plan",
-      render: () => (
-        <PlanCard
-          plan={plan}
-          botName={current.name}
-          avatar={current.avatar}
-          onRespond={async (decision) => {
-            const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
-            if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
-          }}
-        />
-      ),
+      render: () => renderPlanCard(plan),
     });
   }
   // A change the Bot asked for in a run the person didn't start (§4.6).
@@ -1480,17 +1486,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         <Text as="p" variant="small" color="secondary" role="status">A saved Resume request is awaiting confirmation. Retry keeps its original request and cost acknowledgement.</Text>
         {savedResumes.rows.map((attempt) => <Button key={attempt.requestId} size="small" disabled={resumeSending} onClick={() => void performResume(attempt, true)}>Retry saved Resume</Button>)}
       </div>}
-      {status === "plan" && plan ? (
-        <PlanCard
-          plan={plan}
-          botName={current.name}
-          avatar={current.avatar}
-          onRespond={async (decision) => {
-            const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
-            if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
-          }}
-        />
-      ) : null}
+      {status === "plan" && plan ? renderPlanCard(plan) : null}
       <AlertDialog open={costConsent !== null} onOpenChange={(open) => { if (!open) setCostConsent(null); }} title={`Resume ${current.name} with an unconfirmed charge?`} description={BOT_UNKNOWN_COST_CONFIRMATION} confirmLabel="Resume" onConfirm={() => {
         const consent = costConsent; setCostConsent(null);
         if (consent?.botId === current.id && state?.kind === "interrupted" && consent.submissionId === state.submissionId) void answerInterrupted("resume", true, consent.expectedSubmissionId, consent.expectedCostReceiptId);
