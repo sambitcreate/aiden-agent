@@ -1267,5 +1267,13 @@ Built 2026-11-27 on `t3/design-mode-v2-p3b`, stacked on 3a (merged from `origin/
   - The picker says when main cut the list short, drops a load that a newer one or a close superseded, keeps double-clicks inside a value field, prefills a mid-pattern catch-all with its own segments only, scrolls on arrow keys, keeps the typed-into row active under a passing pointer, and uses the motion token's default duration.
   - `isConcreteRoute` refuses `.`, `..` and empty path segments, which also covers canvas.json's `routes` and every placement.
 
+- **Pullfrog round 1 (PR #966, 2026-11-27).** All 6 findings were verified and fixed test-first:
+  - The picker places nothing unless the canvas's pending save resolves `true`. It answers its own `unsaved`: "The canvas couldn't be saved, so the page wasn't added. Try again in a moment."
+  - Entry's route list carries the workspace id it was read from (`placeWrittenPagesOnCanvas`'s new `workspaceId`). A chat that moved meanwhile places nothing. A turn's written routes pass their workspace the same way.
+  - `isConcreteRoute` and patterns refuse percent-encoded dot segments (`%2e`, `.%2E` and so on), because the URL parser resolves them like `.` and `..`. Raw non-ASCII routes stay allowed, so it doesn't compare against the parser's re-encoded pathname.
+  - The walk reads each folder only while it is still a real folder at its own real path. An `lstat` runs before the read, and after it a second `lstat` with the same dev/ino and a `realpath` check (`inRealDir`). The two parsed files are fenced by their folder the same way. Node has no no-follow directory read. The residual case is a folder renamed away and back inside one read, which keeps its inode.
+  - A spread `flatRoutes(…)` with options is unreadable too, so only option-free `flatRoutes()` walks `app/routes/`.
+  - `placeAppRoute` passes `stillFraming` into `pages.show()`. `DesignCanvasViews.showPage` takes an optional `stillOwned`, asked after its load and right before its synchronous change. Focus is checked again after the show.
+
 **Verification.** Recorded in Task 13's Space runs below and in the FINISH line of the build's status log.
 
