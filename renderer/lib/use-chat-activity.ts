@@ -32,35 +32,40 @@ function useLocalChatActivityParser(paneChatId?: string) {
   }, [ids, paneChatId]);
 }
 
-/** Event-driven activity state: no polling and no animation clock. */
-export function useChatActivityState(paneChatId?: string): ChatActivityState {
-  const parseActivity = useLocalChatActivityParser(paneChatId);
-  const [state, setState] = React.useState(EMPTY_CHAT_ACTIVITY_STATE);
-
+function useNotificationSnapshot(
+  channel: string,
+  read: () => Promise<unknown>,
+  apply: (payload: unknown) => void,
+): void {
   React.useEffect(() => {
     let disposed = false;
-    const unsubscribe = onNotification("chats:activity-changed", (payload) => {
-      const snapshot = parseActivity(payload);
-      if (snapshot) setState((current) => applyChatActivitySnapshot(current, snapshot));
-    });
-
-    void chatsApi
-      .activitySnapshot()
+    const unsubscribe = onNotification(channel, apply);
+    void read()
       .then((payload) => {
-        if (disposed) return;
-        const snapshot = parseActivity(payload);
-        if (snapshot) setState((current) => applyChatActivitySnapshot(current, snapshot));
+        if (!disposed) apply(payload);
       })
       .catch(() => {
-        // Future events still provide authoritative changes. The local active
-        // chat state covers immediate foreground feedback if this read fails.
+        // Future notifications still provide authoritative snapshots.
       });
-
     return () => {
       disposed = true;
       unsubscribe();
     };
-  }, [parseActivity]);
+  }, [channel, read, apply]);
+}
+
+/** Event-driven activity state: no polling and no animation clock. */
+export function useChatActivityState(paneChatId?: string): ChatActivityState {
+  const parseActivity = useLocalChatActivityParser(paneChatId);
+  const [state, setState] = React.useState(EMPTY_CHAT_ACTIVITY_STATE);
+  const apply = React.useCallback(
+    (payload: unknown) => {
+      const snapshot = parseActivity(payload);
+      if (snapshot) setState((current) => applyChatActivitySnapshot(current, snapshot));
+    },
+    [parseActivity],
+  );
+  useNotificationSnapshot("chats:activity-changed", chatsApi.activitySnapshot, apply);
 
   return state;
 }
@@ -75,27 +80,11 @@ export function useActiveChatIds(paneChatId?: string): ReadonlySet<string> {
  */
 export function useChatReadMarkers(): ChatReadMarkersSnapshot | null {
   const [markers, setMarkers] = React.useState<ChatReadMarkersSnapshot | null>(null);
-
-  React.useEffect(() => {
-    let disposed = false;
-    const apply = (payload: unknown) => {
-      const snapshot = parseChatReadMarkersSnapshot(payload);
-      if (snapshot) setMarkers((current) => applyChatReadMarkersSnapshot(current, snapshot));
-    };
-    const unsubscribe = onNotification("chats:read-markers-changed", apply);
-    void chatsApi
-      .readMarkers()
-      .then((payload) => {
-        if (!disposed) apply(payload);
-      })
-      .catch(() => {
-        // Unread dots stay hidden until a change event arrives.
-      });
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
+  const apply = React.useCallback((payload: unknown) => {
+    const snapshot = parseChatReadMarkersSnapshot(payload);
+    if (snapshot) setMarkers((current) => applyChatReadMarkersSnapshot(current, snapshot));
   }, []);
+  useNotificationSnapshot("chats:read-markers-changed", chatsApi.readMarkers, apply);
 
   return markers;
 }
@@ -106,27 +95,11 @@ export function useChatReadMarkers(): ChatReadMarkersSnapshot | null {
  */
 export function useChatTriage(): ChatTriageSnapshot | null {
   const [triage, setTriage] = React.useState<ChatTriageSnapshot | null>(null);
-
-  React.useEffect(() => {
-    let disposed = false;
-    const apply = (payload: unknown) => {
-      const snapshot = parseChatTriageSnapshot(payload);
-      if (snapshot) setTriage((current) => (current && snapshot.revision < current.revision ? current : snapshot));
-    };
-    const unsubscribe = onNotification("chats:triage-changed", apply);
-    void chatsApi
-      .triage()
-      .then((payload) => {
-        if (!disposed) apply(payload);
-      })
-      .catch(() => {
-        // Rows show untriaged until a change event arrives.
-      });
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
+  const apply = React.useCallback((payload: unknown) => {
+    const snapshot = parseChatTriageSnapshot(payload);
+    if (snapshot) setTriage((current) => (current && snapshot.revision < current.revision ? current : snapshot));
   }, []);
+  useNotificationSnapshot("chats:triage-changed", chatsApi.triage, apply);
 
   return triage;
 }
