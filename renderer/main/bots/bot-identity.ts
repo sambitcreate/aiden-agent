@@ -66,19 +66,28 @@ function presentEdits(qc: QueryClient, stack: BotEditStack): void {
   );
 }
 
-/** Writes `bot` into its own query and into every cached Bots list that holds it. */
-export function placeBotInCache(qc: QueryClient, bot: BotDefinition): void {
+function writeBotToCache(
+  qc: QueryClient,
+  bot: BotDefinition,
+  updateList: (list: BotDefinition[]) => BotDefinition[],
+): void {
   qc.setQueryData(queryKeys.bot(bot.id), bot);
   qc.setQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots }, (list) =>
-    list?.some((row) => row.id === bot.id) ? list.map((row) => (row.id === bot.id ? bot : row)) : list,
+    list === undefined ? undefined : updateList(list),
+  );
+}
+
+/** Writes `bot` into its own query and into every cached Bots list that holds it. */
+export function placeBotInCache(qc: QueryClient, bot: BotDefinition): void {
+  writeBotToCache(qc, bot, (list) =>
+    list.some((row) => row.id === bot.id) ? list.map((row) => (row.id === bot.id ? bot : row)) : list,
   );
 }
 
 /** Adds a freshly created Bot to every cached Bots list, so it is listed before the list is reread. */
 export function addBotToCache(qc: QueryClient, bot: BotDefinition): void {
-  qc.setQueryData(queryKeys.bot(bot.id), bot);
-  qc.setQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots }, (list) =>
-    list === undefined || list.some((row) => row.id === bot.id) ? list : [...list, bot],
+  writeBotToCache(qc, bot, (list) =>
+    list.some((row) => row.id === bot.id) ? list : [...list, bot],
   );
 }
 
