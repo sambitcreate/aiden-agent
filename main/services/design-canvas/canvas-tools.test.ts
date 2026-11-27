@@ -2125,6 +2125,22 @@ test("Aiden places a live app frame for the workspace's one app, reuses it, and 
   assert.equal((await store.get("chat-1")).frames.length, 4);
 });
 
+test("reusing an app frame changes only the viewport sides and scale Aiden passes", async (t) => {
+  const { call } = await setup(t, { designLive: true, apps: liveApps() });
+  const phone = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing", width: 390, height: 844, scale: 1 });
+  const shape = (result: typeof phone) => ({ viewport: result.frame.viewport, scale: result.frame.scale, w: result.frame.box.w });
+
+  const smaller = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing", scale: 0.5 });
+  assert.equal(smaller.frame.id, phone.frame.id);
+  assert.deepEqual(shape(smaller), { viewport: { width: 390, height: 844 }, scale: 0.5, w: 195 }, "the phone viewport stays");
+
+  const wider = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing", width: 768 });
+  assert.deepEqual(shape(wider), { viewport: { width: 768, height: 844 }, scale: 0.5, w: 384 }, "the height and scale stay");
+
+  const unset = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing", width: null, height: null, scale: null });
+  assert.deepEqual(shape(unset), shape(wider), "null is the same as leaving it out");
+});
+
 test("an unknown app root, a bad route or viewport, and an unnamed root among several are errors naming the rule", async (t) => {
   const one = await setup(t, { designLive: true, apps: liveApps() });
   assert.match(String((await one.call("canvas_place_frame", { kind: "app", title: "A", appRoot: "web", route: "/" })).message), /appRoot "web" isn't an app.*"\."/u);

@@ -1158,11 +1158,17 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       }
       const adopted = candidates.find((entry) => entry.createdBy === "aiden") ?? candidates[0];
       if (adopted) {
-        // Reused in place: a new title, and a new viewport or scale only when asked.
-        const resized = p.width !== undefined || p.height !== undefined || p.scale !== undefined;
-        const frames = doc.frames.map((entry) =>
-          entry.id === adopted.id ? applyStyle({ ...entry, title, ...(resized ? { viewport, scale, ...box } : {}) }, style) : entry,
-        );
+        // Reused in place: a new title, and only the viewport sides and scale
+        // that were passed; the rest stay the frame's own.
+        const given = (value: unknown) => value !== undefined && value !== null;
+        let resize: Partial<DesignFrame> = {};
+        if (given(p.width) || given(p.height) || given(p.scale)) {
+          const own = adopted.viewport ?? APP_DEFAULT_VIEWPORT;
+          const merged = { width: given(p.width) ? viewport.width : own.width, height: given(p.height) ? viewport.height : own.height };
+          const mergedScale = fitAppScale(merged, given(p.scale) ? appScale(p.scale) : (adopted.scale ?? APP_DEFAULT_SCALE), DESIGN_CANVAS_LIMITS.maxSize);
+          resize = { viewport: merged, scale: mergedScale, ...appFrameBox(merged, mergedScale) };
+        }
+        const frames = doc.frames.map((entry) => (entry.id === adopted.id ? applyStyle({ ...entry, title, ...resize }, style) : entry));
         const next = refitGroups(syncConnectors({ ...doc, frames }), [adopted.groupId]);
         const frame = next.frames.find((entry) => entry.id === adopted.id)!;
         return {
