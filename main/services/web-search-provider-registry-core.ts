@@ -1204,9 +1204,6 @@ export interface WebSearchFreshnessEvidence {
 export interface WebSearchMigrationInput extends WebSearchFreshnessEvidence {
   /** Direct legacy field accepted for convenient config-store migration. */
   exaEnabled?: unknown;
-  /** Legacy settings envelope, when the caller has not flattened it. */
-  legacySettings?: { exaEnabled?: unknown } | null;
-  legacy?: { exaEnabled?: unknown } | null;
   /** Already-migrated v2 document, accepted for idempotent startup migration. */
   settings?: unknown;
   webSearch?: unknown;
@@ -1257,9 +1254,7 @@ export function classifyWebSearchProfile(
 }
 
 function readLegacyExaEnabled(input: WebSearchMigrationInput): boolean | undefined {
-  const candidates = [input.exaEnabled, input.legacySettings?.exaEnabled, input.legacy?.exaEnabled];
-  const value = candidates.find((candidate) => candidate !== undefined);
-  return value === true || value === false ? value : undefined;
+  return input.exaEnabled === true || input.exaEnabled === false ? input.exaEnabled : undefined;
 }
 
 function legacyMigrationSettings(
