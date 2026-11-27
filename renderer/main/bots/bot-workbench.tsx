@@ -21,6 +21,7 @@ import { useLayer } from "../../lib/layer-stack";
 import { useBot } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
 import { useBotLive } from "../../lib/use-bot-live";
+import { useContainerWidth } from "../../lib/use-container-width";
 import type { BotTranscriptEntry } from "../../shared/bot-live";
 import { BotBrowserTab, useBotBrowserPresence } from "./bot-browser-tab";
 import { BotAdvancedTab } from "./bot-advanced";
@@ -108,23 +109,13 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
   const shownTabs = BOT_PANEL_TABS.filter((id) => !hidden(id));
   const containerRef = React.useRef<HTMLDivElement>(null);
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
-  const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
+  const containerWidth = useContainerWidth(containerRef);
   const panelWidth = useWorkbenchWidth(BOT_PANEL_WIDTH_KEY, BOT_PANEL_WIDTH_BOUNDS);
   // Beside the chat, reflowing it, wherever the chat keeps a usable column.
   const { width, inline } = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth, BOT_PANEL_WIDTH_BOUNDS);
   const [visited, setVisited] = React.useState<ReadonlySet<BotPanelTab>>(() => new Set());
   // Mark the shown tab visited in the same render, so its body never paints a blank frame.
   if (open && !visited.has(tab)) setVisited(new Set([...visited, tab]));
-
-  React.useLayoutEffect(() => {
-    const element = containerRef.current;
-    if (!element) return;
-    const measure = () => setContainerWidth(element.getBoundingClientRect().width);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
 
   // A person-initiated open focuses the selected tab; a panel restored open at launch does not.
   React.useEffect(() => {
