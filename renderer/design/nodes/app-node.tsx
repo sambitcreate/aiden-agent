@@ -22,6 +22,7 @@ import { parseAppBridgeMessage, postToAppPage } from "../../shared/design-canvas
 import {
   APP_FRAME_ALLOW,
   APP_FRAME_SANDBOX,
+  APP_DEFAULT_SCALE,
   APP_DEFAULT_VIEWPORT,
   appFrameName,
   isAppFrameId,
@@ -41,7 +42,7 @@ import { useDesignAppsSnapshot } from "../design-app-chip";
 import { captureFrameSnapshot, designFrameSnapshots, useFrameSnapshot } from "../frame-snapshots";
 import { DESIGN_FRAME_HEADER_PX, useDesignNodeContext } from "./design-node-context";
 import { FrameActions } from "./frame-actions";
-import { DesignNodeResizer, FrameSkeleton, rectOnCanvas, useRetiringFrame } from "./frame-parts";
+import { AppFrameResizers, DesignNodeResizer, FrameSkeleton, rectOnCanvas, useRetiringFrame } from "./frame-parts";
 import { FrameTitle } from "./frame-title";
 import { LayoutGuide } from "./layout-guide";
 
@@ -811,10 +812,22 @@ export function AppFrame({
 
 export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
   const canvas = useDesignNodeContext();
+  const { designLive } = useAppCapabilities();
   const { frame } = data;
   return (
     <>
-      <DesignNodeResizer selected={selected} minSize={designMinSize("app")} keepAspectRatio />
+      {designLive ? (
+        // 3c (S89): edges change the viewport, corners scale.
+        <AppFrameResizers
+          nodeId={id}
+          selected={selected}
+          minSize={designMinSize("app")}
+          scale={frame.scale ?? APP_DEFAULT_SCALE}
+          onStart={(mode) => canvas.resizeStart(id, mode)}
+        />
+      ) : (
+        <DesignNodeResizer selected={selected} minSize={designMinSize("app")} keepAspectRatio />
+      )}
       <AppFrame
         frame={frame}
         chatId={canvas.chatId}

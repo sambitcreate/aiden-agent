@@ -8,6 +8,7 @@ import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from 
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { Toaster } from "../../components/ui";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../../lib/app-capabilities";
 import { parseAppFrameName } from "../../shared/design-canvas/app-frame";
@@ -15,7 +16,8 @@ import type { DesignFrame } from "../../shared/design-canvas/schema";
 import type { DesignAppsSnapshot, DesignAppStatus } from "../../shared/design-app";
 import { resetDesignAppChipForTests } from "../design-app-chip";
 import { designFrameSnapshots } from "../frame-snapshots";
-import { AppFrame, type AppFrameProps, APP_FRAME_CAPTURE_SETTLE_MS } from "./app-node";
+import type { DesignNode } from "../canvas-adapter-core";
+import { AppFrame, AppNode, type AppFrameProps, APP_FRAME_CAPTURE_SETTLE_MS } from "./app-node";
 import { DesignNodeContext, type DesignNodeContextValue } from "./design-node-context";
 import { FrameActions } from "./frame-actions";
 
@@ -904,6 +906,8 @@ function nodeContext(update: DesignNodeContextValue["update"]): DesignNodeContex
     pageEditComment: noop,
     renaming: null,
     rename: noop,
+    resizeStart: noop,
+    activeResize: null,
   };
 }
 
@@ -933,4 +937,59 @@ test("3b: a variant's label shows after the title in the frame's header", async 
   render(<Harness frame={appFrame({ title: "Pricing v2", label: "Calm" })} />);
   assert.ok(screen.getByText("Pricing v2"));
   assert.ok(screen.getByText("Calm"));
+});
+
+// ── 3c: edges reflow, corners scale (S89) ──
+
+function NodeHarness({ frame, designLive, resizeStart }: { frame: DesignFrame; designLive: boolean; resizeStart(id: string, mode: string): void }) {
+  const props = { id: frame.id, data: { frame }, selected: true, type: "app" } as unknown as NodeProps<DesignNode>;
+  return (
+    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, designMode: true, designLive }}>
+      {/* xyflow's resizer starts only for a node its store knows. */}
+      <ReactFlowProvider initialNodes={[{ id: frame.id, position: { x: frame.x, y: frame.y }, data: { frame }, width: frame.w, height: frame.h }]}>
+        <DesignNodeContext.Provider value={{ ...nodeContext(noop), resizeStart }}>
+          <AppNode {...props} />
+        </DesignNodeContext.Provider>
+      </ReactFlowProvider>
+    </AppCapabilitiesProvider>
+  );
+}
+
+/** What d3-drag listens for on a control: a primary-button mousedown from this window. */
+function press(control: Element) {
+  act(() => {
+    control.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, view: window, clientX: 10, clientY: 10 }));
+  });
+  act(() => {
+    window.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0, view: window, clientX: 10, clientY: 10 }));
+  });
+}
+
+test("3c flag on: an app frame has edge and corner resize controls, each naming its own side", () => {
+  setup();
+  const started: Array<[string, string]> = [];
+  const frame = appFrame();
+  render(<NodeHarness frame={frame} designLive resizeStart={(id, mode) => started.push([id, mode])} />);
+  const lines = Array.from(document.querySelectorAll(".react-flow__resize-control.line"));
+  const handles = Array.from(document.querySelectorAll(".react-flow__resize-control.handle"));
+  assert.equal(lines.length, 4);
+  assert.equal(handles.length, 4);
+  for (const line of lines) press(line);
+  for (const handle of handles) press(handle);
+  assert.deepEqual(
+    started.map(([id]) => id),
+    Array(8).fill(frame.id),
+  );
+  assert.deepEqual(new Set(started.slice(0, 4).map(([, mode]) => mode)), new Set(["top", "right", "bottom", "left"]));
+  assert.deepEqual(started.slice(4).map(([, mode]) => mode), ["corner", "corner", "corner", "corner"]);
+});
+
+test("3c flag off: one aspect-locked resizer, as today, that reports no side", () => {
+  setup();
+  const started: unknown[] = [];
+  render(<NodeHarness frame={appFrame()} designLive={false} resizeStart={(...args) => started.push(args)} />);
+  const controls = Array.from(document.querySelectorAll(".react-flow__resize-control"));
+  assert.equal(controls.length, 8, "NodeResizer's four handles and four lines");
+  for (const control of controls) press(control);
+  assert.deepEqual(started, []);
 });

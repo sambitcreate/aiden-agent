@@ -13,6 +13,7 @@ import { noteDesignCanvasView } from "../lib/design-mode";
 import { browserApi, designCanvasApi } from "../lib/ipc";
 import { addPage, deletePage, duplicatePage, movePage, renamePage } from "../shared/design-canvas/pages";
 import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
+import type { AppResizeMode } from "../shared/design-canvas/app-frame";
 import type { DesignExportFormat } from "../shared/design-canvas/frame-export";
 import { presentationOrder } from "../shared/design-canvas/presentation";
 import { containerAt, regroupFrames } from "../shared/design-canvas/drawing";
@@ -223,6 +224,44 @@ function LoadedDesignCanvas({
   const gesture = React.useRef(false);
   const latestDoc = React.useRef(doc);
   latestDoc.current = doc;
+
+  // 3c (S89): which control each live app frame is being resized by. The ref
+  // is read synchronously by onNodesChange; the state drives the readout.
+  const resizeModes = React.useRef(new Map<string, AppResizeMode>());
+  const resizeGeneration = React.useRef(0);
+  const [activeResize, setActiveResize] = React.useState<{ frameId: string; side: AppResizeMode } | null>(null);
+  const resizeStart = React.useCallback((id: string, mode: AppResizeMode) => {
+    resizeModes.current.set(id, mode);
+    resizeGeneration.current += 1;
+    setActiveResize({ frameId: id, side: mode });
+    // Resizing an entered frame leaves it first.
+    setEntered((current) => (current === id ? null : current));
+  }, []);
+  // A press on a control that never drags gets no end from xyflow. These
+  // listeners are up from mount, so they run before d3-drag's own per-gesture
+  // capture listener on window (which stops the event): the next task clears
+  // the modes, unless another resize started in between. A real drag has
+  // cleared its mode already, when its last change arrived.
+  React.useEffect(() => {
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const ended = () => {
+      if (resizeModes.current.size === 0) return;
+      const generation = resizeGeneration.current;
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (resizeGeneration.current !== generation) return;
+        resizeModes.current.clear();
+        setActiveResize(null);
+      }, 0);
+      timers.add(timer);
+    };
+    const events = ["mouseup", "touchend", "touchcancel", "pointerup", "pointercancel", "blur"] as const;
+    for (const type of events) window.addEventListener(type, ended, true);
+    return () => {
+      for (const type of events) window.removeEventListener(type, ended, true);
+      for (const timer of timers) clearTimeout(timer);
+    };
+  }, []);
 
   // The chat's grant: frames load their pages and images through it.
   React.useEffect(() => {
@@ -554,13 +593,20 @@ function LoadedDesignCanvas({
       record = !gesture.current;
       gesture.current = false;
     }
+    // A snapshot: a replay after a save conflict must resize as the drag did, after the modes are gone.
+    const modes = resizeModes.current.size > 0 ? new Map(resizeModes.current) : undefined;
     change(
       (current) => {
-        const next = applyNodeChanges(current, edits);
+        const next = applyNodeChanges(current, edits, modes);
         return dropped.length > 0 ? regroupFrames(next, dropped) : next;
       },
       { record },
     );
+    // xyflow's last change of a resize is its `resizing: false` one (S89).
+    for (const entry of edits) {
+      if (entry.type !== "dimensions" || entry.resizing !== false || !resizeModes.current.delete(entry.id)) continue;
+      setActiveResize((current) => (current?.frameId === entry.id ? null : current));
+    }
   };
 
   const removeFrames = React.useCallback(
@@ -1239,6 +1285,8 @@ function LoadedDesignCanvas({
       autoFocusDone: (id) => setAutoFocusId((current) => (current === id ? null : current)),
       renaming,
       rename: setRenaming,
+      resizeStart,
+      activeResize,
       moveEnd,
       editing,
       edit: setEditing,
@@ -1268,6 +1316,8 @@ function LoadedDesignCanvas({
       removeFrames,
       update,
       renaming,
+      resizeStart,
+      activeResize,
       moveEnd,
       editing,
       comments.commentOn,

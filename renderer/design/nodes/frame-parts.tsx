@@ -2,9 +2,10 @@
 // frame shows before it has a picture, the missing-file state, and keeping a
 // leaving iframe on screen until its snapshot is taken.
 
-import { NodeResizer } from "@xyflow/react";
+import { NodeResizeControl, NodeResizer, ResizeControlVariant, type ControlLinePosition, type ControlPosition } from "@xyflow/react";
 import * as React from "react";
 import { Button } from "../../components/ui";
+import { appEdgeBounds, type AppResizeMode, type AppResizeSide } from "../../shared/design-canvas/app-frame";
 import { DESIGN_CANVAS_LIMITS } from "../../shared/design-canvas/schema";
 import { captureFrameSnapshot, designFrameSnapshots } from "../frame-snapshots";
 
@@ -33,6 +34,73 @@ export function DesignNodeResizer({
       handleClassName="design-resize-handle"
       lineClassName="design-resize-line"
     />
+  );
+}
+
+const APP_CORNERS: readonly ControlPosition[] = ["top-left", "top-right", "bottom-left", "bottom-right"];
+const APP_EDGES: readonly (AppResizeSide & ControlLinePosition)[] = ["top", "right", "bottom", "left"];
+
+/**
+ * A live app frame's resize controls with design live on (3c, S89): the four
+ * corner handles keep the aspect and change the scale, as 3a's single resizer
+ * does; the four edge lines change the viewport and keep the scale. xyflow's
+ * resize events don't name the control, so each one tells `onStart` its own
+ * side. The edges' bounds come from the viewport limits at this scale, so
+ * xyflow never drags past what the viewport can be. The controls stay
+ * pointer-only; the device menu is the keyboard's way to resize.
+ */
+export function AppFrameResizers({
+  nodeId,
+  selected,
+  minSize,
+  scale,
+  onStart,
+}: {
+  nodeId: string;
+  selected: boolean;
+  minSize: number;
+  scale: number;
+  onStart(mode: AppResizeMode): void;
+}) {
+  const startRef = React.useRef(onStart);
+  startRef.current = onStart;
+  // Stable per control, so a render mid-drag doesn't rebind xyflow's resizer.
+  const starts = React.useMemo(
+    () =>
+      Object.fromEntries((["corner", ...APP_EDGES] as const).map((mode) => [mode, () => startRef.current(mode)])) as Record<AppResizeMode, () => void>,
+    [],
+  );
+  if (!selected) return null;
+  const edges = appEdgeBounds(scale, minSize, DESIGN_CANVAS_LIMITS.maxSize);
+  return (
+    <>
+      {APP_EDGES.map((side) => (
+        <NodeResizeControl
+          key={side}
+          nodeId={nodeId}
+          position={side}
+          variant={ResizeControlVariant.Line}
+          className="design-resize-line"
+          {...edges}
+          onResizeStart={starts[side]}
+        />
+      ))}
+      {APP_CORNERS.map((corner) => (
+        <NodeResizeControl
+          key={corner}
+          nodeId={nodeId}
+          position={corner}
+          variant={ResizeControlVariant.Handle}
+          className="design-resize-handle"
+          keepAspectRatio
+          minWidth={minSize}
+          minHeight={minSize}
+          maxWidth={DESIGN_CANVAS_LIMITS.maxSize}
+          maxHeight={DESIGN_CANVAS_LIMITS.maxSize}
+          onResizeStart={starts.corner}
+        />
+      ))}
+    </>
   );
 }
 

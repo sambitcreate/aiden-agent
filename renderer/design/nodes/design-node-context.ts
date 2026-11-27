@@ -5,6 +5,7 @@
 import * as React from "react";
 import type { DesignPoint } from "../../shared/design-canvas/connectors";
 import type { DesignBridgeMessage, DesignTextCommand } from "../../shared/design-canvas/bridge-messages";
+import type { AppResizeMode } from "../../shared/design-canvas/app-frame";
 import type { DesignPageElement } from "../../shared/design-canvas/comments";
 import type { DesignExportFormat } from "../../shared/design-canvas/frame-export";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
@@ -89,6 +90,10 @@ export type DesignNodeContextValue = {
   renaming: string | null;
   /** Starts editing a frame's title, or stops (null). */
   rename(id: string | null): void;
+  /** 3c (S89): a resize of a live app frame started on this control; an entered frame is left first. */
+  resizeStart(id: string, mode: AppResizeMode): void;
+  /** The live app frame being resized, and by which control, until the resize ends. */
+  activeResize: { frameId: string; side: AppResizeMode } | null;
 };
 
 export const DesignNodeContext = React.createContext<DesignNodeContextValue | null>(null);
