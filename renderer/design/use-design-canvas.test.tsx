@@ -1445,3 +1445,165 @@ test("a new onMoved is heard without starting the canvas over", async () => {
   assert.deepEqual(heard, ["second:workspace-2"]);
   assert.equal(gets().length, 1, "the canvas was read once");
 });
+
+/** Revision 4 with a second page, Pricing (`p2`). */
+function twoPageCanvas(revision = 4): DesignCanvas {
+  return { ...canvas(revision, note("a")), pages: [{ id: "page-1", name: "Page 1" }, { id: "p2", name: "Pricing" }] };
+}
+function startSave(state: ReturnType<typeof createInitialDesignCanvasSyncState>) {
+  const started = reduceDesignCanvasSync(state, { type: "debounce_fired" });
+  const save = started.effects.find((effect) => effect.type === "start_save");
+  assert.ok(save, "the debounce starts a save");
+  return started.state;
+}
+const sentDoc = (transition: ReturnType<typeof reduceDesignCanvasSync>) => {
+  const save = transition.effects.find((effect) => effect.type === "start_save");
+  return save && save.type === "start_save" ? save.doc : undefined;
+};
+
+test("reducer: claims the store kept over a save show at once and stay in every undo and redo step", () => {
+  let state = createInitialDesignCanvasSyncState();
+  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: twoPageCanvas() }).state;
+  state = reduceDesignCanvasSync(state, { type: "change", mutate: moveTo("a", 10), recordHistory: true }).state;
+  state = reduceDesignCanvasSync(startSave(state), { type: "save_succeeded", revision: 5 }).state;
+  // This chat's reply makes Pricing its page and adds a note there.
+  state = reduceDesignCanvasSync(state, { type: "announcement", revision: 6, aidenTurn: "reply-1" }).state;
+  const replied: DesignCanvas = {
+    ...twoPageCanvas(6),
+    pages: [{ id: "page-1", name: "Page 1" }, { id: "p2", name: "Pricing", namedFor: "chat-1" }],
+    chatPages: { "chat-1": "p2" },
+    frames: [note("a", 10), { ...note("b"), pageId: "p2" }],
+  };
+  state = reduceDesignCanvasSync(state, { type: "refetch_succeeded", doc: replied }).state;
+  // Undoing the reply sends the old claim and mark; the store keeps its own.
+  state = reduceDesignCanvasSync(state, { type: "undo" }).state;
+  assert.deepEqual(state.local?.chatPages, {});
+  const saved = reduceDesignCanvasSync(startSave(state), {
+    type: "save_succeeded",
+    revision: 7,
+    storedClaims: { chatPages: { "chat-1": "p2" }, namedFor: { p2: "chat-1" } },
+  });
+  state = saved.state;
+  assert.deepEqual(saved.effects, []);
+  for (const doc of [state.server, state.local]) {
+    assert.equal(doc?.revision, 7);
+    assert.deepEqual(doc?.chatPages, { "chat-1": "p2" });
+    assert.equal(doc?.pages[1]?.namedFor, "chat-1");
+    assert.deepEqual(ids(doc ?? undefined), ["a"]);
+  }
+
+  state = reduceDesignCanvasSync(state, { type: "undo" }).state;
+  assert.equal(xOf(state.local ?? undefined, "a"), 0, "the person's move undoes");
+  assert.deepEqual(state.local?.chatPages, { "chat-1": "p2" }, "and the stored claim stays");
+  assert.equal(state.local?.pages[1]?.namedFor, "chat-1");
+  state = reduceDesignCanvasSync(state, { type: "redo" }).state;
+  state = reduceDesignCanvasSync(state, { type: "redo" }).state;
+  assert.deepEqual(ids(state.local ?? undefined), ["a", "b"], "the reply comes back");
+  assert.deepEqual(state.local?.chatPages, { "chat-1": "p2" });
+  assert.equal(state.local?.pages[1]?.namedFor, "chat-1");
+});
+
+test("reducer: kept claims reach edits made during the save only where the store changed them, and go out in the next save", () => {
+  const loaded: DesignCanvas = {
+    ...twoPageCanvas(),
+    pages: [{ id: "page-1", name: "Page 1" }, { id: "p2", name: "Chat A", namedFor: "chat-a" }],
+    chatPages: { "chat-a": "page-1" },
+  };
+  const during = {
+    "a rename": (doc: DesignCanvas) => renamePage(doc, "p2", "Custom"),
+    "a delete": (doc: DesignCanvas) => deletePage(doc, "p2"),
+  };
+  for (const [name, edit] of Object.entries(during)) {
+    let state = createInitialDesignCanvasSyncState();
+    state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: loaded }).state;
+    state = reduceDesignCanvasSync(state, { type: "change", mutate: moveTo("a", 50), recordHistory: true }).state;
+    state = startSave(state);
+    state = reduceDesignCanvasSync(state, { type: "change", mutate: edit, recordHistory: true }).state;
+    state = reduceDesignCanvasSync(state, { type: "debounce_fired" }).state;
+    assert.equal(state.debounceElapsedWhileSaving, true);
+
+    // The store kept chat-a's own claim on its page.
+    const saved = reduceDesignCanvasSync(state, {
+      type: "save_succeeded",
+      revision: 5,
+      storedClaims: { chatPages: { "chat-a": "p2" }, namedFor: { p2: "chat-a" } },
+    });
+    const next = sentDoc(saved);
+    assert.ok(next, `${name}: the newer edit saves at once`);
+    assert.equal(xOf(next, "a"), 50);
+    if (name === "a rename") {
+      assert.deepEqual(next.pages[1], { id: "p2", name: "Custom" }, "the rename and the mark it dropped stay");
+      assert.deepEqual(next.chatPages, { "chat-a": "p2" }, "the store's claim is in it");
+    } else {
+      assert.deepEqual(next.pages.map((page) => page.id), ["page-1"], "the delete stays");
+      assert.deepEqual(next.chatPages, { "chat-a": "page-1" }, "a claim on the deleted page goes to the first page");
+    }
+    assert.deepEqual(saved.state.local, next);
+  }
+});
+
+test("reducer: claims kept over our own save do not hold a reply's late announcement open", () => {
+  let state = createInitialDesignCanvasSyncState();
+  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: twoPageCanvas() }).state;
+  state = reduceDesignCanvasSync(state, { type: "announcement", revision: 5, aidenTurn: "reply-1" }).state;
+  // The fetch brings revision 6 before its announcement: still maybe reply-1's.
+  state = reduceDesignCanvasSync(state, {
+    type: "refetch_succeeded",
+    doc: { ...twoPageCanvas(6), frames: [note("a"), note("b", 400)] },
+  }).state;
+  assert.ok(state.unsettled !== null);
+  // A text frame grows (no step of its own) and saves; the store keeps this chat's claim.
+  state = reduceDesignCanvasSync(state, { type: "change", mutate: moveTo("a", 30), recordHistory: false }).state;
+  state = reduceDesignCanvasSync(startSave(state), {
+    type: "save_succeeded",
+    revision: 7,
+    storedClaims: { chatPages: { "chat-1": "p2" }, namedFor: {} },
+  }).state;
+
+  state = reduceDesignCanvasSync(state, { type: "announcement", revision: 6, aidenTurn: "reply-1" }).state;
+  assert.equal(state.unsettled, null, "every revision that could be the reply's is known now");
+  assert.equal(state.aidenRevisions.size, 0, "so nothing is kept to ask about");
+  assert.equal(selectDesignCanvasView(state).canUndo, true);
+  state = reduceDesignCanvasSync(state, { type: "undo" }).state;
+  assert.deepEqual(ids(state.local ?? undefined), ["a"], "the reply's frame undoes");
+  assert.equal(xOf(state.local ?? undefined, "a"), 30, "the frame's growth stays");
+  assert.deepEqual(state.local?.chatPages, { "chat-1": "p2" }, "and so does the stored claim");
+});
+
+test("reducer: a closing canvas carries the claims a save kept into its last save, then finishes", () => {
+  let state = createInitialDesignCanvasSyncState();
+  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: twoPageCanvas() }).state;
+  state = reduceDesignCanvasSync(state, { type: "change", mutate: moveTo("a", 10), recordHistory: true }).state;
+  state = startSave(state);
+  state = reduceDesignCanvasSync(state, { type: "change", mutate: addNote("b"), recordHistory: true }).state;
+  state = reduceDesignCanvasSync(state, { type: "dispose" }).state;
+  assert.equal(state.lifecycle, "closing");
+
+  const first = reduceDesignCanvasSync(state, {
+    type: "save_succeeded",
+    revision: 5,
+    storedClaims: { chatPages: { "chat-1": "p2" }, namedFor: {} },
+  });
+  const last = sentDoc(first);
+  assert.ok(last, "the newer edit saves at once");
+  assert.deepEqual(ids(last), ["a", "b"]);
+  assert.deepEqual(last.chatPages, { "chat-1": "p2" });
+
+  const done = reduceDesignCanvasSync(first.state, { type: "save_succeeded", revision: 6 });
+  assert.equal(done.state.lifecycle, "disposed");
+  assert.deepEqual(effectTypes(done), ["finish"]);
+  assert.deepEqual(selectDesignCanvasGuard(done.state), { dirty: false, saving: false });
+});
+
+test("a save answer that names only the stored page marks still shows them, keeping the claims as sent", async () => {
+  stored = { ...twoPageCanvas(), chatPages: { "chat-1": "p2" } };
+  await mount();
+  saveReplies.push((doc, base) => {
+    stored = { ...doc, revision: base + 1, pages: [doc.pages[0]!, { ...doc.pages[1]!, namedFor: "chat-1" }] };
+    return { ok: true, revision: stored.revision, namedFor: { p2: "chat-1" } };
+  });
+  await act(async () => controller.change(moveTo("a", 20)));
+  await tick(800);
+  assert.equal(controller.doc?.pages[1]?.namedFor, "chat-1");
+  assert.deepEqual(controller.doc?.chatPages, { "chat-1": "p2" });
+});

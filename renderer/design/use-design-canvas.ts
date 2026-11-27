@@ -100,9 +100,15 @@ export interface DesignCanvasTakenIn {
   readonly to: DesignCanvas;
 }
 
-/** What changed the history without a step of the person's: a stored canvas taken in, or an unrecorded edit. */
+/**
+ * What changed the history without a step of the person's: a stored canvas
+ * taken in, which may turn out to be a reply's; what the store kept over this
+ * window's own save (its chats' pages), which is never a reply's and so is
+ * always carried into every step; or an unrecorded edit.
+ */
 export type DesignCanvasHistoryChange =
   | { readonly takenIn: DesignCanvasTakenIn }
+  | { readonly carried: DesignCanvasTakenIn }
   | { readonly unrecorded: DesignCanvasMutation };
 
 /**
@@ -161,9 +167,8 @@ export type DesignCanvasSyncEvent =
   | {
       readonly type: "save_succeeded";
       readonly revision: number;
-      /** The store's own chats' pages, when its merge kept them over what was sent. */
-      readonly chatPages?: Readonly<Record<string, string>>;
-      readonly namedFor?: Readonly<Record<string, string>>;
+      /** The store's own chats' pages and page marks, when its merge kept them over what was sent. */
+      readonly storedClaims?: DesignCanvasStoredClaims;
     }
   | { readonly type: "save_conflicted"; readonly doc: DesignCanvas }
   | { readonly type: "save_refused" }
@@ -173,6 +178,12 @@ export type DesignCanvasSyncEvent =
   | { readonly type: "announcement"; readonly revision: number; readonly aidenTurn?: string; readonly step?: string }
   | { readonly type: "refetch_succeeded"; readonly doc: DesignCanvas }
   | { readonly type: "dispose" };
+
+/** The claims (chat id to page id) and `namedFor` marks (page id to chat id) a save stored. */
+export interface DesignCanvasStoredClaims {
+  readonly chatPages: Readonly<Record<string, string>>;
+  readonly namedFor: Readonly<Record<string, string>>;
+}
 
 export type DesignCanvasSyncEffect =
   | { readonly type: "schedule_timer"; readonly timer: DesignCanvasTimer }
@@ -296,6 +307,7 @@ function historyAfter(
 ): CanvasHistory {
   return changes.reduce((built, change) => {
     if ("unrecorded" in change) return carryUnrecorded(built, change.unrecorded);
+    if ("carried" in change) return takeIn(built, change.carried);
     const { from, to } = change.takenIn;
     return takeIn(built, {
       ...change.takenIn,
@@ -647,15 +659,17 @@ export function reduceDesignCanvasSync(
       let nextLocal = state.local === save.doc ? nextServer : state.local;
       let history = state.history;
       let unsettled = state.unsettled;
-      if (event.chatPages) {
+      if (event.storedClaims) {
         // The store kept its own chats' pages over what was sent: show those, and
         // carry them into every kept step, so no undo brings the sent ones back.
         // Newer edits take only what the store changed, so a later undo or rename stays.
+        // This is this window's own save, never a reply's revision, so a rebuild
+        // after a late announcement carries it too and never asks whose it was.
         const before = state.local ?? save.doc;
-        nextServer = applyStoredClaims(nextServer, event.chatPages, event.namedFor);
+        nextServer = applyStoredClaims(nextServer, event.storedClaims.chatPages, event.storedClaims.namedFor);
         nextLocal = changesBetween(save.doc, nextServer)(before);
         const change: DesignCanvasTakenIn = { before, from: save.doc, to: nextServer };
-        if (unsettled) unsettled = appendUnsettledChange(unsettled, { takenIn: change });
+        if (unsettled) unsettled = appendUnsettledChange(unsettled, { carried: change });
         history = takeIn(history, change);
       }
       const effects: DesignCanvasSyncEffect[] = [];
@@ -924,6 +938,22 @@ export function reduceDesignCanvasSync(
   }
 }
 
+/**
+ * The claims and marks a save's answer says were stored. The store sends both
+ * together; a side it leaves out is taken as stored the way it was sent.
+ */
+function storedClaimsOf(
+  result: { chatPages?: Record<string, string>; namedFor?: Record<string, string> },
+  sent: DesignCanvas,
+): DesignCanvasStoredClaims {
+  return {
+    chatPages: result.chatPages ?? sent.chatPages,
+    namedFor:
+      result.namedFor ??
+      Object.fromEntries(sent.pages.flatMap((page) => (page.namedFor === undefined ? [] : [[page.id, page.namedFor]]))),
+  };
+}
+
 /** Each canvas session's unsaved work; the app's close guard sees them as one "design" source. */
 const guardStates = new Map<symbol, DesignCanvasGuardState>();
 function publishDesignGuard() {
@@ -993,8 +1023,7 @@ function createCanvasSync(
           event = {
             type: "save_succeeded",
             revision: result.revision,
-            ...(result.chatPages ? { chatPages: result.chatPages } : {}),
-            ...(result.namedFor ? { namedFor: result.namedFor } : {}),
+            ...(result.chatPages || result.namedFor ? { storedClaims: storedClaimsOf(result, doc) } : {}),
           };
         } else if (result.reason === "conflict") event = { type: "save_conflicted", doc: result.doc };
         else if (result.reason === "moved") event = { type: "save_moved", workspaceId: result.workspaceId };
