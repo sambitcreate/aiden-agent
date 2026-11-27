@@ -275,3 +275,18 @@ test("when the app restarts under an entered frame, the frame is left without ta
     composer.remove();
   }
 });
+
+test("Enter or Space on a focused control in a selected frame is the control's, not the canvas's", async () => {
+  setup({ ...emptyDesignCanvas(), revision: 1, frames: [appFrame] });
+  await mount();
+  await liveAppIframe();
+  fireEvent.click(screen.getByRole("group", { name: "Pricing app" }));
+  const control = screen.getByRole("button", { name: "Show Pricing app dark" });
+  control.focus();
+  for (const key of ["Enter", " "]) {
+    const unhandled = fireEvent.keyDown(control, { key, code: key === " " ? "Space" : "Enter" });
+    assert.equal(unhandled, true, `${JSON.stringify(key)} keeps its default (the button's press)`);
+  }
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.equal(appIframe()!.hasAttribute("inert"), true, "the frame wasn't entered");
+});
