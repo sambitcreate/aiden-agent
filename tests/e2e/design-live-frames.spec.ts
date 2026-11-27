@@ -152,6 +152,21 @@ async function answerNextSave(app: ElectronApplication, file: string): Promise<v
   }, file);
 }
 
+/** Records every `shell.openExternal` call instead of opening anything. */
+async function recordOpenExternal(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    (globalThis as { __aidenE2eOpened?: string[] }).__aidenE2eOpened = opened;
+    shell.openExternal = (async (url: string) => {
+      opened.push(url);
+    }) as typeof shell.openExternal;
+  });
+}
+
+function openedExternally(app: ElectronApplication): Promise<string[]> {
+  return app.evaluate(() => (globalThis as { __aidenE2eOpened?: string[] }).__aidenE2eOpened ?? []);
+}
+
 async function enter(page: Page, title: string): Promise<void> {
   await frameGroup(page, title).dblclick();
   await expect(appIframe(page, title)).not.toHaveAttribute("inert", /.*/u);
@@ -247,36 +262,52 @@ live("two routes run live, take keys only when entered, and keep the app's own r
 });
 
 // S1 and D1. The main window's CSP frame-src refuses a redirect (or a mailto:)
-// out of an app frame before will-redirect or will-frame-navigate runs, so the
-// frame lands on Chromium's blocked page with no toast and no blocked count.
-// Nothing leaves Aiden. Escalated 2026-11-27 (plan, deviation 17).
-live.fixme("S1: a redirect out of the app leaves the frame where it was, with Open in browser", async ({ aiden }, testInfo) => {
-  const { page, workspaceDir } = aiden;
+// out of an app frame before will-redirect or will-frame-navigate runs. Main
+// answers the failed load: counted, Open in browser for a web address, and the
+// frame put back on its last in-app path.
+live("S1: a redirect out of the app leaves the frame where it was, with Open in browser", async ({ aiden }, testInfo) => {
+  const { app, page, workspaceDir } = aiden;
   await seedFixture(workspaceDir);
   await openLiveChat(aiden);
   await placeFrames(aiden, [{ title: "Home", route: "/" }], "Live frames test: put the home route on the canvas.");
   await expect(inside(page, "Home").locator("#home-title")).toHaveText("Fixture home", { timeout: 30_000 });
+  await recordOpenExternal(app);
   await enter(page, "Home");
   await press(inside(page, "Home").locator("#to-out"));
   await expect(page.getByText("example.com is outside the app")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByRole("button", { name: "Open in browser" })).toBeVisible();
-  await expect(inside(page, "Home").locator("#home-title")).toHaveText("Fixture home");
+  await expect(inside(page, "Home").locator("#home-title")).toHaveText("Fixture home", { timeout: 10_000 });
+  await expect(frameGroup(page, "Home").getByRole("button", { name: /1 blocked/u })).toBeVisible();
+  // A quarter-scale frame's status row gives way: its Download action stays inside the frame.
+  const card = await frameGroup(page, "Home").boundingBox();
+  const download = await frameGroup(page, "Home").getByRole("button", { name: /^Download/u }).boundingBox();
+  expect(download!.x + download!.width).toBeLessThanOrEqual(card!.x + card!.width + 0.5);
   await shoot(page, testInfo, "design-live-open-in-browser");
+  // Open in browser opens the browser panel, only when pressed; nothing went to the system.
+  // (A fresh refusal, so the toast hasn't timed out during the screenshots.)
+  await press(inside(page, "Home").locator("#to-out"));
+  await page.getByRole("button", { name: "Open in browser" }).click();
+  await expect(page.getByRole("textbox", { name: "Search or enter URL" })).toHaveValue(/example\.com/u, { timeout: 15_000 });
+  expect(await openedExternally(app)).toEqual([]);
 });
 
 // K1 (S75). Keys here are Playwright's CDP keys, which Chromium routes to the
 // focused frame's widget as it routes a real keyboard's (Electron's
 // sendInputEvent goes to the main frame's widget only, so it can't show this).
-// With Electron 43.8.4 a page's focus() loop in a cross-process app frame
-// takes the keys: the guard puts document.activeElement back on the composer,
-// but Chromium keeps the frame focused. Escalated 2026-11-27 (plan, deviation 17).
-live.fixme("K1: a page looping input.focus() in a frame that isn't entered never takes the composer's keys", async ({ aiden }) => {
+// Blink's BlockingFocusWithoutUserActivation, on with the flag, makes the
+// iframe's focus-without-user-activation 'none' refuse the page's focus()
+// loop. This is also the canary: if a Chromium upgrade drops the feature, it fails.
+live("K1: a page looping input.focus() in a frame that isn't entered never takes the composer's keys", async ({ aiden }) => {
   const { page, workspaceDir } = aiden;
   await seedFixture(workspaceDir);
   await openLiveChat(aiden);
   await placeFrames(aiden, [{ title: "Thief", route: "/probe?thief=1" }], "Live frames test: put the probe on the canvas.");
   await expect(inside(page, "Thief").getByRole("heading", { name: "Probe" })).toBeVisible({ timeout: 30_000 });
   const composer = page.locator("textarea").first();
+  // Playwright runs its frame checks as a user gesture (callFunctionOn with
+  // userGesture), and Chromium's transient activation lasts 5 s: wait it out,
+  // so the thief has no activation, like a page the person never touched.
+  await page.waitForTimeout(5_500);
   await composer.click();
   await page.keyboard.type("hello composer", { delay: 40 });
   await expect(composer).toHaveValue("hello composer");
@@ -307,14 +338,8 @@ live("a probe in an app frame reaches nothing outside localhost: each try fails 
     await placeFrames(aiden, [{ title: "Probe", route: `/probe?${query}` }], "Live frames test: put the probe on the canvas.");
     await expect(inside(page, "Probe").getByRole("heading", { name: "Probe" })).toBeVisible({ timeout: 30_000 });
     // Anything the page hands to the system (popups, mailto:, top navigation) would reach openExternal.
-    await app.evaluate(({ shell }) => {
-      const opened: string[] = [];
-      (globalThis as { __aidenE2eOpened?: string[] }).__aidenE2eOpened = opened;
-      shell.openExternal = (async (url: string) => {
-        opened.push(url);
-      }) as typeof shell.openExternal;
-    });
-    const opened = () => app.evaluate(() => (globalThis as { __aidenE2eOpened?: string[] }).__aidenE2eOpened ?? []);
+    await recordOpenExternal(app);
+    const opened = () => openedExternally(app);
     await enter(page, "Probe");
     await press(inside(page, "Probe").locator("#run"));
     await expect(inside(page, "Probe").locator("#result")).not.toHaveText("", { timeout: 60_000 });
@@ -381,6 +406,8 @@ live("a probe in an app frame reaches nothing outside localhost: each try fails 
     await press(inside(page, "Probe").locator("#mailto"));
     await page.waitForTimeout(1_000);
     expect(await opened()).toEqual([]);
+    // The frame is put back on its page (S1, D1).
+    await expect(inside(page, "Probe").getByRole("heading", { name: "Probe" })).toBeVisible({ timeout: 10_000 });
     expect(page.url()).toMatch(/^file:/u);
   } finally {
     await Promise.all([tcp.close(), alt.close(), udp.close()]);

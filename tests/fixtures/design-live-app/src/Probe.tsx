@@ -339,7 +339,7 @@ export function Probe() {
       <button id="thief" type="button" onClick={() => setThief((value) => !value)}>
         Focus thief {thief ? "on" : "off"}
       </button>
-      {/* Separate from Run: a refused mailto: may leave this frame on Chromium's blocked page. */}
+      {/* Separate from Run: refusing mailto: reloads this page, which clears #result. */}
       <button id="mailto" type="button" onClick={() => void (location.href = "mailto:x@example.com")}>
         Mail
       </button>
