@@ -12,6 +12,30 @@ export function clockLabel(time: string): string {
   return new Date(2000, 0, 1, hours, minutes).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+function QuietTimeField({
+  label,
+  ariaLabel,
+  value,
+  onChange,
+}: {
+  label: string;
+  ariaLabel: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Field label={label}>
+      <input
+        type="time"
+        aria-label={ariaLabel}
+        className="justify-self-end rounded-control bg-input px-2 py-1 text-regular text-primary outline-none"
+        value={value}
+        onChange={(event) => event.target.value && onChange(event.target.value)}
+      />
+    </Field>
+  );
+}
+
 /** The editable part of the page, separate from saving so it can be tested alone. */
 export function BotInterruptionsFields({
   value,
@@ -37,24 +61,18 @@ export function BotInterruptionsFields({
         </Field>
         {value.quietHours.enabled ? (
           <>
-            <Field label="From">
-              <input
-                type="time"
-                aria-label="Quiet from"
-                className="justify-self-end rounded-control bg-input px-2 py-1 text-regular text-primary outline-none"
-                value={value.quietHours.start}
-                onChange={(event) => event.target.value && setQuiet({ start: event.target.value })}
-              />
-            </Field>
-            <Field label="Until">
-              <input
-                type="time"
-                aria-label="Quiet until"
-                className="justify-self-end rounded-control bg-input px-2 py-1 text-regular text-primary outline-none"
-                value={value.quietHours.end}
-                onChange={(event) => event.target.value && setQuiet({ end: event.target.value })}
-              />
-            </Field>
+            <QuietTimeField
+              label="From"
+              ariaLabel="Quiet from"
+              value={value.quietHours.start}
+              onChange={(start) => setQuiet({ start })}
+            />
+            <QuietTimeField
+              label="Until"
+              ariaLabel="Quiet until"
+              value={value.quietHours.end}
+              onChange={(end) => setQuiet({ end })}
+            />
           </>
         ) : null}
       </FieldSet>
