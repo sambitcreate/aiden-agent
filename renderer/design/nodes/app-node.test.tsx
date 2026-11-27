@@ -254,6 +254,38 @@ test("a page that pulls focus into a not-entered app frame gives it straight bac
   }
 });
 
+test("in Chromium's order (the composer's focusout on the body, then the window's blur on the iframe) the composer gets focus back", async () => {
+  setup();
+  render(<Harness frame={appFrame()} composer />);
+  const iframe = await liveIframe();
+  const composer = screen.getByRole("textbox", { name: "Composer" });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    composer.focus();
+    // A cross-process frame's focus(): the composer loses focus to nothing first…
+    composer.blur();
+    await settleFocus();
+    // …and the iframe becomes the active element only as the window blurs.
+    pageTakesFocus(iframe);
+    window.dispatchEvent(new window.FocusEvent("blur"));
+    await settleFocus();
+    assert.equal(document.activeElement === composer, true, `attempt ${attempt + 1}: the composer has focus back`);
+  }
+});
+
+test("a window blur long after the composer lost focus doesn't send focus back to it", async () => {
+  setup();
+  render(<Harness frame={appFrame()} composer />);
+  const iframe = await liveIframe();
+  const composer = screen.getByRole("textbox", { name: "Composer" });
+  composer.focus();
+  composer.blur();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  pageTakesFocus(iframe);
+  window.dispatchEvent(new window.FocusEvent("blur"));
+  await settleFocus();
+  assert.equal(document.activeElement === document.body, true, "the iframe is blurred; the composer the person left stays left");
+});
+
 test("with nothing of Aiden's focused, a page that takes focus is blurred back to the body", async () => {
   setup();
   render(<Harness frame={appFrame()} />);
