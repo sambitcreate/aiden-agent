@@ -180,9 +180,9 @@ function flatFile(convention: "tanstack" | "react-router-flat", relPath: string)
       if (!split) return null;
       tokens.push(...split);
     }
-    if (tokens.length > 1 && tokens.at(-1) === "lazy") tokens.pop();
+    if (tokens.length > 1 && tokens[tokens.length - 1] === "lazy") tokens.pop();
     // `dashboard/route.tsx` and `posts.route.tsx` configure their folder's or name's own route.
-    if (tokens.length > 1 && tokens.at(-1) === "route") tokens.pop();
+    if (tokens.length > 1 && tokens[tokens.length - 1] === "route") tokens.pop();
   }
   const style = convention === "react-router-flat" ? "remix" : "tanstack";
   const segments: string[] = [];
@@ -650,7 +650,7 @@ export function mergeRouteList(input: {
     if (!isRoutePattern(candidate)) continue;
     push({ route: candidate, pattern: candidate, source: entrySource });
     const names = patternParams(candidate);
-    const values = Object.hasOwn(params, candidate) ? params[candidate] : undefined;
+    const values = Object.prototype.hasOwnProperty.call(params, candidate) ? params[candidate] : undefined;
     if (names.length !== 1 || !Array.isArray(values)) continue;
     for (const value of values) {
       const filled = fillRoute(candidate, { [names[0].name]: value });

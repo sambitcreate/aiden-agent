@@ -121,8 +121,8 @@ test("fields DM doesn't know are ignored by the parser but kept in the raw objec
   };
   const text = JSON.stringify(raw);
   assert.deepEqual(parseCanvasConfigObject(text), raw);
-  // 2c reads url (D7); routes, params and mock stay unknown.
-  assert.deepEqual(parseCanvasConfig(text), config({ root: "web", script: "dev", url: "http://localhost:3000" }));
+  // 2c reads url (D7) and 3b routes and params (S81: `id` isn't a pattern, so it's dropped); mock stays unknown.
+  assert.deepEqual(parseCanvasConfig(text), config({ root: "web", script: "dev", url: "http://localhost:3000", routes: ["/"] }));
   const inspection = inspectCanvasConfig(text);
   assert.equal(inspection.status, "ok");
   assert.deepEqual((inspection as { raw: unknown }).raw, raw);
@@ -373,4 +373,55 @@ test("2c: saveCanvasConfigApp keeps a url and a refused url byte-for-byte", asyn
   const after = (await readJson(root)) as unknown as typeof before;
   assert.equal(after.apps[0]!.url, "http://localhost:4321/");
   assert.equal(after.apps[1]!.url, "https://example.com");
+});
+
+test("3b: the spec's routes and params example parses to those fields", () => {
+  const text = JSON.stringify({
+    apps: [{ root: "web", script: "dev", routes: ["/", "/pricing", "/blog/hello-world"], params: { "/blog/[slug]": ["hello-world"] } }],
+  });
+  assert.deepEqual(
+    parseCanvasConfig(text),
+    config({ root: "web", script: "dev", routes: ["/", "/pricing", "/blog/hello-world"], params: { "/blog/[slug]": ["hello-world"] } }),
+  );
+});
+
+test("3b: bad routes and params are dropped silently and the rest of the app is kept", () => {
+  const routes = ["/", "https://x", "//x", "/a/[b", ...Array.from({ length: 200 }, (_, index) => `/r${index}`)];
+  const text = JSON.stringify({
+    apps: [
+      {
+        root: "web",
+        script: "dev",
+        routes,
+        params: {
+          notapattern: ["x"],
+          "/[org]/p/[id]": ["x"],
+          "/blog/[slug]": ["ok", "..", "a/b", "a\u202eb", ...Array.from({ length: 20 }, (_, index) => `v${index}`)],
+          "/docs/[...rest]": ["a/b", "a//b"],
+          "/about": ["x"],
+        },
+      },
+    ],
+  });
+  const app = parseCanvasConfig(text)!.apps[0];
+  assert.equal(app.script, "dev");
+  // The 201st entry and the three bad ones are dropped: 200 read, 197 kept.
+  assert.equal(app.routes?.length, 197);
+  assert.equal(app.routes?.[0], "/");
+  assert.ok(!app.routes?.includes("/r199"), "past the 200th entry");
+  assert.deepEqual(Object.keys(app.params ?? {}).sort(), ["/blog/[slug]", "/docs/[...rest]"]);
+  // 20 values are read: "ok", the three bad ones and v0–v15.
+  assert.deepEqual(app.params?.["/blog/[slug]"], ["ok", ...Array.from({ length: 16 }, (_, index) => `v${index}`)]);
+  assert.deepEqual(app.params?.["/docs/[...rest]"], ["a/b"]);
+});
+
+test("3b: routes, params and mock survive a saveCanvasConfigApp round trip", async (t) => {
+  const root = await configRoot(t);
+  const entry = { root: "web", mock: true, routes: ["/", "/pricing"], params: { "/blog/[slug]": ["hello-world"] } };
+  await writeSavedConfig(root, { version: 1, apps: [entry] });
+  assert.equal(await saveCanvasConfigApp(root, { root: "web", script: "dev" }), "saved");
+  assert.deepEqual(await readJson(root), { version: 1, apps: [{ ...entry, script: "dev" }] });
+  const read = await readCanvasConfig(root);
+  assert.deepEqual(read?.apps[0].routes, ["/", "/pricing"]);
+  assert.deepEqual(read?.apps[0].params, { "/blog/[slug]": ["hello-world"] });
 });

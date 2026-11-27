@@ -119,7 +119,7 @@ export function fillRoute(pattern: string, values: Record<string, string>): stri
       out.push(segment);
       continue;
     }
-    const value = Object.hasOwn(values, param.name) ? values[param.name] : undefined;
+    const value = Object.prototype.hasOwnProperty.call(values, param.name) ? values[param.name] : undefined;
     if (param.optional && (value === undefined || value === "")) continue;
     if (typeof value !== "string" || !isParamValue(value, param.catchAll)) return null;
     out.push(...value.split("/").map((part) => encodeURIComponent(part)));
