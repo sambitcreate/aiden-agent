@@ -21,13 +21,11 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailureClassification
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 import java.io.ByteArrayOutputStream
-import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
 
 sealed class AidenBotGeneratedAvatarError(val messageText: String) : Exception(messageText) {
     object SourceTooLarge : AidenBotGeneratedAvatarError("That image is too large. Choose another image.")
-    object UnsupportedImage : AidenBotGeneratedAvatarError("That image format can't be used for a Bot photo.")
     object InvalidImage : AidenBotGeneratedAvatarError("Aiden couldn't prepare that image. Choose another image.")
     object Unavailable : AidenBotGeneratedAvatarError("Reconnect to your paired desktop before saving this Bot photo.")
 }
@@ -120,19 +118,6 @@ object AidenBotGeneratedAvatarNormalizer {
         }
         return inSampleSize
     }
-
-    fun representsSameImage(lhs: ByteArray, rhs: ByteArray): Boolean {
-        if (lhs.contentEquals(rhs)) return true
-        return try {
-            val normLhs = normalize(lhs)
-            val normRhs = normalize(rhs)
-            val hashLhs = MessageDigest.getInstance("SHA-256").digest(normLhs)
-            val hashRhs = MessageDigest.getInstance("SHA-256").digest(normRhs)
-            hashLhs.contentEquals(hashRhs)
-        } catch (_: Exception) {
-            false
-        }
-    }
 }
 
 class AidenBotGeneratedAvatarModel(
@@ -212,8 +197,6 @@ class AidenBotGeneratedAvatarModel(
         )
         return result.isSuccess
     }
-
-    suspend fun ingestCopiedCandidate(bytes: ByteArray) = setCandidate(bytes)
 
     suspend fun uploadAvatar(
         botId: String,

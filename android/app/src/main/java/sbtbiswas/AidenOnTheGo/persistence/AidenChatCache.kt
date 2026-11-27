@@ -546,11 +546,6 @@ class AidenChatCache(
     }
 
     @Synchronized
-    fun removeActiveStreams(instanceId: String) {
-        purgeFiles(root, "streams", instanceId, StreamEnvelope::class.java) { it.instanceId }
-    }
-
-    @Synchronized
     fun attachmentImage(
         instanceId: String,
         deviceId: String,
@@ -634,13 +629,6 @@ class AidenChatCache(
     // Compatibility methods
     @Synchronized
     fun getChat(id: String): AidenChat? = _chats.value[id]
-
-    @Synchronized
-    fun putChat(chat: AidenChat) {
-        val map = _chats.value.toMutableMap()
-        map[chat.id] = chat
-        _chats.value = map
-    }
 
     @Synchronized
     fun removeChat(id: String) {

@@ -1484,18 +1484,6 @@ class AidenChatViewModel(
         if (writer.hasPendingWrite) draftWriteScope.launch { writer.flush() }
     }
 
-    fun selectProvider(providerId: String) {
-        val currentChat = _chat.value
-        if (currentChat != null && currentChat.isBotChat) return
-        _selectedProviderId.value = providerId
-        val catalog = _catalog.value
-        val provider = catalog?.providers?.firstOrNull { it.id == providerId }
-        val firstModel = provider?.visibleModels?.firstOrNull()
-        _selectedModelId.value = firstModel?.id
-        _selectedThinkingLevel.value = firstModel?.effectiveThinkingLevel
-        rememberExplicitModelSelection()
-    }
-
     fun selectModel(modelId: String) {
         val currentChat = _chat.value
         if (currentChat != null && currentChat.isBotChat) return
@@ -1516,13 +1504,6 @@ class AidenChatViewModel(
         _selectedProviderId.value = providerId
         _selectedModelId.value = modelId
         _selectedThinkingLevel.value = thinkingLevel ?: model?.effectiveThinkingLevel
-        rememberExplicitModelSelection()
-    }
-
-    fun selectThinkingLevel(level: String?) {
-        val currentChat = _chat.value
-        if (currentChat != null && currentChat.isBotChat) return
-        _selectedThinkingLevel.value = level
         rememberExplicitModelSelection()
     }
 

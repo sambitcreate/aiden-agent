@@ -827,11 +827,6 @@ class AidenBotSessionController(
         feedJob = scope.launch { follow() }
     }
 
-    /** The notice was read. */
-    fun dismissNotice() {
-        _state.update { it.copy(notice = null) }
-    }
-
     /**
      * Revision 45 (`bot:images`): the bytes of an image the Bot shared, or null when the Mac can't
      * send them (it left the chat, or the phone is offline). Images are kept while this chat is open,

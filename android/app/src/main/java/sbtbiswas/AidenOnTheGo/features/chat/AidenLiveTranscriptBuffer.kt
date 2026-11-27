@@ -39,11 +39,6 @@ class AidenLiveTranscriptBuffer(
         scheduleFrame()
     }
 
-    fun clearReasoning() {
-        reasoning.setLength(0)
-        flush()
-    }
-
     /** Publishes pending deltas now. */
     fun flush() {
         publishPending(force = false)

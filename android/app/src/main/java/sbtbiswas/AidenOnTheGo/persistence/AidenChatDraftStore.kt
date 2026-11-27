@@ -264,24 +264,6 @@ class AidenChatDraftStore(
     @Synchronized
     fun getDraft(chatId: String): AidenChatDraft = _drafts.value[chatId] ?: AidenChatDraft()
 
-    @Synchronized
-    fun saveDraft(chatId: String, draft: AidenChatDraft) {
-        val map = _drafts.value.toMutableMap()
-        if (draft.text.isEmpty() && draft.attachmentIds.isEmpty()) {
-            map.remove(chatId)
-        } else {
-            map[chatId] = draft
-        }
-        _drafts.value = map
-    }
-
-    @Synchronized
-    fun clearDraft(chatId: String) {
-        val map = _drafts.value.toMutableMap()
-        map.remove(chatId)
-        _drafts.value = map
-    }
-
     private fun invalidate(instanceId: String, chatId: String) {
         generations.compute(sessionKey(instanceId, chatId)) { _, current -> (current ?: 0L) + 1L }
     }

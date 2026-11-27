@@ -1,21 +1,7 @@
 package sbtbiswas.AidenOnTheGo.notifications
 
-import java.time.Instant
 import sbtbiswas.AidenOnTheGo.R
 import androidx.annotation.StringRes
-
-data class AgentRunContentState(
-    val sessionId: String,
-    val sessionTitle: String,
-    val status: AgentRunActivityStatus,
-    val currentActivity: String,
-    val responseExcerpt: String = "",
-    val startedAt: Instant,
-    val updatedAt: Instant,
-    val isStale: Boolean = false,
-    val isFinal: Boolean = false,
-    val errorSummary: String? = null
-)
 
 /**
  * [title] is the English status the in-app progress line uses; notifications show the
