@@ -39,6 +39,7 @@ import { hostServesBotHandoffs, hostSharesBotSessions } from "../lib/hosts/remot
 import { useRemoteBotSession } from "../lib/hosts/use-remote-bot-session";
 import { browserApi, peerHostsApi } from "../lib/ipc";
 import type { Attachment } from "../lib/types";
+import { textAttachmentBody } from "../shared/attachment-contract";
 import type { AskUserQuestionResponseV1 } from "../shared/ask-user-question";
 import { DEFAULT_BOT_AVATAR, botChatActivityOnDevice, isBotAvatar, showsBotToolActivity, type BotAvatar } from "../shared/bots";
 import { useAppearancePreference } from "../lib/use-appearance-preference";
@@ -71,14 +72,6 @@ import { BotPausedNotice, botPausedText } from "./bots/bot-paused-card";
 import { BotStatusLine } from "./bots/bot-status-line";
 import { useChatFind } from "../components/chat-find-bar";
 import { useRemoteBotImages, useRemoteBotPhoto } from "../lib/hosts/remote-images";
-
-/** Text files ride along in the message, as in a local Bot chat. */
-function attachmentText(attachments: readonly Attachment[]): string {
-  return attachments
-    .filter((attachment) => attachment.kind === "text" && attachment.text)
-    .map((attachment) => `\n\n${attachment.name}:\n${attachment.text}`)
-    .join("");
-}
 
 function botName(feed: PeerHostFeedSnapshot | null | undefined, botId: string): string | null {
   const row = feed?.bots.find((bot) => bot.id === botId);
@@ -479,7 +472,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       toast.error(`Update Aiden on ${hostName} to send photos to ${name}.`);
       throw new Error("photos unsupported");
     }
-    const fullText = `${text}${attachmentText(attachments)}`;
+    const fullText = `${text}${textAttachmentBody(attachments)}`;
     const identity = photoIdentity(images);
     const echoId = mintPeerIdempotencyKey();
     const echo: BotPendingSend = {
