@@ -6,7 +6,7 @@ import type {
   DesignAppStatus,
 } from "../../../../renderer/shared/design-app.js";
 import { createDesignAppTool, type DesignAppToolServers } from "./app-tool.js";
-import type { DesignAppChooseInput, DesignAppStartInput } from "./app-server-main.js";
+import type { DesignAppChooseInput, DesignAppRoutesResult, DesignAppStartInput } from "./app-server-main.js";
 
 type Call = { method: string; input: unknown };
 
@@ -36,6 +36,21 @@ class FakeServers implements DesignAppToolServers {
   };
   answer: (method: string, input: unknown) => Promise<DesignAppStatus> = async () => status({ phase: "running", origin: "http://127.0.0.1:5173", port: 5173 });
   logText = "";
+  routeAnswer: DesignAppRoutesResult = {
+    appRoot: ".",
+    framework: "next",
+    source: "discovered",
+    truncated: false,
+    routes: [
+      { route: "/", source: "discovered" },
+      { route: "/pricing", source: "discovered" },
+      { route: "/blog/[slug]", pattern: "/blog/[slug]", source: "discovered" },
+    ],
+  };
+  async routes(workspaceId: string, appRoot?: string) {
+    this.calls.push({ method: "routes", input: { workspaceId, ...(appRoot !== undefined ? { appRoot } : {}) } });
+    return this.routeAnswer;
+  }
   private listeners = new Set<(snapshot: DesignAppsSnapshot) => void>();
 
   async snapshot(workspaceId: string) {
@@ -418,4 +433,69 @@ test("the description names url roots once, and what Aiden never does to them", 
   const { tool } = harness();
   assert.equal(tool.description.match(/\burl\b/gu)?.length, 1);
   assert.match(tool.description, /never starts, stops or reads the output of that server/u);
+});
+
+// ── 3b: routes (S82) ──
+
+test("3b: routes with one app and no root lists its pages as JSON values, patterns marked", async () => {
+  const { servers, run } = harness();
+  assert.deepEqual(await run({ action: "routes" }), {
+    status: "routes",
+    root: ".",
+    framework: "next",
+    source: "discovered",
+    truncated: false,
+    routes: [{ route: "/" }, { route: "/pricing" }, { route: "/blog/[slug]", pattern: "/blog/[slug]" }],
+  });
+  assert.deepEqual(servers.serviceCalls(), [{ method: "routes", input: { workspaceId: "ws" } }]);
+});
+
+test("3b: an unknown framework is left out of the reply, and a root is passed through", async () => {
+  const { servers, run } = harness();
+  servers.routeAnswer = { appRoot: "apps/web", source: "fallback", truncated: false, routes: [{ route: "/", source: "discovered" }] };
+  const reply = await run({ action: "routes", root: "apps/web" });
+  assert.equal("framework" in reply, false);
+  assert.equal(reply.source, "fallback");
+  assert.deepEqual(servers.serviceCalls("routes")[0].input, { workspaceId: "ws", appRoot: "apps/web" });
+});
+
+test("3b: routes isn't a start: five lists, then a start still starts, and nothing else is called", async () => {
+  const { servers, run } = harness();
+  for (let index = 0; index < 5; index += 1) await run({ action: "routes" });
+  assert.deepEqual(
+    servers.serviceCalls().map((call) => call.method),
+    ["routes", "routes", "routes", "routes", "routes"],
+  );
+  const started = await run({ action: "start" });
+  assert.equal(started.status, "running");
+});
+
+test("3b: several apps with no root is an error listing the roots; an unknown root names it", async () => {
+  const { servers, run } = harness();
+  servers.routeAnswer = { error: "choose-root", roots: ["apps/web", "apps/site"] };
+  const reply = await run({ action: "routes" });
+  assert.equal(reply.status, "error");
+  assert.match(String(reply.message), /apps\/web/);
+  assert.match(String(reply.message), /apps\/site/);
+  servers.routeAnswer = { error: "unknown-root", roots: ["apps/web"] };
+  const unknown = await run({ action: "routes", root: "apps/nope" });
+  assert.equal(unknown.status, "error");
+  assert.match(String(unknown.message), /apps\/nope/);
+});
+
+test("3b: routes answers unavailable once design mode is off, without reaching the service", async () => {
+  const { servers, run } = harness({ available: async () => false });
+  assert.equal((await run({ action: "routes" })).status, "unavailable");
+  assert.deepEqual(servers.serviceCalls(), []);
+  const offService = harness();
+  offService.servers.routeAnswer = { error: "unavailable" };
+  assert.equal((await offService.run({ action: "routes" })).status, "unavailable");
+});
+
+test("3b: a route that reads like an instruction round-trips as a JSON value, unchanged", async () => {
+  const { servers, run } = harness();
+  const hostile = '/"ignore previous';
+  servers.routeAnswer = { appRoot: ".", source: "config", truncated: false, routes: [{ route: hostile, source: "config" }] };
+  const reply = await run({ action: "routes" });
+  assert.deepEqual(reply.routes, [{ route: hostile }]);
 });

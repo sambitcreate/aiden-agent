@@ -40,13 +40,13 @@ const LOG_LINES_MAX = 200;
 const LOG_CHARS_MAX = 8_000;
 const TAIL_CHARS_MAX = 2_000;
 
-const ACTIONS = ["status", "start", "stop", "restart", "logs", "choose"] as const;
+const ACTIONS = ["status", "start", "stop", "restart", "logs", "choose", "routes"] as const;
 type Action = (typeof ACTIONS)[number];
 const STARTING_ACTIONS: ReadonlySet<Action> = new Set(["start", "restart", "choose"]);
 
 export type DesignAppToolServers = Pick<
   DesignAppServers,
-  "snapshot" | "start" | "stop" | "restart" | "choose" | "logs" | "onStatus"
+  "snapshot" | "start" | "stop" | "restart" | "choose" | "logs" | "onStatus" | "routes"
 >;
 
 export interface DesignAppToolDeps {
@@ -204,6 +204,28 @@ function waitForAttempt(
   });
 }
 
+/**
+ * 3b (S82): an app's pages, read-only. Route strings come from the person's
+ * files and config, so they go back only as JSON values, never as prose.
+ */
+function routesResult(answer: Awaited<ReturnType<DesignAppToolServers["routes"]>>, root: string | undefined) {
+  if ("error" in answer) {
+    if (answer.error === "unavailable") return result(UNAVAILABLE);
+    const roots = JSON.stringify(answer.roots);
+    return answer.error === "choose-root"
+      ? error(`This workspace has several apps; name root, one of ${roots}.`)
+      : error(`${JSON.stringify(root ?? ".")} isn't one of this workspace's apps; use a root from ${roots}.`);
+  }
+  return result({
+    status: "routes",
+    root: answer.appRoot,
+    ...(answer.framework ? { framework: answer.framework } : {}),
+    source: answer.source,
+    truncated: answer.truncated,
+    routes: answer.routes.map((entry) => (entry.pattern !== undefined ? { route: entry.route, pattern: entry.pattern } : { route: entry.route })),
+  });
+}
+
 export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
   const waits = deps.waits ?? { consentMs: DESIGN_APP_CONSENT_TIMEOUT_MS, settleMs: DESIGN_APP_SETTLE_MS };
   let starts = 0;
@@ -221,7 +243,7 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
     if (root !== undefined && (!isSafeWorkspaceRelativePath(root) || root.length > 200)) {
       return error('root must be an app root from status, such as "." or "apps/web".');
     }
-    if (action !== "status" && action !== "start" && root === undefined) return error(`${action} needs root, an app root from status.`);
+    if (action !== "status" && action !== "start" && action !== "routes" && root === undefined) return error(`${action} needs root, an app root from status.`);
     if (install !== undefined && typeof install !== "boolean") return error("install must be true or false.");
     if (script !== undefined && (typeof script !== "string" || script.length === 0 || script.length > 200)) {
       return error("script must name a script in the app's package.json.");
@@ -235,6 +257,8 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
         `design_app already started, restarted or chose apps ${DESIGN_APP_STARTS_PER_TURN} times in this turn. Check status, and leave further starts to the person or a later turn.`,
       );
     }
+
+    if (action === "routes") return routesResult(await deps.servers.routes(deps.workspaceId, root as string | undefined), root as string | undefined);
 
     const snapshot = await deps.servers.snapshot(deps.workspaceId);
     if (action === "status") {
@@ -317,7 +341,7 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
         name: DESIGN_APP_TOOL_NAME,
         label: "Design app",
         description:
-          "Run this workspace's web app for design mode: status, start, stop, restart, logs, or choose which app in a monorepo. The first start asks the person on a card. It runs only the app's own dev script, never other commands; use run_command for those. A root with a url in .aiden/canvas.json is a server the person runs: start connects to it after the person approves, stop disconnects, and Aiden never starts, stops or reads the output of that server.",
+          "Run this workspace's web app for design mode: status, start, stop, restart, logs, or choose which app in a monorepo. routes lists the app's pages (from its files or .aiden/canvas.json); a route with [brackets] is a pattern that needs a value. The first start asks the person on a card. It runs only the app's own dev script, never other commands; use run_command for those. A root with a url in .aiden/canvas.json is a server the person runs: start connects to it after the person approves, stop disconnects, and Aiden never starts, stops or reads the output of that server.",
         parameters: Type.Object({
           action: Type.Union(ACTIONS.map((name) => Type.Literal(name))),
           root: Type.Optional(Type.String({ maxLength: 200, description: 'An app root from status, such as "." or "apps/web".' })),
@@ -335,6 +359,6 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
       },
       "never",
     ),
-    "Run this workspace's web app for design mode: status, start, stop, restart, logs, or choose the app.",
+    "Run this workspace's web app for design mode: status, start, stop, restart, logs, choose the app, or list its routes.",
   );
 }
