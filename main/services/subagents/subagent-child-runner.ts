@@ -127,22 +127,7 @@ export interface SubagentChildToolAssembly {
   shellApprovalBindings: SubagentShellToolBindingV2[];
 }
 
-export interface RunSubagentChildInput {
-  compactionEngine?: CompactionEngine;
-  compactionModelOverrides?: CompactionModelOverrides;
-  authority: SubagentRuntimeAuthority;
-  runId?: string;
-  childId?: string;
-  groupId: string;
-  runtime: ResolvedModelRuntime;
-  transformRuntime?: SubagentRuntimeTransform;
-  thinkingLevel: ThinkingLevel;
-  workspaceRoot: string;
-  permission: WorkspacePermission;
-  inheritedCeiling: readonly SubagentReadToolName[];
-  /** Exact private V2 ceiling; absent only on the V1 rollback path. */
-  v2Authority?: SubagentAuthorityV2;
-  currentV2Authority?: () => SubagentAuthorityV2 | undefined;
+export interface SubagentApprovalSeamsV2 {
   consumeNetworkOperation?: (authority: SubagentAuthorityV2) => boolean;
   prepareOutboundApproval?: (
     bindings: readonly SubagentOutboundToolBindingV2[],
@@ -159,6 +144,24 @@ export interface RunSubagentChildInput {
     bindings: readonly SubagentShellToolBindingV2[],
     runSignal?: AbortSignal,
   ) => SubagentShellGateV2;
+}
+
+export interface RunSubagentChildInput extends SubagentApprovalSeamsV2 {
+  compactionEngine?: CompactionEngine;
+  compactionModelOverrides?: CompactionModelOverrides;
+  authority: SubagentRuntimeAuthority;
+  runId?: string;
+  childId?: string;
+  groupId: string;
+  runtime: ResolvedModelRuntime;
+  transformRuntime?: SubagentRuntimeTransform;
+  thinkingLevel: ThinkingLevel;
+  workspaceRoot: string;
+  permission: WorkspacePermission;
+  inheritedCeiling: readonly SubagentReadToolName[];
+  /** Exact private V2 ceiling; absent only on the V1 rollback path. */
+  v2Authority?: SubagentAuthorityV2;
+  currentV2Authority?: () => SubagentAuthorityV2 | undefined;
   /** Main-owned depth-2 execution seam. Absent for V1, depth-2, rollback, or denied authority. */
   executeNested?: (
     params: unknown,

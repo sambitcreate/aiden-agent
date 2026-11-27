@@ -27,7 +27,10 @@ import {
   SUBAGENT_TIME_LIMIT_WARNING,
   type SubagentTimeLimit,
 } from "./subagent-child-policy.js";
-import type { RunSubagentChildInput } from "./subagent-child-runner.js";
+import type {
+  RunSubagentChildInput,
+  SubagentApprovalSeamsV2,
+} from "./subagent-child-runner.js";
 import type {
   SubagentTranscriptFinishStatus,
   SubagentTranscriptRecorder,
@@ -62,20 +65,6 @@ import {
   type SubagentTreeExecutionLeaseV2,
   type SubagentTreeNodeV2,
 } from "./subagent-nesting-core.js";
-import type { SubagentOutboundToolBindingV2 } from "./outbound-approval-v2.js";
-import type { SubagentOutboundApprovalGateV2 } from "./outbound-approval-v2.js";
-import type {
-  SubagentWorkspaceWriteApprovalGateV2,
-  SubagentWorkspaceWriteToolBindingV2,
-} from "./subagent-workspace-write.js";
-import type {
-  SubagentMcpMutationBindingV2,
-  SubagentMcpMutationGateV2,
-} from "./subagent-mcp-mutation.js";
-import type {
-  SubagentShellGateV2,
-  SubagentShellToolBindingV2,
-} from "./subagent-shell.js";
 
 /** The one tool result a Bot reply gets once its helpers' 60 minutes are spent. */
 export const BOT_SUBAGENT_LIMIT_REACHED_RESULT =
@@ -127,27 +116,11 @@ export interface SubagentSupervisorPolicy {
   launchBudget?: number;
 }
 
-export interface PreparedSubagentRun {
+export interface PreparedSubagentRun extends SubagentApprovalSeamsV2 {
   /** Exact main-owned V2 ceiling passed only to positive child tool assembly. */
   authority?: SubagentAuthorityV2;
   revalidateAuthority?: () => Promise<SubagentAuthorityV2>;
   currentAuthority?: () => SubagentAuthorityV2 | undefined;
-  consumeNetworkOperation?: (authority: SubagentAuthorityV2) => boolean;
-  prepareOutboundApproval?: (
-    bindings: readonly SubagentOutboundToolBindingV2[],
-  ) => SubagentOutboundApprovalGateV2;
-  prepareWorkspaceWriteApproval?: (
-    bindings: readonly SubagentWorkspaceWriteToolBindingV2[],
-    runSignal?: AbortSignal,
-  ) => SubagentWorkspaceWriteApprovalGateV2;
-  prepareMcpMutationApproval?: (
-    bindings: readonly SubagentMcpMutationBindingV2[],
-    runSignal?: AbortSignal,
-  ) => SubagentMcpMutationGateV2;
-  prepareShellApproval?: (
-    bindings: readonly SubagentShellToolBindingV2[],
-    runSignal?: AbortSignal,
-  ) => SubagentShellGateV2;
   /** Idempotently remove a run that never crossed the launch barrier. */
   abortPreparation(reason: Error): void | Promise<void>;
   /**

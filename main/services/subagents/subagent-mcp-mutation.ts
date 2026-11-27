@@ -4,9 +4,9 @@ import { Type } from "typebox";
 import type {
   AgentTool,
   AgentToolResult,
-  BeforeToolCallContext,
   BeforeToolCallResult,
 } from "@earendil-works/pi-agent-core";
+import type { SubagentToolGateV2 } from "./contracts.js";
 import type { ToolApprovalPrompt } from "../tool-approval.js";
 import {
   subagentAuthorityDigestV2,
@@ -113,19 +113,7 @@ export interface PriorUnknownSubagentMcpMutationQueryV2 {
   effectDigest: string;
 }
 
-export interface SubagentMcpMutationGateV2 {
-  beforeToolCall(
-    context: BeforeToolCallContext,
-    signal?: AbortSignal,
-  ): Promise<BeforeToolCallResult | undefined>;
-  execute(input: {
-    toolCallId: string;
-    toolName: string;
-    arguments: unknown;
-    signal?: AbortSignal;
-  }): Promise<AgentToolResult<null>>;
-  shutdown(): Promise<void>;
-}
+export type SubagentMcpMutationGateV2 = SubagentToolGateV2;
 
 export interface SubagentMcpMutationBrokerV2Input {
   authority: SubagentAuthorityV2;

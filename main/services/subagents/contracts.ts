@@ -1,3 +1,8 @@
+import type {
+  AgentToolResult,
+  BeforeToolCallContext,
+  BeforeToolCallResult,
+} from "@earendil-works/pi-agent-core";
 import {
   GENERATION_THINKING_LEVELS,
   isGenerationThinkingLevel,
@@ -71,6 +76,20 @@ export interface SubagentTaskResult {
   /** Present when the runner shortened a completed report or failed turn-limit partial findings. */
   summaryTruncated?: true;
   warning?: string;
+}
+
+export interface SubagentToolGateV2<Result = AgentToolResult<null>> {
+  beforeToolCall(
+    context: BeforeToolCallContext,
+    signal?: AbortSignal,
+  ): Promise<BeforeToolCallResult | undefined>;
+  execute(input: {
+    toolCallId: string;
+    toolName: string;
+    arguments: unknown;
+    signal?: AbortSignal;
+  }): Promise<Result>;
+  shutdown(): Promise<void>;
 }
 
 function exactPlainDataRecord(
