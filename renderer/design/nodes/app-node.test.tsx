@@ -622,6 +622,32 @@ test("Reload clears the stuck state at once: a way out in the same moment is put
   assert.equal(iframes()[0]!.src, `${origin}/pricing`);
 });
 
+test("3b: a route change drops the old route's path, error and stuck state, and frames the new route", async () => {
+  const clock = manualClock();
+  const frame = appFrame();
+  const { mounts } = setup();
+  const { rerender } = render(<Harness frame={frame} now={clock.now} />);
+  const iframe = await liveIframe();
+  const origin = new URL(iframe.getAttribute("src")!).origin;
+  const { guest } = giveWindow(iframe);
+  post(guest, { type: "aiden-app:route", path: "/pricing?tab=2" });
+  post(guest, { type: "aiden-app:error", kind: "error", message: "Boom" });
+  assert.ok(screen.getByText("/pricing?tab=2"));
+  const restore = () => notify({ kind: "navigation-restore", frameId: frame.id, mountToken: mounts()[0]!.mountToken });
+  restore();
+  restore();
+  assert.ok(screen.getByText("This page leads outside the app."));
+
+  rerender(<Harness frame={{ ...frame, route: "/about", title: "/about" }} now={clock.now} />);
+  assert.equal(screen.queryByText("/pricing?tab=2"), null, "the old path chip is gone");
+  assert.equal(screen.queryByRole("button", { name: "Error" }), null, "the old error label is gone");
+  assert.equal(screen.queryByText("This page leads outside the app."), null, "the frame isn't stuck on the new route");
+  assert.equal(iframes()[0]!.src, `${origin}/about`);
+  restore();
+  assert.equal(iframes()[0]!.src, `${origin}/about`, "the new route has its own restore");
+  assert.equal(screen.queryByText("This page leads outside the app."), null);
+});
+
 // ── The page's bridge: untrusted and bounded ──
 
 test("the in-app path comes only from this frame's own page, and an error label opens the escaped message", async () => {

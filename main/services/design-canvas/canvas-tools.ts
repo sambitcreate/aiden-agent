@@ -1337,8 +1337,20 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     if (!appsOn || ![...answer.inView, ...answer.outsideFrames].some((frame) => frame.kind === "app")) return answer;
     const snapshot = await deps.apps!.snapshot(workspaceId);
     const running = new Set(snapshot.apps.filter((app) => app.phase === "running").map((app) => app.appRoot));
-    const mark = (frame: CanvasFrameSummary): CanvasFrameSummary =>
-      frame.kind === "app" ? { ...frame, live: frame.appRoot !== undefined && running.has(frame.appRoot) } : frame;
+    // 3b (S85): how many requests its live mounts blocked, as a count only (the hosts are the page's text).
+    const blocked = (id: string): number => {
+      try {
+        const count = deps.blockedFor?.(id) ?? 0;
+        return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+      } catch {
+        return 0;
+      }
+    };
+    const mark = (frame: CanvasFrameSummary): CanvasFrameSummary => {
+      if (frame.kind !== "app") return frame;
+      const count = blocked(frame.id);
+      return { ...frame, live: frame.appRoot !== undefined && running.has(frame.appRoot), ...(count > 0 ? { blocked: count } : {}) };
+    };
     return { ...answer, inView: answer.inView.map(mark), outsideFrames: answer.outsideFrames.map(mark) };
   };
 
@@ -1669,7 +1681,16 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           ),
           aboveFrameId: Type.Optional(Type.String({ description: "Put it just in front of this sibling." })),
           belowFrameId: Type.Optional(Type.String({ description: "Put it just behind this sibling." })),
-          ...(appsOn ? { colorScheme: Type.Optional(enumOf(["light", "dark"] as const)) } : {}),
+          ...(appsOn
+            ? {
+                colorScheme: Type.Optional(enumOf(["light", "dark"] as const)),
+                route: Type.Optional(Type.String({ maxLength: APP_FRAME_LIMITS.routeChars, description: "app: show another route in the same frame." })),
+                width: Type.Optional(Type.Number({ description: "app: the viewport's width in CSS pixels; the frame keeps its scale." })),
+                height: Type.Optional(Type.Number({ description: "app: the viewport's height in CSS pixels." })),
+                device: Type.Optional(enumOf(APP_DEVICE_NAMES)),
+                label: Type.Optional(Type.String({ maxLength: APP_FRAME_LIMITS.labelChars, description: "app: the variant's short name; \"\" clears it." })),
+              }
+            : {}),
           ...STYLE_PARAMETERS,
         }),
         execute: async (_id, raw) =>
@@ -1678,6 +1699,18 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const colorScheme = appsOn && p.colorScheme !== undefined && p.colorScheme !== null ? p.colorScheme : undefined;
             if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dark") {
               throw new CanvasToolError('colorScheme must be "light" or "dark".');
+            }
+            // 3b (S85): an app frame's route, viewport, device and label.
+            const present = (value: unknown) => appsOn && value !== undefined && value !== null;
+            const appRouteTo = present(p.route) ? appRoute(p.route) : undefined;
+            const appWidth = present(p.width) ? appViewportSide(p.width, "width") : undefined;
+            const appHeight = present(p.height) ? appViewportSide(p.height, "height") : undefined;
+            const appPreset = present(p.device) ? appDevice(p.device) : undefined;
+            const clearLabel = appsOn && p.label === "";
+            const appLabelTo = present(p.label) && !clearLabel ? appLabel(p.label) : undefined;
+            const viewportChange = appWidth !== undefined || appHeight !== undefined || appPreset !== undefined;
+            if (viewportChange && (p.w !== undefined || p.h !== undefined)) {
+              throw new CanvasToolError("Change the frame's size or its viewport, not both in one call.");
             }
             const x = optionalNumber(p.x, "x");
             const y = optionalNumber(p.y, "y");
@@ -1711,6 +1744,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if (p.text !== undefined && !worded) throw new CanvasToolError("Only a note, a text item or a shape has text.");
               if (width !== undefined && frame.kind !== "file") throw new CanvasToolError("Only a file frame has a design width.");
               if (colorScheme !== undefined && frame.kind !== "app") throw new CanvasToolError("Only a live app frame has a colorScheme.");
+              if (frame.kind !== "app" && (appRouteTo !== undefined || viewportChange || appLabelTo !== undefined || clearLabel)) {
+                throw new CanvasToolError("Only a live app frame has a route, a viewport, a device or a label.");
+              }
               if ((fill !== undefined || clearFill) && !takesFill(frame.kind)) {
                 throw new CanvasToolError("Only a shape, a note or an artboard (kind frame) has a fill.");
               }
@@ -1780,6 +1816,18 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 next = { ...next, scale, ...appFrameBox(current.viewport ?? APP_DEFAULT_VIEWPORT, scale) };
               }
               if (colorScheme !== undefined) next = { ...next, colorScheme };
+              if (current.kind === "app" && viewportChange) {
+                // The frame keeps its scale, refitted so the box stays within the canvas's limits (S85, M1).
+                const own = current.viewport ?? APP_DEFAULT_VIEWPORT;
+                const viewport = { width: appWidth ?? appPreset?.width ?? own.width, height: appHeight ?? appPreset?.height ?? own.height };
+                const scale = fitAppScale(viewport, current.scale ?? APP_DEFAULT_SCALE, DESIGN_CANVAS_LIMITS.maxSize);
+                next = { ...next, viewport, scale, ...appFrameBox(viewport, scale) };
+              }
+              if (current.kind === "app" && appRouteTo !== undefined) {
+                next = { ...next, route: appRouteTo, ...(title === undefined && current.title === current.route ? { title: appRouteTo.slice(0, DESIGN_CANVAS_LIMITS.titleChars) } : {}) };
+              }
+              if (appLabelTo !== undefined) next = { ...next, label: appLabelTo };
+              if (clearLabel) delete next.label;
               if (clearFill) delete next.fill;
               if (hidden === false) delete next.hidden;
               if (locked === false) delete next.locked;

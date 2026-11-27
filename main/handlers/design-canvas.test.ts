@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
+  appRouteKey,
   emptyDesignCanvas,
   type DesignCanvas,
 } from "../../renderer/shared/design-canvas/schema.js";
@@ -417,6 +418,30 @@ test("a page a save takes off is remembered as removed, unless the save says the
   assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedPagePaths, ["design/b.html"]);
 });
 
+test("3b: an app route a save takes off is remembered, unless the save says the person's undo took it off", async (t) => {
+  const { invoke } = await fixture(t);
+  const app = (id: string, route: string) => ({
+    id,
+    kind: "app" as const,
+    title: route,
+    appRoot: ".",
+    route,
+    viewport: { width: 1280, height: 800 },
+    scale: 0.5,
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 436,
+    pageId: "page-1",
+    createdBy: "aiden" as const,
+  });
+  await invoke("designCanvas:save", "chat-1", { ...note, frames: [...note.frames, app("a", "/pricing"), app("b", "/about")] }, 0);
+  await invoke("designCanvas:save", "chat-1", { ...note, frames: [...note.frames, app("b", "/about")] }, 1, { undoneRoutes: [appRouteKey(".", "/pricing")] });
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedAppRoutes, undefined);
+  await invoke("designCanvas:save", "chat-1", note, 2);
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedAppRoutes, [appRouteKey(".", "/about")]);
+});
+
 test("a conflicting or invalid save broadcasts nothing", async (t) => {
   const { invoke, broadcasts } = await fixture(t);
   await invoke("designCanvas:save", "chat-1", note, 0);
@@ -443,6 +468,10 @@ test("malformed parameters are rejected before the store is used", async (t) => 
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: "design/a.html" }), /save options/u);
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: ["../outside.html"] }), /save options/u);
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: [42] }), /save options/u);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undoneRoutes: appRouteKey(".", "/a") }), /save options/u);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undoneRoutes: ["design/a.html"] }), /save options/u);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undoneRoutes: [appRouteKey("../x", "/")] }), /save options/u);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: [appRouteKey(".", "/a")] }), /save options/u, "a route key isn't a page path");
   assert.deepEqual(await fs.readdir(root), []);
   assert.deepEqual(broadcasts, []);
 });

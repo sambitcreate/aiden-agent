@@ -35,7 +35,7 @@ import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import { applyStoredClaims } from "../shared/design-canvas/chat-pages";
-import { shownPagePaths, type DesignCanvas } from "../shared/design-canvas/schema";
+import { isAppRouteKey, shownAppRoutes, shownPagePaths, type DesignCanvas } from "../shared/design-canvas/schema";
 import {
   carryUnrecorded,
   changesBetween,
@@ -132,9 +132,11 @@ export interface DesignCanvasSyncState {
   readonly timer: DesignCanvasTimer | null;
   readonly history: CanvasHistory;
   /**
-   * Pages an undo took off the canvas. The save says so, and the store does not
-   * remember them as removed by the person, so Aiden writing one again shows it.
-   * A later edit or redo that takes a page off makes it the person's removal again.
+   * Pages, and app routes (`appRouteKey`, 3b), an undo took off the canvas. The
+   * save says so, and the store does not remember them as removed by the
+   * person, so Aiden writing or placing one again shows it. A later edit or
+   * redo that takes one off makes it the person's removal again. A route key
+   * holds a NUL, which no page path can, so one set holds both.
    */
   readonly undonePages: ReadonlySet<string>;
   readonly failed: boolean;
@@ -358,13 +360,20 @@ function forgetOldRevisions(
   return kept;
 }
 
+/** The pages and app routes a canvas shows: what an undo can take off and the store remembers as removed. */
+function shownUndoKeys(doc: DesignCanvas): Set<string> {
+  const shown = shownPagePaths(doc);
+  for (const route of shownAppRoutes(doc)) shown.add(route);
+  return shown;
+}
+
 /**
  * A page an undo took off that is shown again (a redo, Aiden, another window)
  * is no longer undone: if it is taken off later, that removal is someone's own.
  */
 function pruneShownUndonePages(undonePages: ReadonlySet<string>, local: DesignCanvas | null): ReadonlySet<string> {
   if (undonePages.size === 0 || !local) return undonePages;
-  const shown = shownPagePaths(local);
+  const shown = shownUndoKeys(local);
   let changed = false;
   for (const page of undonePages) {
     if (shown.has(page)) {
@@ -387,9 +396,9 @@ function updateUndonePagesForEdit(
   after: DesignCanvas,
   undone: boolean,
 ): ReadonlySet<string> {
-  const shown = shownPagePaths(after);
+  const shown = shownUndoKeys(after);
   let next: Set<string> | null = null;
-  for (const page of shownPagePaths(before)) {
+  for (const page of shownUndoKeys(before)) {
     if (shown.has(page)) continue;
     if (undone) {
       if (!undonePages.has(page)) {
@@ -447,7 +456,7 @@ function startSaveTransition(
   const batch = state.unsent;
   const doc = state.local;
   const baseRevision = state.server.revision;
-  const shown = shownPagePaths(doc);
+  const shown = shownUndoKeys(doc);
   const undone = [...state.undonePages].filter((page) => !shown.has(page));
   let timer = state.timer;
   if (timer !== null) {
@@ -1018,7 +1027,8 @@ function createCanvasSync(
       try {
         const result = await designCanvasApi.saveDesignCanvas(chatId, doc, baseRevision, {
           workspaceId,
-          ...(undone.length > 0 ? { undone: [...undone] } : {}),
+          ...(undone.some((key) => !isAppRouteKey(key)) ? { undone: undone.filter((key) => !isAppRouteKey(key)) } : {}),
+          ...(undone.some(isAppRouteKey) ? { undoneRoutes: undone.filter(isAppRouteKey) } : {}),
         });
         if (result.ok) {
           event = {

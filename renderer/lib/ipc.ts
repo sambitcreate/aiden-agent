@@ -2829,15 +2829,15 @@ export const designCanvasApi = {
     ),
   /**
    * Compare-and-swap: lands only if `baseRevision` is still the stored revision.
-   * `undone` names pages the person's undo took off, which are not remembered
-   * as removed. `workspaceId` is the workspace whose canvas this is; when the
+   * `undone` names pages, and `undoneRoutes` app routes (`appRouteKey`), the
+   * person's undo took off, which are not remembered as removed. `workspaceId` is the workspace whose canvas this is; when the
    * chat has left it, the answer is `moved` and nothing is written.
    */
   saveDesignCanvas: (
     chatId: string,
     doc: DesignCanvas,
     baseRevision: number,
-    options?: { undone?: string[]; workspaceId?: string },
+    options?: { undone?: string[]; undoneRoutes?: string[]; workspaceId?: string },
   ) =>
     options === undefined
       ? invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision)

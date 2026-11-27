@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
+  appRouteKey,
   emptyDesignCanvas,
   type DesignCanvas,
 } from "../../../renderer/shared/design-canvas/schema.js";
@@ -731,4 +732,45 @@ test("a chat that moves away while an undo waits its turn does not get its page'
   await holding;
   assert.equal((await undo).result.ok, true);
   assert.deepEqual((await store.get("ws-1")).pages.find((page) => page.id === "pa"), { id: "pa", name: "Landing" });
+});
+
+// 3b (S83): removed app routes, kept like removed pages.
+function withApp(doc: DesignCanvas, id: string, route: string, appRoot = "."): DesignCanvas {
+  return {
+    ...doc,
+    frames: [
+      ...doc.frames,
+      { id, kind: "app", title: route, x: 0, y: 0, w: 640, h: 436, appRoot, route, viewport: { width: 1280, height: 800 }, scale: 0.5, pageId: "page-1", createdBy: "aiden" },
+    ],
+  };
+}
+
+test("3b: a person's save that removes a route's last frame notes it, unless their undo did", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  const shown = await store.update("ws-1", (doc) => withApp(withApp(doc, "a", "/pricing"), "b", "/pricing"));
+  const oneLeft = await store.save("ws-1", { ...shown, frames: shown.frames.filter((frame) => frame.id !== "a") }, shown.revision);
+  assert.equal(oneLeft.ok, true);
+  assert.equal((await store.get("ws-1")).removedAppRoutes, undefined, "another frame still shows /pricing");
+  const current = await store.get("ws-1");
+  await store.save("ws-1", { ...current, frames: [] }, current.revision);
+  assert.deepEqual((await store.get("ws-1")).removedAppRoutes, [appRouteKey(".", "/pricing")]);
+
+  const other = await tempRoot(t);
+  const undoStore = new DesignCanvasStore({ root: () => other });
+  const placed = await undoStore.update("ws-1", (doc) => withApp(doc, "a", "/pricing"));
+  await undoStore.save("ws-1", { ...placed, frames: [] }, placed.revision, { undoneRoutes: [appRouteKey(".", "/pricing")] });
+  assert.equal((await undoStore.get("ws-1")).removedAppRoutes, undefined);
+});
+
+test("3b: an update that shows a route again forgets it, and one that removes a route notes nothing", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  const placed = await store.update("ws-1", (doc) => withApp(doc, "a", "/pricing"));
+  await store.save("ws-1", { ...placed, frames: [] }, placed.revision);
+  assert.deepEqual((await store.get("ws-1")).removedAppRoutes, [appRouteKey(".", "/pricing")]);
+  await store.update("ws-1", (doc) => withApp(doc, "b", "/pricing"));
+  assert.equal((await store.get("ws-1")).removedAppRoutes, undefined, "shown again by anyone, it is forgotten");
+  await store.update("ws-1", (doc) => ({ ...doc, frames: [] }));
+  assert.equal((await store.get("ws-1")).removedAppRoutes, undefined, "Aiden's removal is no person's");
 });

@@ -218,3 +218,26 @@ test("an export window's request starts are stamped for its settle, and only whi
   remove();
   assert.equal(s.registry.lastExportRequest(77), undefined, "forgotten with the window");
 });
+
+// 3b (S85, M7): canvas_read's blocked count, from live mounts only.
+test("3b: blockedForFrame sums the live mounts of one frame and ignores dead ones", () => {
+  const s = setup();
+  const TOKEN_B = "qrstuvwxyzabcdef";
+  const admit = (node: number, token: string) => {
+    assert.equal(s.registry.expectPlacement({ frameId: "f1", mountToken: token, expectedOrigin: ORIGIN }), "ok");
+    s.live()?.add(node);
+    assert.equal(s.registry.admit(s.navigation(node, {}, `aiden-app:f1:${token}`)), "app");
+  };
+  admit(20, TOKEN);
+  admit(21, TOKEN_B);
+  const ref = (id: number): AppFrameRef => ({ frameTreeNodeId: id, parent: null, url: `${ORIGIN}/`, origin: ORIGIN, isMainFrame: false });
+  for (let i = 0; i < 3; i++) s.registry.reportBlocked(ref(20), `a${i}.example`);
+  for (let i = 0; i < 2; i++) s.registry.reportBlocked(ref(21), `b${i}.example`);
+  assert.equal(s.registry.blockedForFrame("f1"), 5);
+  s.setLive(new Set([20]));
+  assert.equal(s.registry.blockedForFrame("f1"), 3, "a mount that left the window doesn't count");
+  s.setLive(null);
+  assert.equal(s.registry.blockedForFrame("f1"), 0, "no window, no count");
+  s.setLive(new Set([20, 21]));
+  assert.equal(s.registry.blockedForFrame("unknown"), 0);
+});

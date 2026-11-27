@@ -522,6 +522,15 @@ export function AppFrame({
     path: null,
     error: null,
   });
+  // A new route (3b: canvas_update_frame or the picker retargets the frame)
+  // starts clean: the old route's path, error, load and stuck state don't carry over.
+  const [routeShown, setRouteShown] = React.useState(route);
+  if (routeShown !== route) {
+    setRouteShown(route);
+    setPage({ key: "", path: null, error: null });
+    setLoadedKey(null);
+    setStuckKey(null);
+  }
   const pageState = shown && page.key === shown.key ? page : { key: shown?.key ?? "", path: null, error: null };
   const enteredRef = React.useRef({ entered: inside, onLeave, dark: frame.colorScheme === "dark" });
   React.useLayoutEffect(() => {
@@ -614,6 +623,10 @@ export function AppFrame({
     insideSince.current = clockRef.current();
     restores.current = { ...restores.current, count: 0 };
   }, [inside]);
+  // The new route gets its own restores.
+  React.useLayoutEffect(() => {
+    restores.current = { key: null, count: 0, lastAt: null, toPath: false };
+  }, [route]);
   const stuckRef = React.useRef(stuck);
   stuckRef.current = stuck;
   const forgetPath = React.useCallback(() => {

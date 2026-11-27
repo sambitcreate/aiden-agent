@@ -10,6 +10,7 @@ import path from "node:path";
 import * as fs from "node:fs/promises";
 import {
   DESIGN_CANVAS_LIMITS,
+  isAppRouteKey,
   isDesignRelativePath,
   type DesignCanvas,
   type DesignPaper,
@@ -241,27 +242,32 @@ export const DESIGN_CAPTURE_MAX_SIDE = 1024;
 
 const UNAVAILABLE = "Design mode is not available.";
 
+function isKeyList(value: unknown, isKey: (entry: string) => boolean): value is string[] | undefined {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length <= DESIGN_CANVAS_LIMITS.frames &&
+      value.every((entry) => typeof entry === "string" && isKey(entry)))
+  );
+}
+
 /**
- * A save's options: the pages it says the person's undo took off, and the
- * workspace whose canvas the renderer is saving. Anything malformed is refused.
+ * A save's options: the pages and app routes it says the person's undo took
+ * off, and the workspace whose canvas the renderer is saving. Anything
+ * malformed is refused.
  */
-function saveOptions(options: unknown): { undone: string[]; workspaceId: string } {
+function saveOptions(options: unknown): { undone: string[]; undoneRoutes: string[]; workspaceId: string } {
   // The workspace is required: without it a stale canvas from a workspace the
   // chat has left could replace the new one whenever their revisions match.
   if (typeof options !== "object" || options === null || Array.isArray(options)) throw new Error("Invalid canvas save options.");
-  const { undone, workspaceId } = options as { undone?: unknown; workspaceId?: unknown };
-  if (
-    undone !== undefined &&
-    (!Array.isArray(undone) ||
-      undone.length > DESIGN_CANVAS_LIMITS.frames ||
-      !undone.every((entry) => typeof entry === "string" && isDesignRelativePath(entry)))
-  ) {
+  const { undone, undoneRoutes, workspaceId } = options as { undone?: unknown; undoneRoutes?: unknown; workspaceId?: unknown };
+  if (!isKeyList(undone, isDesignRelativePath) || !isKeyList(undoneRoutes, isAppRouteKey)) {
     throw new Error("Invalid canvas save options.");
   }
   if (!isWorkspaceArtifactWorkspaceId(workspaceId)) {
     throw new Error("Invalid canvas save options.");
   }
-  return { undone: (undone as string[] | undefined) ?? [], workspaceId };
+  return { undone: undone ?? [], undoneRoutes: undoneRoutes ?? [], workspaceId };
 }
 
 /** The workspace whose canvas a chat works on. */
@@ -436,7 +442,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     ) {
       throw new Error("Invalid canvas revision.");
     }
-    const { undone, workspaceId: expected } = saveOptions(options);
+    const { undone, undoneRoutes, workspaceId: expected } = saveOptions(options);
     const chat = await requireChat(chatId);
     // One workspace for the whole save: the one this chat is in now.
     const workspaceId = designCanvasWorkspaceOf(chat);
@@ -446,7 +452,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (expected !== workspaceId) {
       return { ok: false, reason: "moved", workspaceId } satisfies DesignCanvasSaveResult;
     }
-    const { result } = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone, workspaceId });
+    const { result } = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone, undoneRoutes, workspaceId });
     if (result.ok) deps.broadcast({ workspaceId, chatId: chat.id, revision: result.revision });
     return result;
   });

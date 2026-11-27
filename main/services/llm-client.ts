@@ -612,6 +612,7 @@ import {
 } from "./design-canvas/canvas-tools.js";
 import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
 import { createDesignAppTool } from "./design-canvas/app-server/app-tool.js";
+import { installedAppNetwork } from "./design-canvas/app-frames/app-network-main.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { CANVAS_STATUS_SECTION, canvasPromptLine, withCanvasStatusNote } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
@@ -3151,6 +3152,8 @@ async function prepareGeneration(
           ? {
               designLive: true,
               apps: { snapshot: (workspaceId: string) => designAppServers.snapshot(workspaceId) },
+              // 3b (S85): what each live frame's guard blocked, summed over its mounts.
+              blockedFor: (frameId: string) => installedAppNetwork()?.registry.blockedForFrame(frameId) ?? 0,
               // 3b (S88, call site 1): Aiden's own app frames, once saved.
               onAppFrameAdded: (viewportWidth: number) =>
                 reportAnalyticsEvent("design_app_frame_added", { source: "aiden", device_bucket: deviceBucket(viewportWidth) }),

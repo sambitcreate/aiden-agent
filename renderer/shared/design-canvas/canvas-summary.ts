@@ -263,6 +263,8 @@ export type CanvasFrameSummary = {
   variantOf?: string;
   /** app: whether its app is running now, which canvas_read adds. */
   live?: boolean;
+  /** app (3b, S85): requests its live mounts blocked, which canvas_read adds when not 0. */
+  blocked?: number;
   openComments?: number;
 };
 

@@ -245,6 +245,12 @@ export type DesignCanvas = {
    * list once any frame shows it again. See `withRemovedPagePaths`.
    */
   removedPagePaths?: string[];
+  /**
+   * 3b (S83): app routes (`appRouteKey(appRoot, route)`) whose last frame the
+   * person took off, oldest first, so a route file Aiden writes again doesn't
+   * put it back by itself. Kept like `removedPagePaths`, by the store only.
+   */
+  removedAppRoutes?: string[];
 };
 
 export const DESIGN_CANVAS_LIMITS = {
@@ -268,6 +274,7 @@ export const DESIGN_CANVAS_LIMITS = {
   maxStrokeWidth: 24,
   maxRadius: 200,
   removedPagePaths: 200,
+  removedAppRoutes: 200,
 } as const;
 
 export const DESIGN_WIDTHS = [390, 768, 1280, 1440] as const;
@@ -472,6 +479,9 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   const removedPagePaths = Array.isArray(value.removedPagePaths)
     ? [...new Set((value.removedPagePaths as unknown[]).filter(isDesignRelativePath))].slice(-DESIGN_CANVAS_LIMITS.removedPagePaths)
     : [];
+  const removedAppRoutes = Array.isArray(value.removedAppRoutes)
+    ? [...new Set((value.removedAppRoutes as unknown[]).filter(isAppRouteKey))].slice(-DESIGN_CANVAS_LIMITS.removedAppRoutes)
+    : [];
 
   return {
     ok: true,
@@ -484,6 +494,7 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
       frames,
       comments,
       ...(removedPagePaths.length > 0 ? { removedPagePaths } : {}),
+      ...(removedAppRoutes.length > 0 ? { removedAppRoutes } : {}),
     }),
     dropped,
   };
@@ -513,6 +524,48 @@ export function withRemovedPagePaths<T extends DesignCanvas>(
   const removedPagePaths = [...kept, ...gone].slice(-DESIGN_CANVAS_LIMITS.removedPagePaths);
   const { removedPagePaths: _ignored, ...rest } = after;
   return (removedPagePaths.length > 0 ? { ...rest, removedPagePaths } : rest) as T;
+}
+
+const APP_ROUTE_KEY_CHARS = 2300;
+
+/** 3b (S83): one app route as `removedAppRoutes` and the save's `undoneRoutes` name it. */
+export function appRouteKey(appRoot: string, route: string): string {
+  return `${appRoot}\u0000${route}`;
+}
+
+/** An app root and a route joined by NUL, each valid, at most 2 300 characters. */
+export function isAppRouteKey(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > APP_ROUTE_KEY_CHARS) return false;
+  const split = value.indexOf("\u0000");
+  if (split < 0 || value.indexOf("\u0000", split + 1) >= 0) return false;
+  return isAppRoot(value.slice(0, split)) && appRouteFrom(value.slice(split + 1)) === value.slice(split + 1);
+}
+
+/** The app routes the frames of `doc` show. */
+export function shownAppRoutes(doc: Pick<DesignCanvas, "frames">): Set<string> {
+  return new Set(
+    doc.frames.flatMap((frame) => (frame.kind === "app" && frame.appRoot !== undefined && frame.route !== undefined ? [appRouteKey(frame.appRoot, frame.route)] : [])),
+  );
+}
+
+/**
+ * The removed app routes `after` should carry when it replaces `before`, kept
+ * exactly as `withRemovedPagePaths` keeps pages: with `byPerson`, a route every
+ * frame of which is gone joins; any route a frame of `after` shows leaves; a
+ * route in `undone` (the person's undo of an Aiden placement) isn't noted.
+ */
+export function withRemovedAppRoutes<T extends DesignCanvas>(
+  before: DesignCanvas,
+  after: T,
+  byPerson: boolean,
+  undone: ReadonlySet<string> = new Set(),
+): T {
+  const shown = shownAppRoutes(after);
+  const gone = byPerson ? [...shownAppRoutes(before)].filter((entry) => !shown.has(entry) && !undone.has(entry)) : [];
+  const kept = (before.removedAppRoutes ?? []).filter((entry) => !shown.has(entry) && !gone.includes(entry));
+  const removedAppRoutes = [...kept, ...gone].slice(-DESIGN_CANVAS_LIMITS.removedAppRoutes);
+  const { removedAppRoutes: _ignored, ...rest } = after;
+  return (removedAppRoutes.length > 0 ? { ...rest, removedAppRoutes } : rest) as T;
 }
 
 /** The pages of a document; never empty, and ids are unique. `dropped` counts pages past the limit. */
