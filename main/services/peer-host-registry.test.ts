@@ -550,7 +550,7 @@ test("a Mac opts into a host's Bot activity frames only when the host serves the
       {
         capabilities: ["chat:read", "bot:read", "bot:write"],
         features,
-        serverCapabilities: ["chat:read", "bot:read", "bot:write", "bot:cards", "bot:activity"],
+        serverCapabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"],
       },
       (input) => (input.path === "/device/capabilities" ? { capabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"] } : { ok: true }),
     );
@@ -585,7 +585,7 @@ test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest
       grants: stored()[0]!.capabilities,
     };
   };
-  const lists = ["chat:read", "bot:read", "bot:write", "bot:cards", "bot:activity", "bot:handoffs"];
+  const lists = ["chat:read", "bot:read", "bot:write", "bot:activity", "bot:handoffs"];
   const both = await negotiate(lists);
   assert.deepEqual(both.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }]);
   assert.ok(both.grants.includes("bot:activity") && both.grants.includes("bot:handoffs"));
@@ -611,6 +611,18 @@ test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest
   const images = await negotiate([...lists, "bot:images"]);
   assert.deepEqual(images.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }, { accepts: ["bot:images"] }]);
   assert.ok(images.grants.includes("bot:images"));
+
+  // The cards a Bot waits on or offers: each asked for alone, so a host that refuses one still grants the others.
+  const cards = await negotiate([...lists, "bot:cards", "bot:access-requests", "bot:plans"], (accepts) => accepts.includes("bot:access-requests"));
+  assert.deepEqual(cards.bodies, [
+    { accepts: ["bot:activity"] },
+    { accepts: ["bot:handoffs"] },
+    { accepts: ["bot:cards"] },
+    { accepts: ["bot:access-requests"] },
+    { accepts: ["bot:plans"] },
+  ]);
+  assert.ok(cards.grants.includes("bot:cards") && cards.grants.includes("bot:plans"));
+  assert.equal(cards.grants.includes("bot:access-requests"), false);
 
   // Revision 50: attachments:raw has no feature token at all; a host that lists it is asked alone, last.
   const raw = await negotiate([...lists, "attachments:raw"]);

@@ -6,6 +6,7 @@ import Photos
 import SwiftUI
 import UIKit
 import UserNotifications
+import Synchronization
 import XCTest
 @testable import AidenOnTheGo
 
@@ -22,6 +23,9 @@ final class AidenChatTests: XCTestCase {
     override func setUp() {
         super.setUp()
         AidenChatProgressLifecycleURLProtocol.beginTestEpoch()
+        // A test that ended early can leave an armed hold, override, or open
+        // event stream behind; the next test starts without them.
+        AidenChatProgressLifecycleURLProtocol.reset()
         storageRoot = FileManager.default.temporaryDirectory.appending(path: "aiden-chat-tests-\(UUID())")
         preferenceSuite = "AidenChatTests.\(UUID().uuidString)"
         testCache = AidenChatCache(root: storageRoot.appending(path: "cache"))
@@ -2008,6 +2012,51 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNotNil(model.presentedError)
     }
 
+    /// Opening the app from its Live Activity reloads the chat before the
+    /// link to the Mac is back, so the approval read fails. The run is still
+    /// waiting on the Mac, so the reload once the link is back shows its
+    /// Allow and Deny again.
+    @MainActor
+    func testAnApprovalStillWaitingComesBackAfterAReadFailsWhileReconnecting() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache)
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.pendingApproval?.id, "approval-current")
+
+        AidenChatProgressLifecycleURLProtocol.failApprovalReads()
+        await model.reload(observeProgress: false)
+        AidenChatProgressLifecycleURLProtocol.failApprovalReads(false)
+        await model.reload(observeProgress: false)
+
+        XCTAssertEqual(model.pendingApproval?.id, "approval-current")
+        XCTAssertEqual(model.streamState, .waitingForApproval)
+    }
+
+    /// The same reload for a run waiting on a question: a read the Mac never
+    /// answered leaves its Reply for the reload once the link is back.
+    @MainActor
+    func testAQuestionStillWaitingComesBackAfterAReadFailsWhileReconnecting() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .questions, cache: cache)
+        AidenChatProgressLifecycleURLProtocol.resolveApproval()
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
+        await model.load(observeProgress: false)
+        try await waitUntil { model.pendingQuestion?.id == "question-current" }
+
+        AidenChatProgressLifecycleURLProtocol.failQuestionReads()
+        await model.reload(observeProgress: false)
+        AidenChatProgressLifecycleURLProtocol.failQuestionReads(false)
+        await model.reload(observeProgress: false)
+
+        XCTAssertEqual(model.pendingQuestion?.id, "question-current")
+        XCTAssertEqual(model.streamState, .waitingForApproval)
+    }
+
     @MainActor
     func testFallbackDoesNotCoalesceWithPreResponseApprovalState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -2989,6 +3038,27 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(Set(mac.keys).count, 1, "The same normalized request keeps its key while its outcome is unknown.")
     }
 
+    /// A structured 503 does not prove the Mac made no fork, so the retry must
+    /// replay the same key rather than risk a second copy.
+    @MainActor
+    func testForkKeepsItsKeyAfterAStructuredServiceUnavailableAndOpensTheOriginalFork() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-unavailable-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenForkLedgerMac(plan: [.commitButAnswerUnavailable])
+        let model = try await makeForkLedgerModel(mac: mac, root: root)
+
+        let unavailable = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertNil(unavailable)
+        XCTAssertNotNil(model.presentedError)
+
+        model.presentedError = nil
+        let retried = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertEqual(retried?.id, "chat-fork-1", "The retry opens the fork the first request created.")
+        XCTAssertEqual(mac.createdForkIDs, ["chat-fork-1"], "Retrying never makes a second copy.")
+        XCTAssertEqual(mac.keys.count, 2)
+        XCTAssertEqual(Set(mac.keys).count, 1, "The retry replays the same Idempotency-Key.")
+    }
+
     @MainActor
     func testForkMintsAFreshKeyAfterTheMacRejectsItAsBusy() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-busy-\(UUID())")
@@ -3082,6 +3152,813 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(afterRemoval.selectedProviderId, "google")
         XCTAssertEqual(afterRemoval.selectedModelId, "gemini-flash")
         XCTAssertNil(afterRemoval.selectedThinkingLevel)
+    }
+
+    /// Revision 70: with the Agent Slider a new chat starts on the Mac's last
+    /// model and level, the stops move the chat's selection, and a turn sends
+    /// the stop's provider, model and level exactly, a level-less stop sending
+    /// none where the model menu would send the model's default. A new chat's
+    /// first send, and a stop or level the person picked on the phone, ask the
+    /// Mac to keep it, so the chat the Mac sends back stays on its stop. A Mac
+    /// that doesn't offer the capability keeps the model menu, and a grant or
+    /// a slider that arrives after the catalog puts the chat on the slider's
+    /// terms.
+    @MainActor
+    func testAgentSliderStopIsSentExactlyAndAMacWithoutItKeepsTheModelMenu() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let models = #""providers":[{"id":"acme","label":"Acme","models":[{"id":"small","label":"Small","thinkingLevels":["low","medium","high"],"defaultThinkingLevel":"medium"},{"id":"large","label":"Large","thinkingLevels":["low","high"],"defaultThinkingLevel":"high"}]}],"defaults":{"providerId":"acme","modelId":"small","thinkingLevel":"low"}"#
+        let catalog = #"{\#(models),"agentSlider":{"stops":[{"id":"fast","label":"Fast","providerId":"acme","modelId":"small","thinkingLevel":"low","availability":"ready"},{"id":"mid","label":"Mid","providerId":"acme","modelId":"small","thinkingLevel":"medium","availability":"ready"},{"id":"big","label":"Big","providerId":"acme","modelId":"large","availability":"ready"}],"homeStopId":"mid"}}"#
+        let catalogWithoutSlider = "{\(models)}"
+        final class Offer: Sendable {
+            let slider: Mutex<Bool>
+            let catalogSlider: Mutex<Bool>
+            /// While true the Mac answers a turn start with a retryable 503.
+            let failsTurns = Mutex(false)
+            /// While true a failing turn start still reaches the Mac: it runs
+            /// the turn and only the reply is lost.
+            let losesReplies = Mutex(false)
+            /// While true `GET /models` fails, as before the Mac answers it.
+            let catalogFails = Mutex(false)
+            /// The Mac's last model and level when changed on the Mac, as
+            /// the catalog's `defaults` object; nil keeps the fixture's.
+            let macDefaults = Mutex<String?>(nil)
+            /// The Mac's idempotency ledger: the key-sorted body each key ran
+            /// and the message it made. The same body under a known key
+            /// replays that message; a different one is refused.
+            let ledger = Mutex<[String: (body: String, messageId: String)]>([:])
+            /// The Mac's copy of the chat.
+            let host = AidenAgentSliderHostChat()
+            /// Where the phone keeps this chat's files, so a relaunch finds them.
+            let root: URL
+            init(_ value: Bool, catalogSlider: Bool, root: URL) {
+                self.root = root
+                slider = Mutex(value)
+                self.catalogSlider = Mutex(catalogSlider)
+            }
+        }
+        func launch(
+            macOffersSlider: Bool,
+            catalogHasSlider: Bool = true,
+            catalogAnswers: Bool = true,
+            initialChat: AidenChat? = nil,
+            relaunching previous: (offer: Offer, preferences: AidenModelPreferenceStore)? = nil
+        ) async throws -> (AidenChatViewModel, AidenRecordedTurnStarts, Offer, AidenModelPreferenceStore) {
+            let root = previous?.offer.root ?? FileManager.default.temporaryDirectory.appending(path: "aiden-agent-slider-\(UUID())")
+            if previous == nil { addTeardownBlock { try? FileManager.default.removeItem(at: root) } }
+            let offer = previous?.offer ?? Offer(macOffersSlider, catalogSlider: catalogHasSlider, root: root)
+            offer.slider.withLock { $0 = macOffersSlider }
+            offer.catalogFails.withLock { $0 = !catalogAnswers }
+            let turns = AidenRecordedTurnStarts()
+            let host = offer.host
+            @Sendable func serverJSON() -> Data {
+                let grants = ["server:read", "workspace:read", "chat:read", "chat:write"]
+                    + (offer.slider.withLock { $0 } ? ["chat:agent-slider"] : [])
+                let grantsJSON = String(decoding: (try? JSONSerialization.data(withJSONObject: grants)) ?? Data(), as: UTF8.self)
+                return Data(#"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\#(grantsJSON),"serverCapabilities":\#(grantsJSON),"features":[],"connectionMode":"lan","serverTime":"2026-11-24T12:00:00Z"}"#.utf8)
+            }
+            @Sendable func respond(_ request: URLRequest, fixture: AidenStreamRecoveryFixture?) -> (Int, String, Data)? {
+                switch (request.httpMethod, request.url?.path) {
+                case (_, "/api/aiden/v1/server"):
+                    return (200, "application/json", serverJSON())
+                case (_, "/api/aiden/v1/models"):
+                    if offer.catalogFails.withLock({ $0 }) {
+                        return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Try again","requestId":"models-unknown","retryable":true}}"#.utf8))
+                    }
+                    var offered = offer.catalogSlider.withLock { $0 } ? catalog : catalogWithoutSlider
+                    if let moved = offer.macDefaults.withLock({ $0 }) {
+                        offered = offered.replacingOccurrences(of: #""defaults":{"providerId":"acme","modelId":"small","thinkingLevel":"low"}"#, with: #""defaults":"# + moved)
+                    }
+                    return (200, "application/json", Data(offered.utf8))
+                case ("POST", "/api/aiden/v1/chats/chat-progress-lifecycle/turns"):
+                    turns.record(request)
+                    let key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
+                    let body = turns.values.last?.body
+                    let turn = body.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
+                    let digest = String(decoding: (try? JSONSerialization.data(withJSONObject: turn, options: .sortedKeys)) ?? Data(), as: UTF8.self)
+                    let fails = offer.failsTurns.withLock { $0 }
+                    var messageId: String?
+                    if !fails || offer.losesReplies.withLock({ $0 }) {
+                        if let ran = offer.ledger.withLock({ $0[key] }) {
+                            guard ran.body == digest else {
+                                return (409, "application/json", Data(#"{"error":{"code":"idempotency_conflict","message":"That key was used for a different request.","requestId":"send-conflict","retryable":false}}"#.utf8))
+                            }
+                            messageId = ran.messageId
+                        } else {
+                            let made = host.accept(body)
+                            offer.ledger.withLock { $0[key] = (digest, made) }
+                            messageId = made
+                        }
+                    }
+                    if fails {
+                        return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Try again","requestId":"send-unknown","retryable":true}}"#.utf8))
+                    }
+                    let accepted: [String: Any] = [
+                        "turnId": "turn-recovery", "streamId": "stream-recovery", "status": "queued",
+                        "message": [
+                            "id": messageId ?? "accepted-message", "role": "user",
+                            "text": turn["text"] as? String ?? "", "createdAt": "2026-11-24T12:00:00Z",
+                        ],
+                    ]
+                    return (202, "application/json", (try? JSONSerialization.data(withJSONObject: accepted)) ?? Data())
+                case ("GET", "/api/aiden/v1/chats/chat-progress-lifecycle"):
+                    return host.chatJSON().map { (200, "application/json", $0) } ?? fixture?.response(request)
+                default:
+                    return fixture?.response(request)
+                }
+            }
+            let preferences = try previous?.preferences
+                ?? AidenModelPreferenceStore(defaults: XCTUnwrap(UserDefaults(suiteName: "AidenAgentSlider.\(UUID())")))
+            let model = try await makeProgressLifecycleModel(
+                mode: .denied,
+                cache: AidenChatCache(root: root.appending(path: "cache")),
+                draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+                modelPreferenceStore: preferences,
+                initialChat: initialChat,
+                responseOverride: { respond($0, fixture: nil) },
+                extraCapabilities: [.chatAgentSlider]
+            )
+            let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+            // A relaunch finds the Mac's chat as it left it.
+            if previous == nil { host.start(from: model.chat) }
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { respond($0, fixture: fixture) }
+            await model.load(observeProgress: false)
+            return (model, turns, offer, preferences)
+        }
+        func sentTurn(_ turns: AidenRecordedTurnStarts) throws -> AidenTurnStart {
+            try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(turns.values.last?.body))
+        }
+
+        // Nothing picked: the turn runs on the Mac's last stop. The Mac stores
+        // no level when it makes a chat, so the first send asks it to keep it.
+        let (untouched, untouchedTurns, _, _) = try await launch(macOffersSlider: true)
+        XCTAssertEqual(untouched.agentSliderState?.currentStop?.id, "fast", "a new chat starts on the Mac's last stop, not home")
+        XCTAssertTrue(untouched.agentSliderState?.canResetToHome ?? false)
+        untouched.draft = "Hello"
+        await untouched.send()
+        try await waitUntil { untouchedTurns.count == 1 }
+        let opening = try sentTurn(untouchedTurns)
+        XCTAssertEqual(opening.thinkingLevel, "low")
+        XCTAssertEqual(opening.saveSelection, true, "a new chat's first send keeps the stop it started on")
+        // The Mac's chat comes back: it stays on the stop, and so does the next turn.
+        // Let the turn's stream work end first: its own reconcile supersedes one still in flight.
+        try await waitForStreamWorkToEnd(untouched)
+        let reconciled = await untouched.reconcileChat(context: untouched.owner)
+        XCTAssertTrue(reconciled)
+        XCTAssertEqual(untouched.chat.thinkingLevel, "low")
+        XCTAssertEqual(untouched.agentSliderState?.currentStop?.id, "fast", "the Mac's chat moved the chip off its stop")
+        untouched.draft = "Again"
+        try await waitUntil { untouched.canSend }
+        await untouched.send()
+        try await waitUntil { untouchedTurns.count == 2 }
+        let reply = try sentTurn(untouchedTurns)
+        XCTAssertEqual(reply.modelId, "small")
+        XCTAssertEqual(reply.thinkingLevel, "low", "the second turn left the stop")
+        XCTAssertNil(reply.saveSelection, "a later send with no pick never changes the chat's saved level")
+        untouched.stopProgressObservation()
+
+        let (model, turns, _, _) = try await launch(macOffersSlider: true)
+        model.resetAgentSliderToHome()
+        XCTAssertEqual(model.agentSliderState?.currentStop?.id, "mid")
+        XCTAssertFalse(model.agentSliderState?.canResetToHome ?? true)
+        model.stepAgentSlider(-1)
+        XCTAssertEqual(model.turnModelSelection, AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low"))
+        model.stepAgentSlider(-1)
+        XCTAssertEqual(model.agentSliderState?.currentStop?.id, "fast", "the left end goes no further")
+
+        model.selectAgentSliderStop(id: "big")
+        XCTAssertEqual(model.agentSliderState?.currentStop?.id, "big")
+        model.draft = "Hello"
+        await model.send()
+        try await waitUntil { turns.count == 1 }
+        let sent = try sentTurn(turns)
+        XCTAssertEqual(sent.providerId, "acme")
+        XCTAssertEqual(sent.modelId, "large")
+        XCTAssertNil(sent.thinkingLevel, "Big sets no level, so the turn sends none")
+        XCTAssertEqual(sent.saveSelection, true, "a stop picked on the phone is the chat's from now on")
+        model.stopProgressObservation()
+
+        let (older, _, offer, _) = try await launch(macOffersSlider: false)
+        XCTAssertNil(older.agentSlider)
+        XCTAssertNil(older.agentSliderState)
+        XCTAssertEqual(older.turnModelSelection, AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "medium"))
+        older.selectAgentSliderStop(id: "big")
+        XCTAssertEqual(older.selectedModelId, "small", "without the slider a stop can't move the chat")
+
+        // The Mac starts offering the slider after the catalog loaded.
+        offer.slider.withLock { $0 = true }
+        await older.coordinator.connectActiveInstallation()
+        try await waitUntil { older.agentSlider != nil }
+        older.reconcileAgentSliderAvailability()
+        XCTAssertEqual(older.agentSliderState?.currentStop?.id, "fast", "a late grant puts the chat on the Mac's last stop")
+        XCTAssertEqual(older.turnModelSelection.thinkingLevel, "low")
+        older.stopProgressObservation()
+
+        // A new chat's first send fails before the grant arrives. Its retry
+        // keeps the saved request and key, so it can't ask the Mac to keep the
+        // stop. The grant moves the chip to the Mac's last stop, but the chat
+        // stays on the stop the turn ran on, and the next send asks for it.
+        let (early, earlyTurns, earlyOffer, _) = try await launch(macOffersSlider: false)
+        earlyOffer.failsTurns.withLock { $0 = true }
+        early.draft = "Hello"
+        await early.send()
+        XCTAssertEqual(earlyTurns.count, 1)
+        XCTAssertNotNil(early.pendingSend, "a 503 leaves the send to retry")
+        let first = try sentTurn(earlyTurns)
+        XCTAssertEqual(first.thinkingLevel, "medium")
+        XCTAssertNil(first.saveSelection)
+        earlyOffer.slider.withLock { $0 = true }
+        await early.coordinator.connectActiveInstallation()
+        try await waitUntil { early.agentSlider != nil }
+        early.reconcileAgentSliderAvailability()
+        XCTAssertEqual(early.agentSliderState?.currentStop?.id, "fast", "the grant re-resolves the derived chip")
+        earlyOffer.failsTurns.withLock { $0 = false }
+        await early.send(retry: true)
+        try await waitUntil { earlyTurns.count == 2 }
+        XCTAssertEqual(earlyTurns.values[1].key, earlyTurns.values[0].key, "a retry reuses its Idempotency-Key")
+        // The Mac digests a key-sorted form of the body, so compare the JSON, not its bytes.
+        let bodies = try earlyTurns.values.prefix(2).map { try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap($0.body)) as? NSDictionary) }
+        XCTAssertEqual(bodies[1], bodies[0], "the Mac refuses a changed body under the same key")
+        XCTAssertEqual(early.agentSliderState?.currentStop?.id, "mid", "the chat left the stop its first turn ran on")
+        try await waitForStreamWorkToEnd(early)
+        let earlyReconciled = await early.reconcileChat(context: early.owner)
+        XCTAssertTrue(earlyReconciled)
+        XCTAssertNil(early.chat.thinkingLevel, "the Mac kept no level from the retry")
+        XCTAssertEqual(early.agentSliderState?.currentStop?.id, "mid", "the accepted retry dropped the chat to Custom")
+        early.draft = "Again"
+        try await waitUntil { early.canSend }
+        await early.send()
+        try await waitUntil { earlyTurns.count == 3 }
+        let kept = try sentTurn(earlyTurns)
+        XCTAssertEqual(kept.modelId, "small")
+        XCTAssertEqual(kept.thinkingLevel, "medium")
+        XCTAssertEqual(kept.saveSelection, true, "the next send asks the Mac to keep the stop the chat started on")
+        early.stopProgressObservation()
+
+        // The first send reaches the Mac but its reply is lost, and a refresh
+        // shows the message before the retry is accepted. The retry is still
+        // the chat's first send, so the chat still keeps its stop.
+        let (lost, lostTurns, lostOffer, _) = try await launch(macOffersSlider: false)
+        lostOffer.failsTurns.withLock { $0 = true }
+        lostOffer.losesReplies.withLock { $0 = true }
+        lost.draft = "Hello"
+        await lost.send()
+        XCTAssertNotNil(lost.pendingSend)
+        lostOffer.slider.withLock { $0 = true }
+        await lost.coordinator.connectActiveInstallation()
+        try await waitUntil { lost.agentSlider != nil }
+        lost.reconcileAgentSliderAvailability()
+        let lostRefreshed = await lost.reconcileChat(context: lost.owner)
+        XCTAssertTrue(lostRefreshed)
+        XCTAssertTrue(lost.chat.messages.contains { $0.id == "host-message-1" }, "the refresh shows the message the Mac ran")
+        XCTAssertNotNil(lost.pendingSend, "the send still waits for its answer")
+        lostOffer.failsTurns.withLock { $0 = false }
+        await lost.send(retry: true)
+        try await waitUntil { lostTurns.count == 2 }
+        XCTAssertEqual(lost.agentSliderState?.currentStop?.id, "mid", "a refresh before the retry lost the chat's stop")
+        XCTAssertEqual(
+            lost.chat.messages.filter { $0.role == .user }.map(\.id), ["host-message-1"],
+            "the Mac replayed the message it ran, so the chat shows it once"
+        )
+        try await waitUntil { lost.streamState?.isTerminal != false }
+        lost.draft = "Again"
+        try await waitUntil { lost.canSend }
+        await lost.send()
+        try await waitUntil { lostTurns.count == 3 }
+        let lostKept = try sentTurn(lostTurns)
+        XCTAssertEqual(lostKept.thinkingLevel, "medium")
+        XCTAssertEqual(lostKept.saveSelection, true)
+        lost.stopProgressObservation()
+
+        // The Mac is forgotten while the retry is out: nothing about the
+        // chat's stop is left behind for it.
+        let (forgotten, forgottenTurns, forgottenOffer, forgottenPreferences) = try await launch(macOffersSlider: false)
+        forgottenOffer.failsTurns.withLock { $0 = true }
+        forgotten.draft = "Hello"
+        await forgotten.send()
+        XCTAssertNotNil(forgotten.pendingSend)
+        forgottenOffer.slider.withLock { $0 = true }
+        await forgotten.coordinator.connectActiveInstallation()
+        try await waitUntil { forgotten.agentSlider != nil }
+        forgotten.reconcileAgentSliderAvailability()
+        forgottenOffer.failsTurns.withLock { $0 = false }
+        let held = expectation(description: "retry held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { held.fulfill() }
+        let retrying = Task { await forgotten.send(retry: true) }
+        await fulfillment(of: [held], timeout: 3)
+        await forgotten.coordinator.removeInstallation("instance-progress-lifecycle")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await retrying.value
+        XCTAssertEqual(forgottenTurns.count, 2)
+        XCTAssertNil(
+            forgottenPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: forgotten.chat.id),
+            "a forgotten Mac's chat kept a stop on the phone"
+        )
+        forgotten.stopProgressObservation()
+
+        // A new chat's first send goes out before `GET /models` answers, so
+        // it names the chat's model with no level and runs on the model's own
+        // setting, which no stop names. New chats start on Fast on this phone,
+        // so once the catalog and the grant land the chat keeps that stop,
+        // not a level-less pick that reads Custom, and the next send asks the
+        // Mac to keep a level.
+        let unlistedChat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(
+            #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","providerId":"acme","modelId":"small","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#.utf8
+        ))
+        let (unlisted, unlistedTurns, unlistedOffer, unlistedPreferences) = try await launch(
+            macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
+        )
+        XCTAssertNil(unlisted.catalog)
+        unlistedPreferences.remember(
+            AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low"), for: "instance-progress-lifecycle"
+        )
+        unlistedOffer.failsTurns.withLock { $0 = true }
+        unlisted.draft = "Hello"
+        await unlisted.send()
+        XCTAssertNotNil(unlisted.pendingSend)
+        let unlistedFirst = try sentTurn(unlistedTurns)
+        XCTAssertEqual(unlistedFirst.modelId, "small")
+        XCTAssertNil(unlistedFirst.thinkingLevel, "with no catalog the phone knows no level to send")
+        XCTAssertNil(unlistedFirst.saveSelection)
+        unlistedOffer.slider.withLock { $0 = true }
+        unlistedOffer.catalogFails.withLock { $0 = false }
+        await unlisted.coordinator.connectActiveInstallation()
+        await unlisted.reload(observeProgress: false)
+        try await waitUntil { unlisted.agentSlider != nil }
+        unlisted.reconcileAgentSliderAvailability()
+        XCTAssertEqual(unlisted.agentSliderState?.currentStop?.id, "fast", "the catalog puts the new chat where new chats start")
+        unlistedOffer.failsTurns.withLock { $0 = false }
+        await unlisted.send(retry: true)
+        XCTAssertEqual(unlistedTurns.count, 2)
+        XCTAssertNil(unlisted.pendingSend, "the Mac accepted the retry")
+        XCTAssertEqual(unlisted.agentSliderState?.currentStop?.id, "fast", "a send with no level put the chat in Custom")
+        XCTAssertEqual(
+            unlistedPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: unlisted.chat.id),
+            AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low")
+        )
+        try await waitForStreamWorkToEnd(unlisted)
+        let unlistedReconciled = await unlisted.reconcileChat(context: unlisted.owner)
+        XCTAssertTrue(unlistedReconciled)
+        XCTAssertEqual(unlisted.agentSliderState?.currentStop?.id, "fast", "the Mac's level-less chat dropped the chip to Custom")
+        unlisted.draft = "Again"
+        try await waitUntil { unlisted.canSend }
+        await unlisted.send()
+        try await waitUntil { unlistedTurns.count == 3 }
+        let unlistedKept = try sentTurn(unlistedTurns)
+        XCTAssertEqual(unlistedKept.thinkingLevel, "low")
+        XCTAssertEqual(unlistedKept.saveSelection, true, "the next send asks the Mac to keep the stop")
+        for recorded in unlistedTurns.values {
+            let turn = try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(recorded.body))
+            XCTAssertFalse(turn.saveSelection == true && turn.thinkingLevel == nil, "a send asked the Mac to save no level")
+        }
+        unlisted.stopProgressObservation()
+
+        // The same first send, but the catalog and the grant land while its
+        // POST is still out, after the optimistic message has filled the
+        // chat. The send still meant "start where a new chat starts", so the
+        // chip resolves to that stop at once and the Mac's acceptance keeps it.
+        let (racing, racingTurns, racingOffer, racingPreferences) = try await launch(
+            macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
+        )
+        XCTAssertNil(racing.catalog)
+        racingPreferences.remember(
+            AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low"), for: "instance-progress-lifecycle"
+        )
+        racingOffer.slider.withLock { $0 = true }
+        await racing.coordinator.connectActiveInstallation()
+        racingOffer.catalogFails.withLock { $0 = false }
+        let catalogHeld = expectation(description: "catalog held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/models") { catalogHeld.fulfill() }
+        let reloading = Task { await racing.reload(observeProgress: false) }
+        await fulfillment(of: [catalogHeld], timeout: 3)
+        let releaseCatalog = try XCTUnwrap(AidenChatProgressLifecycleURLProtocol.takeHeldRequest())
+        racing.draft = "Hello"
+        try await waitUntil { racing.canSend }
+        let turnHeld = expectation(description: "first send held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { turnHeld.fulfill() }
+        let racingSend = Task { await racing.send() }
+        await fulfillment(of: [turnHeld], timeout: 3)
+        let racingFirst = try sentTurn(racingTurns)
+        XCTAssertNil(racingFirst.thinkingLevel, "with no catalog the phone knows no level to send")
+        XCTAssertNil(racingFirst.saveSelection)
+        releaseCatalog()
+        await reloading.value
+        XCTAssertNotNil(racing.agentSlider)
+        XCTAssertEqual(racing.agentSliderState?.currentStop?.id, "fast", "the catalog read the sending chat's optimistic message as its own")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await racingSend.value
+        XCTAssertEqual(racingTurns.count, 1)
+        XCTAssertNil(racing.pendingSend, "the Mac accepted the send")
+        XCTAssertEqual(racing.agentSliderState?.currentStop?.id, "fast", "the accepted send left the chat in Custom")
+        XCTAssertEqual(
+            racingPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: racing.chat.id),
+            AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low"),
+            "the chat's stop wasn't kept to send"
+        )
+        try await waitForStreamWorkToEnd(racing)
+        let racingReconciled = await racing.reconcileChat(context: racing.owner)
+        XCTAssertTrue(racingReconciled)
+        XCTAssertEqual(racing.agentSliderState?.currentStop?.id, "fast", "the Mac's level-less chat dropped the chip to Custom")
+        racing.draft = "Again"
+        try await waitUntil { racing.canSend }
+        await racing.send()
+        try await waitUntil { racingTurns.count == 2 }
+        let racingKept = try sentTurn(racingTurns)
+        XCTAssertEqual(racingKept.modelId, "small")
+        XCTAssertEqual(racingKept.thinkingLevel, "low")
+        XCTAssertEqual(racingKept.saveSelection, true, "the next send didn't ask the Mac to keep the stop")
+        racing.stopProgressObservation()
+
+        // Another new chat on this phone changes where new chats start while
+        // this first send waits for the catalog and then for the Mac. The
+        // send keeps the start it was built with: the remembered choice is
+        // shared by every new chat for this Mac, so it can't be read later.
+        let small = { (level: String?) in AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: level) }
+        let big = AidenChatModelSelection(providerId: "acme", modelId: "large", thinkingLevel: nil)
+        let (crossing, crossingTurns, crossingOffer, crossingPreferences) = try await launch(
+            macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
+        )
+        crossingPreferences.remember(small("medium"), for: "instance-progress-lifecycle")
+        crossingOffer.slider.withLock { $0 = true }
+        await crossing.coordinator.connectActiveInstallation()
+        crossingOffer.catalogFails.withLock { $0 = false }
+        let crossingCatalogHeld = expectation(description: "crossing catalog held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/models") { crossingCatalogHeld.fulfill() }
+        let crossingReload = Task { await crossing.reload(observeProgress: false) }
+        await fulfillment(of: [crossingCatalogHeld], timeout: 3)
+        let releaseCrossingCatalog = try XCTUnwrap(AidenChatProgressLifecycleURLProtocol.takeHeldRequest())
+        crossing.draft = "Hello"
+        try await waitUntil { crossing.canSend }
+        let crossingTurnHeld = expectation(description: "crossing send held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { crossingTurnHeld.fulfill() }
+        let crossingSend = Task { await crossing.send() }
+        await fulfillment(of: [crossingTurnHeld], timeout: 3)
+        XCTAssertNil(try sentTurn(crossingTurns).thinkingLevel)
+        // A pick in another new chat moves new chats to Big before the catalog lands…
+        crossingPreferences.remember(big, for: "instance-progress-lifecycle")
+        releaseCrossingCatalog()
+        await crossingReload.value
+        XCTAssertEqual(crossing.agentSliderState?.currentStop?.id, "mid", "another chat's pick moved this send's start")
+        // …and to Fast before the Mac answers.
+        crossingPreferences.remember(small("low"), for: "instance-progress-lifecycle")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await crossingSend.value
+        XCTAssertNil(crossing.pendingSend, "the Mac accepted the send")
+        XCTAssertEqual(crossing.agentSliderState?.currentStop?.id, "mid", "another chat's pick moved the stop this send kept")
+        XCTAssertEqual(crossingPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: crossing.chat.id), small("medium"))
+        try await waitUntil { crossing.streamState?.isTerminal != false }
+        crossing.draft = "Again"
+        try await waitUntil { crossing.canSend }
+        await crossing.send()
+        try await waitUntil { crossingTurns.count == 2 }
+        XCTAssertEqual(try sentTurn(crossingTurns).thinkingLevel, "medium")
+        XCTAssertEqual(try sentTurn(crossingTurns).saveSelection, true)
+        crossing.stopProgressObservation()
+
+        // A first send built while new chats started on another model keeps
+        // nothing: its chat is on Small, and Big isn't a stop on Small. That
+        // holds while the optimistic message is the chat's only one.
+        let (elsewhere, elsewhereTurns, elsewhereOffer, elsewherePreferences) = try await launch(
+            macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
+        )
+        elsewherePreferences.remember(big, for: "instance-progress-lifecycle")
+        elsewhereOffer.slider.withLock { $0 = true }
+        await elsewhere.coordinator.connectActiveInstallation()
+        elsewhereOffer.catalogFails.withLock { $0 = false }
+        let elsewhereCatalogHeld = expectation(description: "elsewhere catalog held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/models") { elsewhereCatalogHeld.fulfill() }
+        let elsewhereReload = Task { await elsewhere.reload(observeProgress: false) }
+        await fulfillment(of: [elsewhereCatalogHeld], timeout: 3)
+        let releaseElsewhereCatalog = try XCTUnwrap(AidenChatProgressLifecycleURLProtocol.takeHeldRequest())
+        elsewhere.draft = "Hello"
+        try await waitUntil { elsewhere.canSend }
+        let elsewhereTurnHeld = expectation(description: "elsewhere send held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { elsewhereTurnHeld.fulfill() }
+        let elsewhereSend = Task { await elsewhere.send() }
+        await fulfillment(of: [elsewhereTurnHeld], timeout: 3)
+        XCTAssertEqual(try sentTurn(elsewhereTurns).modelId, "small")
+        releaseElsewhereCatalog()
+        await elsewhereReload.value
+        XCTAssertEqual(elsewhere.selectedModelId, "small", "the sending chat read as empty and took new chats' model")
+        XCTAssertNil(elsewhere.agentSliderState?.currentStop, "a level-less Small is no stop")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await elsewhereSend.value
+        XCTAssertNil(elsewhere.pendingSend)
+        XCTAssertNil(elsewherePreferences.chatSelection(for: "instance-progress-lifecycle", chatID: elsewhere.chat.id), "a stop on another model was held")
+        try await waitUntil { elsewhere.streamState?.isTerminal != false }
+        elsewhere.draft = "Again"
+        try await waitUntil { elsewhere.canSend }
+        await elsewhere.send()
+        try await waitUntil { elsewhereTurns.count == 2 }
+        XCTAssertEqual(try sentTurn(elsewhereTurns).modelId, "small")
+        XCTAssertNil(try sentTurn(elsewhereTurns).thinkingLevel)
+        XCTAssertNil(try sentTurn(elsewhereTurns).saveSelection)
+        elsewhere.stopProgressObservation()
+
+        // A first send made before the catalog reaches the Mac, but its reply
+        // is lost and the app quits with it saved. After a relaunch the Mac's
+        // copy of the message fills the chat, and the saved send, still
+        // waiting, shows the start it was built with, not whatever new chats
+        // start on now.
+        let (waiting, waitingTurns, waitingOffer, waitingPreferences) = try await launch(
+            macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
+        )
+        waitingPreferences.remember(small("medium"), for: "instance-progress-lifecycle")
+        waitingOffer.failsTurns.withLock { $0 = true }
+        waitingOffer.losesReplies.withLock { $0 = true }
+        waiting.draft = "Hello"
+        await waiting.send()
+        XCTAssertNotNil(waiting.pendingSend)
+        XCTAssertNil(try sentTurn(waitingTurns).thinkingLevel)
+        waiting.stopProgressObservation()
+        waitingPreferences.remember(big, for: "instance-progress-lifecycle")
+        let (relaunched, relaunchedTurns, _, relaunchedPreferences) = try await launch(
+            macOffersSlider: true, initialChat: unlistedChat, relaunching: (waitingOffer, waitingPreferences)
+        )
+        try await waitUntil { relaunched.agentSlider != nil && relaunched.pendingSend != nil }
+        _ = await relaunched.reconcileChat(context: relaunched.owner)
+        XCTAssertTrue(relaunched.chat.messages.contains { $0.id == "host-message-1" }, "the Mac's copy of the message fills the chat")
+        XCTAssertEqual(relaunched.agentSliderState?.currentStop?.id, "mid", "the saved send lost the start it was built with")
+        // The person then picks Fast for the chat on the Mac. That level is
+        // the chat's own now: the phone shows it and, once the retry is
+        // accepted, keeps nothing of its own to save over it.
+        waitingOffer.host.pickLevelOnMac("low")
+        _ = await relaunched.reconcileChat(context: relaunched.owner)
+        XCTAssertEqual(relaunched.chat.thinkingLevel, "low")
+        XCTAssertEqual(relaunched.agentSliderState?.currentStop?.id, "fast", "the waiting send hid the level the Mac saved")
+        waitingOffer.failsTurns.withLock { $0 = false }
+        await relaunched.send(retry: true)
+        XCTAssertNil(relaunched.pendingSend, "the Mac replayed the send it ran")
+        XCTAssertNil(relaunchedPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: relaunched.chat.id))
+        try await waitUntil { relaunched.streamState?.isTerminal != false }
+        relaunched.draft = "Again"
+        try await waitUntil { relaunched.canSend }
+        await relaunched.send()
+        try await waitUntil { relaunchedTurns.count == 2 }
+        XCTAssertEqual(try sentTurn(relaunchedTurns).thinkingLevel, "low")
+        XCTAssertNil(try sentTurn(relaunchedTurns).saveSelection, "the phone saved over the level picked on the Mac")
+        relaunched.stopProgressObservation()
+
+        // The same lost reply, and the person picks Small at its own setting,
+        // which is what the waiting send named, before tapping Retry. That
+        // pick is newer than the send, so the accepted retry keeps it.
+        func lostFirstSend() async throws -> (AidenChatViewModel, AidenRecordedTurnStarts, Offer, AidenModelPreferenceStore) {
+            let (chat, turns, offer, preferences) = try await launch(
+                macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
+            )
+            preferences.remember(small("low"), for: "instance-progress-lifecycle")
+            offer.failsTurns.withLock { $0 = true }
+            offer.losesReplies.withLock { $0 = true }
+            chat.draft = "Hello"
+            await chat.send()
+            XCTAssertNotNil(chat.pendingSend)
+            offer.slider.withLock { $0 = true }
+            offer.catalogFails.withLock { $0 = false }
+            await chat.coordinator.connectActiveInstallation()
+            await chat.reload(observeProgress: false)
+            try await waitUntil { chat.agentSlider != nil }
+            chat.reconcileAgentSliderAvailability()
+            _ = await chat.reconcileChat(context: chat.owner)
+            XCTAssertTrue(chat.chat.messages.contains { $0.id == "host-message-1" })
+            XCTAssertEqual(chat.agentSliderState?.currentStop?.id, "fast", "the waiting send shows where new chats start")
+            offer.failsTurns.withLock { $0 = false }
+            return (chat, turns, offer, preferences)
+        }
+        let (picked, pickedTurns, _, pickedPreferences) = try await lostFirstSend()
+        picked.selectModel(providerId: "acme", modelId: "small", thinkingLevel: nil)
+        XCTAssertNil(picked.agentSliderState?.currentStop)
+        await picked.send(retry: true)
+        XCTAssertNil(picked.pendingSend)
+        XCTAssertNil(picked.agentSliderState?.currentStop, "the retry's start replaced a newer pick")
+        XCTAssertNil(pickedPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: picked.chat.id))
+        try await waitUntil { picked.streamState?.isTerminal != false }
+        picked.draft = "Again"
+        try await waitUntil { picked.canSend }
+        await picked.send()
+        try await waitUntil { pickedTurns.count == 3 }
+        XCTAssertNil(try sentTurn(pickedTurns).thinkingLevel, "the retry's start replaced a newer pick")
+        XCTAssertNil(try sentTurn(pickedTurns).saveSelection)
+        picked.stopProgressObservation()
+
+        // The same pick, but the app quits before Retry. The pick comes back
+        // with the chat after the relaunch and is still newer than the send.
+        let (pickedBeforeQuit, _, quitOffer, quitPreferences) = try await lostFirstSend()
+        pickedBeforeQuit.selectModel(providerId: "acme", modelId: "small", thinkingLevel: nil)
+        pickedBeforeQuit.stopProgressObservation()
+        let (reopened, reopenedTurns, _, reopenedPreferences) = try await launch(
+            macOffersSlider: true, initialChat: unlistedChat, relaunching: (quitOffer, quitPreferences)
+        )
+        try await waitUntil { reopened.agentSlider != nil && reopened.pendingSend != nil }
+        _ = await reopened.reconcileChat(context: reopened.owner)
+        XCTAssertNil(reopened.agentSliderState?.currentStop, "the pick made before the relaunch was lost")
+        await reopened.send(retry: true)
+        XCTAssertNil(reopened.pendingSend)
+        XCTAssertNil(reopened.agentSliderState?.currentStop, "the retry's start replaced a pick made before the relaunch")
+        XCTAssertNil(reopenedPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: reopened.chat.id))
+        try await waitUntil { reopened.streamState?.isTerminal != false }
+        reopened.draft = "Again"
+        try await waitUntil { reopened.canSend }
+        await reopened.send()
+        try await waitUntil { reopenedTurns.count == 2 }
+        XCTAssertNil(try sentTurn(reopenedTurns).thinkingLevel, "the retry's start replaced a pick made before the relaunch")
+        XCTAssertNil(try sentTurn(reopenedTurns).saveSelection)
+        reopened.stopProgressObservation()
+
+        // With no pick, a relaunch before Retry still holds where new chats
+        // started when the send was built.
+        let (unpicked, _, unpickedOffer, unpickedPreferences) = try await lostFirstSend()
+        unpicked.stopProgressObservation()
+        let (resumed, resumedTurns, _, resumedPreferences) = try await launch(
+            macOffersSlider: true, initialChat: unlistedChat, relaunching: (unpickedOffer, unpickedPreferences)
+        )
+        try await waitUntil { resumed.agentSlider != nil && resumed.pendingSend != nil }
+        _ = await resumed.reconcileChat(context: resumed.owner)
+        XCTAssertEqual(resumed.agentSliderState?.currentStop?.id, "fast")
+        await resumed.send(retry: true)
+        XCTAssertNil(resumed.pendingSend)
+        XCTAssertEqual(resumed.agentSliderState?.currentStop?.id, "fast", "the relaunch dropped the start the send was built with")
+        XCTAssertEqual(resumedPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: resumed.chat.id), small("low"))
+        try await waitUntil { resumed.streamState?.isTerminal != false }
+        resumed.draft = "Again"
+        try await waitUntil { resumed.canSend }
+        await resumed.send()
+        try await waitUntil { resumedTurns.count == 2 }
+        XCTAssertEqual(try sentTurn(resumedTurns).thinkingLevel, "low")
+        XCTAssertEqual(try sentTurn(resumedTurns).saveSelection, true)
+        resumed.stopProgressObservation()
+
+        // An existing chat: the person picks Fast on the phone before the grant
+        // reaches it, so the send carries the pick but can't ask the Mac to
+        // keep it. The reply is lost and the app quits before Retry. The pick
+        // that comes back with the chat is the send's own, so the accepted
+        // retry still holds it, and the next send asks the Mac to keep it.
+        let existingChat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(
+            #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","providerId":"acme","modelId":"small","messages":[{"id":"message-u1","role":"user","text":"Review the protocol.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-a1","role":"assistant","text":"Done.","createdAt":"2026-09-14T12:00:01Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-2"}"#.utf8
+        ))
+        let (pickedEarly, pickedEarlyTurns, earlyPickOffer, earlyPickPreferences) = try await launch(
+            macOffersSlider: false, initialChat: existingChat
+        )
+        XCTAssertNil(pickedEarly.agentSlider)
+        XCTAssertEqual(pickedEarly.turnModelSelection, small("medium"), "the chat runs at its model's own level")
+        pickedEarly.selectModel(providerId: "acme", modelId: "small", thinkingLevel: "low")
+        earlyPickOffer.failsTurns.withLock { $0 = true }
+        earlyPickOffer.losesReplies.withLock { $0 = true }
+        pickedEarly.draft = "Hello"
+        await pickedEarly.send()
+        XCTAssertNotNil(pickedEarly.pendingSend)
+        XCTAssertEqual(try sentTurn(pickedEarlyTurns).thinkingLevel, "low")
+        XCTAssertNil(try sentTurn(pickedEarlyTurns).saveSelection, "without the grant a send can't ask the Mac to keep a level")
+        pickedEarly.stopProgressObservation()
+        earlyPickOffer.failsTurns.withLock { $0 = false }
+        let (pickRelaunched, pickRelaunchedTurns, _, pickRelaunchedPreferences) = try await launch(
+            macOffersSlider: true, initialChat: existingChat, relaunching: (earlyPickOffer, earlyPickPreferences)
+        )
+        try await waitUntil { pickRelaunched.agentSlider != nil && pickRelaunched.pendingSend != nil }
+        _ = await pickRelaunched.reconcileChat(context: pickRelaunched.owner)
+        XCTAssertEqual(pickRelaunched.agentSliderState?.currentStop?.id, "fast", "the pick made before the relaunch was lost")
+        await pickRelaunched.send(retry: true)
+        XCTAssertNil(pickRelaunched.pendingSend, "the Mac replayed the send it ran")
+        XCTAssertEqual(pickRelaunched.agentSliderState?.currentStop?.id, "fast", "the relaunch lost the stop the send carried")
+        XCTAssertEqual(
+            pickRelaunchedPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: pickRelaunched.chat.id), small("low"),
+            "the relaunch lost the stop the send carried"
+        )
+        try await waitUntil { pickRelaunched.streamState?.isTerminal != false }
+        pickRelaunched.draft = "Again"
+        try await waitUntil { pickRelaunched.canSend }
+        await pickRelaunched.send()
+        try await waitUntil { pickRelaunchedTurns.count == 2 }
+        XCTAssertEqual(try sentTurn(pickRelaunchedTurns).thinkingLevel, "low")
+        XCTAssertEqual(try sentTurn(pickRelaunchedTurns).saveSelection, true, "the next send didn't ask the Mac to keep the picked stop")
+        pickRelaunched.stopProgressObservation()
+
+        // A new chat's first send carries where new chats start before the
+        // grant, and its reply is lost. Once the message shows, the person
+        // picks another level and then the start's own again, in this session
+        // or before a relaunch. That pick is newer than the send, which
+        // couldn't ask the Mac to keep its level, so the accepted retry leaves
+        // it unsent and the next send asks the Mac to keep it. The same holds
+        // for a plain send in an existing chat, which carried no pick at all.
+        for (relaunches, existing) in [(false, false), (true, false), (false, true), (true, true)] {
+            let (built, builtTurns, builtOffer, builtPreferences) = try await launch(
+                macOffersSlider: false, initialChat: existing ? existingChat : unlistedChat
+            )
+            builtOffer.failsTurns.withLock { $0 = true }
+            builtOffer.losesReplies.withLock { $0 = true }
+            built.draft = "Hello"
+            await built.send()
+            XCTAssertNotNil(built.pendingSend)
+            let start = try sentTurn(builtTurns)
+            let level = try XCTUnwrap(start.thinkingLevel, "the catalog gave the first send a level")
+            XCTAssertNil(start.saveSelection)
+            XCTAssertEqual(built.pendingSend?.keepsSelection, !existing, "only a new chat's first send keeps where it started")
+            _ = await built.reconcileChat(context: built.owner)
+            XCTAssertFalse(built.chat.messages.isEmpty)
+            built.selectModel(providerId: "acme", modelId: "small", thinkingLevel: "high")
+            built.selectModel(providerId: "acme", modelId: "small", thinkingLevel: level)
+            var chat = built, turns = builtTurns, preferences = builtPreferences
+            if relaunches {
+                built.stopProgressObservation()
+                builtOffer.failsTurns.withLock { $0 = false }
+                (chat, turns, _, preferences) = try await launch(
+                    macOffersSlider: true, initialChat: existing ? existingChat : unlistedChat,
+                    relaunching: (builtOffer, builtPreferences)
+                )
+                try await waitUntil { chat.agentSlider != nil && chat.pendingSend != nil }
+                _ = await chat.reconcileChat(context: chat.owner)
+            } else {
+                builtOffer.slider.withLock { $0 = true }
+                await built.coordinator.connectActiveInstallation()
+                try await waitUntil { built.agentSlider != nil }
+                built.reconcileAgentSliderAvailability()
+                builtOffer.failsTurns.withLock { $0 = false }
+            }
+            let picked = small(level)
+            XCTAssertEqual(chat.turnModelSelection, picked)
+            await chat.send(retry: true)
+            XCTAssertNil(chat.pendingSend, "the Mac replayed the send it ran")
+            XCTAssertEqual(chat.turnModelSelection, picked, "the accepted retry dropped the newer pick (relaunch: \(relaunches), existing chat: \(existing))")
+            XCTAssertEqual(
+                preferences.chatSelection(for: "instance-progress-lifecycle", chatID: chat.chat.id), picked,
+                "the accepted retry erased the newer pick (relaunch: \(relaunches), existing chat: \(existing))"
+            )
+            try await waitUntil { chat.streamState?.isTerminal != false }
+            chat.draft = "Again"
+            try await waitUntil { chat.canSend }
+            await chat.send()
+            try await waitUntil { turns.count == (relaunches ? 2 : 3) }
+            XCTAssertEqual(try sentTurn(turns).thinkingLevel, level)
+            XCTAssertEqual(try sentTurn(turns).saveSelection, true, "the next send didn't ask the Mac to keep the pick (relaunch: \(relaunches), existing chat: \(existing))")
+            chat.stopProgressObservation()
+        }
+
+        // With no choice of this phone's, a first send made before the catalog
+        // carries no level, and the Mac picks one when it runs the turn. The
+        // Mac's last level then moves to another stop on the same model
+        // before the catalog arrives. Nothing is held from the new defaults:
+        // the chat follows its own model and level, and no later send saves a
+        // level nobody chose.
+        do {
+            let moved = #"{"providerId":"acme","modelId":"small","thinkingLevel":"medium"}"#
+            let (unchosen, unchosenTurns, unchosenOffer, unchosenPreferences) = try await launch(
+                macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
+            )
+            unchosenOffer.failsTurns.withLock { $0 = true }
+            unchosenOffer.losesReplies.withLock { $0 = true }
+            unchosen.draft = "Hello"
+            await unchosen.send()
+            XCTAssertNotNil(unchosen.pendingSend)
+            XCTAssertNil(try sentTurn(unchosenTurns).thinkingLevel)
+            unchosenOffer.macDefaults.withLock { $0 = moved }
+            unchosenOffer.slider.withLock { $0 = true }
+            unchosenOffer.catalogFails.withLock { $0 = false }
+            await unchosen.coordinator.connectActiveInstallation()
+            await unchosen.reload(observeProgress: false)
+            try await waitUntil { unchosen.agentSlider != nil }
+            unchosen.reconcileAgentSliderAvailability()
+            _ = await unchosen.reconcileChat(context: unchosen.owner)
+            XCTAssertNil(unchosen.agentSliderState?.currentStop, "the waiting send took the Mac's new defaults \(moved)")
+            unchosenOffer.failsTurns.withLock { $0 = false }
+            await unchosen.send(retry: true)
+            XCTAssertNil(unchosen.pendingSend)
+            XCTAssertNil(unchosen.agentSliderState?.currentStop, "the accepted send held the Mac's new defaults \(moved)")
+            XCTAssertNil(unchosenPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: unchosen.chat.id))
+            try await waitUntil { unchosen.streamState?.isTerminal != false }
+            unchosen.draft = "Again"
+            try await waitUntil { unchosen.canSend }
+            await unchosen.send()
+            try await waitUntil { unchosenTurns.count == 3 }
+            XCTAssertEqual(try sentTurn(unchosenTurns).modelId, "small")
+            XCTAssertNil(try sentTurn(unchosenTurns).thinkingLevel, "the next send carried a level nobody chose")
+            XCTAssertNil(try sentTurn(unchosenTurns).saveSelection, "the next send saved a level nobody chose")
+            unchosen.stopProgressObservation()
+        }
+
+        // The same lost reply, and the person checks the Mac and dismisses
+        // the send. The chat then follows its own model and level.
+        let (dismissed, dismissedTurns, _, _) = try await lostFirstSend()
+        await dismissed.discardPendingSend()
+        XCTAssertNil(dismissed.pendingSend)
+        XCTAssertNil(dismissed.agentSliderState?.currentStop, "the dismissed send still set the chip")
+        try await waitUntil { dismissed.streamState?.isTerminal != false }
+        dismissed.draft = "Again"
+        try await waitUntil { dismissed.canSend }
+        await dismissed.send()
+        try await waitUntil { dismissedTurns.count == 2 }
+        XCTAssertNil(try sentTurn(dismissedTurns).thinkingLevel, "the next turn ran at a level the chat doesn't hold")
+        dismissed.stopProgressObservation()
+
+        // The phone holds the slider but the Mac sets one up only later: the
+        // catalog refresh that brings it puts the chat on the Mac's last stop,
+        // not the level the model menu filled in.
+        let (later, _, laterOffer, _) = try await launch(macOffersSlider: true, catalogHasSlider: false)
+        XCTAssertNil(later.agentSlider)
+        XCTAssertEqual(later.turnModelSelection.thinkingLevel, "medium")
+        laterOffer.catalogSlider.withLock { $0 = true }
+        await later.reload(observeProgress: false)
+        XCTAssertNotNil(later.agentSlider)
+        XCTAssertEqual(later.agentSliderState?.currentStop?.id, "fast", "the refreshed catalog's slider kept the derived level")
+        XCTAssertEqual(later.turnModelSelection.thinkingLevel, "low")
+        later.stopProgressObservation()
     }
 
     @MainActor
@@ -3239,6 +4116,45 @@ final class AidenChatTests: XCTestCase {
         await manager.endAll(forInstanceID: "instance-progress-lifecycle")
 
         XCTAssertEqual(deviceID, "device-progress-lifecycle")
+    }
+
+    /// A run started on the Mac that waits for approval offers Deny on the
+    /// card only when this phone may answer it: run control as well as
+    /// approval access. Without it the card offers Review alone.
+    @MainActor
+    func testAForeignRunsCardOffersDenyOnlyWhenThePhoneMayAnswer() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled here.")
+        }
+        for (control, expectsTarget) in [(true, true), (false, false)] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-foreign-approval-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let manager = AidenRemoteLiveActivityManager(defaults: UserDefaults(suiteName: "foreign-approval-\(UUID())")!)
+            let fixture = AidenForeignRunApprovalFixture(grantsRunControl: control)
+            let model = try await makeProgressLifecycleModel(
+                mode: .denied,
+                cache: AidenChatCache(root: root),
+                draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+                responseOverride: { fixture.response($0) },
+                extraCapabilities: control ? [.runsObserve, .runsControl] : [.runsObserve],
+                liveActivities: manager
+            )
+            await model.load(observeProgress: false)
+
+            func waiting() -> AgentRunActivityAttributes.ContentState? {
+                Activity<AgentRunActivityAttributes>.activities.first {
+                    $0.attributes.instanceID == "instance-progress-lifecycle" && $0.attributes.streamID == "run-approval"
+                }?.content.state
+            }
+            for _ in 0..<1_000 where waiting()?.status != .waitingForApproval {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let state = waiting()
+            await manager.endAll(forInstanceID: "instance-progress-lifecycle")
+
+            XCTAssertEqual(state?.status, .waitingForApproval, "run control: \(control)")
+            XCTAssertEqual(state?.approval != nil, expectsTarget, "run control: \(control)")
+        }
     }
 
     @MainActor
@@ -6099,6 +7015,33 @@ final class AidenChatTests: XCTestCase {
         try await assertRemovalJoinsUploadCleanup(revokedCleanup: true)
     }
 
+    /// The fixture's release ends a hold whose request has not arrived yet, as
+    /// when a slow simulator delivers it after the test has moved on.
+    func testAReleasedHoldLetsALateRequestThrough() async throws {
+        let arrived = expectation(description: "the hold callback never runs after release")
+        arrived.isInverted = true
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/late-release") { arrived.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AidenChatProgressLifecycleURLProtocol.self]
+        configuration.httpAdditionalHeaders = [
+            AidenChatProgressLifecycleURLProtocol.epochHeader: AidenChatProgressLifecycleURLProtocol.epoch,
+        ]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let answered = expectation(description: "the late request is answered without a second release")
+        let task = session.dataTask(with: URL(string: "https://aiden.test/api/aiden/v1/late-release")!) { _, response, error in
+            XCTAssertNil(error)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+            answered.fulfill()
+        }
+        task.resume()
+        await fulfillment(of: [answered], timeout: 5)
+        await fulfillment(of: [arrived], timeout: 0.1)
+        XCTAssertTrue(AidenChatProgressLifecycleURLProtocol.heldRequestEpochs.isEmpty, "nothing was held")
+    }
+
     @MainActor
     private func assertRemovalJoinsUploadCleanup(purging: Bool = false, revokedCleanup: Bool = false) async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-removed-upload-\(UUID())")
@@ -6575,6 +7518,22 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(model.draft, expected, "Completing the attachment action must not revive the old draft")
         // Cancel the debounce before removing this test's temporary directory.
         model.setAllowsMutations(false)
+    }
+
+    /// Waits for the stream loop and the reconcile that follows it, so a
+    /// test's own reconcile is not superseded by the stream's.
+    @MainActor
+    private func waitForStreamWorkToEnd(
+        _ chat: AidenChatViewModel,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        var ended = false
+        Task { @MainActor in
+            await chat.waitForStreamWork()
+            ended = true
+        }
+        try await waitUntil({ ended }, file: file, line: line)
     }
 
     /// Like `waitForCondition`: the ceiling is wall-clock time, not a count of
@@ -11821,7 +12780,11 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     nonisolated(unsafe) private static var _controlWriteCount = 0
     nonisolated(unsafe) private static var approvalID = "approval-current"
     nonisolated(unsafe) private static var approvalReadFails = false
-    static func failApprovalReads() { lock.withLock { approvalReadFails = true } }
+    /// Approval reads fail as an unreachable Mac's do, until set back.
+    static func failApprovalReads(_ fails: Bool = true) { lock.withLock { approvalReadFails = fails } }
+    nonisolated(unsafe) private static var questionReadFails = false
+    /// Question reads fail as an unreachable Mac's do, until set back.
+    static func failQuestionReads(_ fails: Bool = true) { lock.withLock { questionReadFails = fails } }
     nonisolated(unsafe) private static var _approvalReadCount = 0
     static var approvalReadCount: Int { lock.withLock { _approvalReadCount } }
     static var controlWriteCount: Int { lock.withLock { _controlWriteCount } }
@@ -11917,7 +12880,21 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         }
     }
 
-    static func releaseHeldRequest() { takeHeldRequest()?() }
+    /// Ends the hold: a request already held completes, and one that has not
+    /// arrived yet is no longer held when it does. Otherwise a request that
+    /// arrives after the test's release, as on a slow simulator, stays parked
+    /// with nobody left to release it, and the test waits on it until the
+    /// session's request timeout.
+    static func releaseHeldRequest() {
+        let completion = lock.withLock {
+            heldPathSuffix = nil
+            onHeldRequest = nil
+            let held = heldCompletion
+            heldCompletion = nil
+            return held
+        }
+        completion?()
+    }
 
     static var progressRequestCount: Int {
         lock.lock()
@@ -11939,6 +12916,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         _postPaths = []
         approvalID = "approval-current"
         approvalReadFails = false
+        questionReadFails = false
         approvalResolved = false
         eventSink = nil
         responseOverride = nil
@@ -12056,6 +13034,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             }
             result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: Data(": keepalive\n\n".utf8))
         case "/api/aiden/v1/streams/stream-control/question" where Self.lock.withLock({ Self.mode == .questions }):
+            if Self.lock.withLock({ Self.questionReadFails }) {
+                failCurrentRequest(URLError(.networkConnectionLost))
+                return
+            }
             result = Self.response(for: request, status: 200, contentType: "application/json", data: Data("""
                 {"question":{"promptId":"question-current","streamId":"stream-control","chatId":"chat-progress-lifecycle","toolCallId":"tool-question","questions":\(Self.questionList),"expiresAt":"2099-01-01T00:00:00Z"}}
                 """.utf8))
@@ -14119,6 +15101,40 @@ final class AidenRunAlertTests: XCTestCase {
         }
     }
 
+    func testNotificationPreferencesSilenceTurnedOffAlertsAndHideMessageText() async throws {
+        var prefs = AidenNotificationPreferences()
+        prefs.responseReady = false
+        prefs.botNeedsMe = false
+        prefs.showMessageText = false
+        prefs.save(to: defaults)
+        let center = FakeRunAlertCenter()
+        let notifier = notifier(center)
+
+        await notify(notifier, .completed, id: "stream-1")
+        await notifier.notifyBotHandoff(
+            waitID: "wait-1",
+            kind: .action,
+            instanceID: "mac-a",
+            botID: "bot_fixture_01",
+            botName: "Scout",
+            isChatOnScreen: false
+        )
+        XCTAssertTrue(center.posted.isEmpty, "turned-off alerts stay silent")
+
+        await notifier.notify(
+            .needsApproval,
+            id: "approval-1",
+            instanceID: "mac-a",
+            chatID: "chat-1",
+            chatTitle: "Ship the release",
+            isChatOnScreen: false,
+            detail: .approval(target: .init(approvalID: "approval-1", runID: nil), summary: "Run npm publish", canAllow: true)
+        )
+        let content = try XCTUnwrap(center.posted.first?.content)
+        XCTAssertEqual(content.body, "Needs your approval", "message text stays in the app when it is off")
+        XCTAssertEqual(content.categoryIdentifier, AidenRunAlertCategory.approval, "actions still work")
+    }
+
     func testPermissionIsRequestedOnceAfterTheFirstCompletedRunWhileInApp() async {
         let center = FakeRunAlertCenter(status: .notDetermined, grantsAuthorization: false)
         let notifier = notifier(center)
@@ -14591,6 +15607,42 @@ private final class AidenForeignRunRecoveryFixture: @unchecked Sendable {
 
     private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
         "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"run-mac\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+/// A run started on the Mac (`run-approval`) that waits for an approval.
+private final class AidenForeignRunApprovalFixture: @unchecked Sendable {
+    private let grantsRunControl: Bool
+
+    init(grantsRunControl: Bool) {
+        self.grantsRunControl = grantsRunControl
+    }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/server":
+            let control = grantsRunControl ? #","runs:control""# : ""
+            let grants = #"["server:read","workspace:read","chat:read","chat:write","tasks:read","agents:read","approval:respond","runs:observe"\#(control)]"#
+            return (200, "application/json", Data("""
+            {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":["phone-run-control-v1"],"connectionMode":"lan","serverTime":"2026-10-05T10:00:00Z"}
+            """.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            return (200, "application/json", Data("""
+            {"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}
+            """.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/runs/current/events",
+             "/api/aiden/v1/runs/run-approval/events":
+            return (200, "text/event-stream", Data((
+                event(1, "run.started", #"{"runId":"run-approval","chatId":"chat-progress-lifecycle","origin":"renderer"}"#)
+                    + event(2, "approval_required", #"{"approvalId":"ap-mac","summary":"Run the tests?","toolName":"bash","canAllow":false}"#)
+            ).utf8))
+        default:
+            return nil
+        }
+    }
+
+    private func event(_ sequence: Int, _ type: String, _ payload: String) -> String {
+        "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"run-approval\",\"sequence\":\(sequence),\"timestamp\":\"2026-10-05T10:00:00Z\",\"type\":\"\(type)\",\"terminal\":false,\"payload\":\(payload)}\n\n"
     }
 }
 
@@ -15142,6 +16194,8 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
         case inFlight
         /// 409 `operation_in_progress`: a different fork holds the source.
         case busy
+        /// Creates the fork, then answers a structured 503 `internal_error`.
+        case commitButAnswerUnavailable
     }
 
     private let lock = NSLock()
@@ -15171,12 +16225,15 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
                 return (409, "application/json", Self.error(code: "operation_in_progress", message: "Another fork is being created."))
             case .inFlight:
                 return (409, "application/json", Self.error(code: "idempotency_in_flight", message: "This request is still running."))
-            case .commitButLoseResponse, nil:
+            case .commitButLoseResponse, .commitButAnswerUnavailable, nil:
                 let forkID = "chat-fork-\(created.count + 1)"
                 created.append(forkID)
                 ledger[key] = forkID
                 if reply == .commitButLoseResponse {
                     return (AidenChatProgressLifecycleURLProtocol.connectionLostStatus, "", Data())
+                }
+                if reply == .commitButAnswerUnavailable {
+                    return (503, "application/json", Self.error(code: "internal_error", message: "Try again."))
                 }
                 return (201, "application/json", Self.result(forkID: forkID, request: request))
             }
@@ -16958,6 +18015,81 @@ private final class AidenCacheFirstMemoryKeychain: KeychainStoring {
     }
     func delete(_ key: KeychainStore.Key, scope: String) throws {
         values[KeychainStore.scopedKey(key, scope: scope)] = nil
+    }
+}
+
+/// The Mac's side of one chat for the Agent Slider tests: before any turn the
+/// shared fixture answers; after one, the chat carries the turns and the
+/// selection the Mac keeps. Like the host, it saves a turn's level only when
+/// the turn asks with `saveSelection` and names both ids. Otherwise it keeps
+/// the turn's model, and the chat's level only while the model is unchanged.
+private final class AidenAgentSliderHostChat: Sendable {
+    private struct State {
+        var base: [String: Any]?
+        var turns = 0
+        var edits = 0
+        var providerId: String?
+        var modelId: String?
+        var thinkingLevel: String?
+        var messages: [[String: Any]] = []
+    }
+    private let state = Mutex<State?>(nil)
+
+    func start(from chat: AidenChat) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let base = (try? encoder.encode(chat)).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+        state.withLock {
+            $0 = State(base: base, providerId: chat.providerId, modelId: chat.modelId, thinkingLevel: chat.thinkingLevel)
+        }
+    }
+
+    /// Runs a turn and returns the id of the message it made.
+    @discardableResult
+    func accept(_ body: Data?) -> String {
+        let turn = body.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
+        let providerId = turn["providerId"] as? String
+        let modelId = turn["modelId"] as? String
+        return state.withLock { state in
+            guard var current = state else { return "" }
+            current.turns += 1
+            if turn["saveSelection"] as? Bool == true, let providerId, let modelId {
+                current.providerId = providerId
+                current.modelId = modelId
+                current.thinkingLevel = turn["thinkingLevel"] as? String
+            } else if let providerId, let modelId {
+                if providerId != current.providerId || modelId != current.modelId { current.thinkingLevel = nil }
+                current.providerId = providerId
+                current.modelId = modelId
+            }
+            current.messages.append([
+                "id": "host-message-\(current.turns)", "role": "user",
+                "text": turn["text"] as? String ?? "", "createdAt": "2026-11-24T12:00:0\(current.turns)Z",
+            ])
+            state = current
+            return "host-message-\(current.turns)"
+        }
+    }
+
+    /// The person picks a level for the chat on the Mac.
+    func pickLevelOnMac(_ level: String?) {
+        state.withLock { state in
+            state?.thinkingLevel = level
+            state?.edits += 1
+        }
+    }
+
+    func chatJSON() -> Data? {
+        state.withLock { state in
+            guard let state, state.turns > 0, var chat = state.base else { return nil }
+            chat["messages"] = state.messages
+            chat["providerId"] = state.providerId
+            chat["modelId"] = state.modelId
+            chat["thinkingLevel"] = state.thinkingLevel
+            chat["revision"] = "host-revision-\(state.turns)-\(state.edits)"
+            chat["updatedAt"] = "2026-11-24T12:00:0\(state.turns + state.edits)Z"
+            return try? JSONSerialization.data(withJSONObject: chat)
+        }
     }
 }
 

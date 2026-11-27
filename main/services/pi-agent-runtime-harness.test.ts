@@ -4734,8 +4734,8 @@ test("real command process receipts never promote tool success or model claims t
   const store = await effectStoreFixture(t);
   const command = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
   const { harness } = await managedTestHarness([
-    fauxAssistantMessage([fauxToolCall("run_command", { command: "printf checked; exit 0" }, { id: "success" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("run_command", { command: "exit 7" }, { id: "failure" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("run_command", { command: "printf checked; exit 0", description: "Prints checked" }, { id: "success" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("run_command", { command: "exit 7", description: "Exits with code 7" }, { id: "failure" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("All task acceptance predicates passed."),
   ], { tools: [command], identity: { runId: "command-run", sessionId: "command-session", lane: "foreground" }, effects: { store, chatId: "command-chat" } });
   const outcome = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Run checks", timestamp: Date.now() } });
@@ -4757,7 +4757,7 @@ test("a receipt that cannot be written never fails the command or the run", asyn
   await store.verification.deleteByChat("fenced-chat");
   const command = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
   const { harness } = await managedTestHarness([
-    fauxAssistantMessage([fauxToolCall("run_command", { command: "printf checked; exit 0" }, { id: "success" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("run_command", { command: "printf checked; exit 0", description: "Prints checked" }, { id: "success" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("done"),
   ], { tools: [command], identity: { runId: "fenced-run", sessionId: "fenced-session", lane: "foreground" }, effects: { store, chatId: "fenced-chat" } });
   const outcome = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Run checks", timestamp: Date.now() } });

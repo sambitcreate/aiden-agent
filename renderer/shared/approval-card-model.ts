@@ -16,6 +16,7 @@ import type {
 import type { HookProposalApprovalDetails, HookProposalApprovalHook } from "./hook-proposal-approval";
 import type { ToolApprovalPreview } from "./tool-approval-preview";
 import type { ToolApprovalScope } from "./tool-approval-scope";
+import { COMMAND_READING_LIMITS, parseCommandReading, type CommandReading, type CommandTag } from "./command-reading";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -247,6 +248,14 @@ export interface ApprovalCard {
   arguments: ApprovalCardArgument[];
   /** The whole thing under review: the exact command, the hook, the task's prompt or the request text. */
   body?: { format: "command" | "text"; text: string };
+  /**
+   * `approval:plain-words` holders only, on a shell card whose body is the
+   * command: the model's description of the command, which the card opens on
+   * (contract revision 69). Display-only: the body stays the exact command.
+   */
+  explanation?: string;
+  /** `approval:plain-words` holders only: Aiden's own tags read from the command, risky first. */
+  tags?: CommandTag[];
   /** For a changed hook: the hook as it is now. */
   previous?: { format: "command" | "text"; text: string };
   /** Batch cards: one row per action, in order. */
@@ -267,6 +276,9 @@ export const APPROVAL_CARD_LIMITS = {
   rows: 60,
   notes: 6,
   note: 400,
+  explanation: COMMAND_READING_LIMITS.explanation,
+  tags: COMMAND_READING_LIMITS.tags,
+  tagLabel: COMMAND_READING_LIMITS.tagLabel,
 } as const;
 
 /** Rakazo's order: short values first (stable for equal lengths), so a recipient never hides behind a long body. */
@@ -291,6 +303,10 @@ export interface ApprovalCardInput extends ApprovalCardSource {
   alwaysLabel?: string;
   /** "You’ve allowed this 4 times in the last 2 weeks." */
   notes?: readonly string[];
+  /** The command in plain words and Aiden's tags, as the host built them. */
+  reading?: CommandReading;
+  /** The device holds `approval:plain-words`: a shell card carries `explanation` and `tags`. */
+  plainWords?: boolean;
 }
 
 const DENY: ApprovalCardButton = { label: "Deny", decision: "deny", answered: approvalStatusLabel({ decision: "deny" }) };
@@ -350,6 +366,7 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
   let body: ApprovalCard["body"];
   let previous: ApprovalCard["previous"];
   let rows: ApprovalCardBatchRow[] | undefined;
+  let reading: CommandReading | undefined;
   let allowLabel = "Allow once";
   let denyLabel = "Deny";
   let title = approvalDetailsHeadline(details) ?? approvalHeadline(input);
@@ -380,6 +397,8 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
       if (path) args.push({ key: "path", value: path });
       args.push({ key: "tool", value: toolLabel(input.toolName) });
       body = command !== undefined ? text(command, "command") : text(input.summary);
+      // A command's plain words ride beside it, never instead of it.
+      if (input.plainWords === true && part === "shell" && command !== undefined) reading = parseCommandReading(input.reading);
       break;
     }
     case "scheduled-task":
@@ -482,6 +501,7 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
     rows = undefined;
     body = undefined;
     previous = undefined;
+    reading = undefined;
   }
 
   const bounded = orderApprovalArguments(args.filter((entry) => entry.value.trim() !== "").slice(0, APPROVAL_CARD_LIMITS.argumentCount).map((entry) => {
@@ -511,6 +531,8 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
     title,
     arguments: bounded,
     ...(body && body.text.trim() ? { body } : {}),
+    ...(body && body.text.trim() && reading?.explanation ? { explanation: reading.explanation } : {}),
+    ...(body && body.text.trim() && reading && reading.tags.length > 0 ? { tags: reading.tags.map((tag) => ({ ...tag })) } : {}),
     ...(previous ? { previous } : {}),
     ...(rows ? { rows } : {}),
     ...(notes.length > 0 ? { notes: notes.slice(0, APPROVAL_CARD_LIMITS.notes).map((note) => clip(note, APPROVAL_CARD_LIMITS.note).text) } : {}),

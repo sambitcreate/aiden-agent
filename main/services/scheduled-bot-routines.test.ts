@@ -1829,3 +1829,38 @@ test("a routine run counts once by what started it, including a failure, and a s
   await h.run(task, undefined, { kind: "automatic", fireTime: 2 });
   assert.deepEqual(sent, []);
 });
+
+test("aborting during awaitReply keeps an automatic fire receipt unsettled and suppresses failure delivery", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Morning brief",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Check the inbox.",
+  });
+  const fireTime = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: fireTime });
+  const claimed = await h.store.claimRoutineFire(routine.id, fireTime, fireTime + 86_400_000);
+  const requestId = botRoutineRequestId(routine.id, { kind: "automatic", fireTime });
+  // Hold awaitReply indefinitely so only the AbortSignal interrupts it.
+  h.session.replies.push(new Promise<BotRoutineSubmissionOutcome>(() => {}));
+  const controller = new AbortController();
+  const runPromise = h.executor.run(claimed, {
+    trigger: { kind: "automatic", fireTime },
+    signal: controller.signal,
+  });
+  // Wait for send to admit the submission before aborting.
+  while (h.session.sends.length === 0) await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  const recorded = await runPromise;
+
+  assert.equal(recorded.result, "blocked");
+  assert.notEqual(recorded.id, requestId, "uncertain cancellation must not claim the durable fire's run id");
+  assert.deepEqual(h.session.deliveries, [], "cancellation must not notify the user as a failure");
+  const after = await h.store.get(routine.id);
+  assert.equal(
+    after?.pendingRoutineFires?.some((fire) => fire.requestId === requestId),
+    true,
+    "automatic fire receipt stays pending so restart recovery can observe the admitted turn",
+  );
+});

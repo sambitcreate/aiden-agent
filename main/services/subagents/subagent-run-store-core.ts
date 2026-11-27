@@ -4,9 +4,9 @@ import { isDeepStrictEqual, TextDecoder } from "node:util";
 import {
   isSafeSubagentIdentifier,
   parseSubagentRunSnapshotV1,
+  sameSubagentRunSnapshotIdentity,
   SUBAGENT_ACTIVE_STATES,
-  SUBAGENT_TERMINAL_STATES,
-  subagentProjectionNoticesAreMonotonic,
+  subagentRunSnapshotProgresses,
   type SubagentRunSnapshotV1,
 } from "../../../renderer/shared/subagent-runs.js";
 import { sanitizeSubagentSnapshotText } from "../../../renderer/shared/subagent-safe-text.js";
@@ -423,7 +423,7 @@ function parseDatabase(value: unknown, maxRuns: number): SubagentRunDatabaseV1 {
       if (pendingChatDeletionSet.has(run.chatId)) continue;
       if (conflictedRunIds.has(run.runId)) continue;
       const existing = byRunId.get(run.runId);
-      if (existing && !hasStableIdentity(existing, run)) {
+      if (existing && !sameSubagentRunSnapshotIdentity(existing, run)) {
         // A duplicate durable ID with a different immutable owner is
         // ambiguous untrusted state. Preserve neither claimant.
         byRunId.delete(run.runId);
@@ -527,49 +527,6 @@ function interruptedSnapshot(
     // preventing the application from opening.
     return undefined;
   }
-}
-
-function hasStableIdentity(existing: SubagentRunSnapshotV1, next: SubagentRunSnapshotV1): boolean {
-  return (
-    existing.runId === next.runId &&
-    existing.groupId === next.groupId &&
-    existing.generationId === next.generationId &&
-    existing.childId === next.childId &&
-    existing.chatId === next.chatId &&
-    existing.workspaceId === next.workspaceId &&
-    existing.role === next.role &&
-    existing.label === next.label &&
-    existing.taskPreview === next.taskPreview &&
-    existing.startedAt === next.startedAt &&
-    existing.modelId === next.modelId &&
-    existing.providerId === next.providerId &&
-    existing.thinkingLevel === next.thinkingLevel &&
-    existing.modelSelection === next.modelSelection
-  );
-}
-
-function isValidProgression(existing: SubagentRunSnapshotV1, next: SubagentRunSnapshotV1): boolean {
-  const existingMilestones = existing.milestones ?? [];
-  const nextMilestones = next.milestones ?? [];
-  if (
-    SUBAGENT_ACTIVE_STATES.has(existing.state) === false ||
-    next.updatedAt < existing.updatedAt ||
-    next.turns < existing.turns ||
-    next.tools < existing.tools ||
-    next.tokens < existing.tokens ||
-    nextMilestones.length < existingMilestones.length ||
-    existingMilestones.some((milestone, index) => nextMilestones[index] !== milestone) ||
-    !subagentProjectionNoticesAreMonotonic(
-      existing.projectionNotices,
-      next.projectionNotices,
-      SUBAGENT_TERMINAL_STATES.has(next.state),
-    )
-  ) {
-    return false;
-  }
-  if (existing.state === "queued") return true;
-  if (existing.state === "starting") return next.state !== "queued";
-  return next.state !== "queued" && next.state !== "starting";
 }
 
 /**
@@ -820,7 +777,7 @@ export function createSubagentRunStore(
             throw new Error("Subagent history is no longer available for this chat.");
           }
           const existing = database.runs.find((run) => run.runId === snapshot.runId);
-          if (existing && !hasStableIdentity(existing, snapshot)) {
+          if (existing && !sameSubagentRunSnapshotIdentity(existing, snapshot)) {
             throw new Error("Subagent run identity cannot change.");
           }
           if (existing && snapshot.revision <= existing.revision) {
@@ -828,7 +785,7 @@ export function createSubagentRunStore(
               return structuredClone(existing);
             throw new Error("Subagent run revisions must increase monotonically.");
           }
-          if (existing && !isValidProgression(existing, snapshot)) {
+          if (existing && !subagentRunSnapshotProgresses(existing, snapshot)) {
             throw new Error("Subagent run lifecycle cannot move backward.");
           }
           const next = retainedRuns(

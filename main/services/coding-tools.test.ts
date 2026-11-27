@@ -1912,7 +1912,7 @@ test("run_command reports real exit failures through Pi and codemode without re-
         return outcome;
       },
     });
-    const first = await codemode.execute("parent", { code: 'const r = await tools.run_command({command:"node failure.cjs"}); text({isError:r.isError, text:r.content[0].text});' });
+    const first = await codemode.execute("parent", { code: 'const r = await tools.run_command({command:"node failure.cjs", description:"Runs the failing fixture"}); text({isError:r.isError, text:r.content[0].text});' });
     const returned = JSON.parse(first.content[0].type === "text" ? first.content[0].text : "null");
     assert.equal(returned.isError, true, "a failed process must be visible to programmatic callers");
     assert.match(returned.text, /^Command exited with error \(code 7\)\./u);
@@ -1934,6 +1934,37 @@ test("run_command reports real exit failures through Pi and codemode without re-
     assert.notEqual(success.isError, true);
     assert.equal(success.content[0].type === "text" ? success.content[0].text : "", "ok");
     assert.equal(advanceAttendedToolErrorState(firstGuard, [success]).totalFailures, 1);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a run_command call without a plain-words description, or with a blank one, is refused before anything runs", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-description-"));
+  try {
+    const tools = buildCodingTools(root);
+    const call = (args: Record<string, unknown>) => {
+      const assistantMessage = fauxAssistantMessage("Run it");
+      return runToolCall({ type: "toolCall", id: "call", name: "run_command", arguments: args as { command: string } }, {
+        tools, assistantMessage, context: { messages: [assistantMessage], tools },
+      });
+    };
+    const missing = await call({ command: "touch ran" });
+    assert.equal(missing.isError, true);
+    const text = missing.result.content[0];
+    assert.match(text?.type === "text" ? text.text : "", /description: missing/u, "the model is told what to add");
+    await assert.rejects(fs.stat(path.join(root, "ran")), "nothing ran");
+    for (const blank of ["", "   \n\t"]) {
+      const empty = await call({ command: "touch ran", description: blank });
+      assert.equal(empty.isError, true, JSON.stringify(blank));
+      const message = empty.result.content[0];
+      assert.match(message?.type === "text" ? message.text : "", /description/u, "the model is told the description is the problem");
+    }
+    await assert.rejects(fs.stat(path.join(root, "ran")), "a blank description runs nothing either");
+
+    const described = await call({ command: "touch ran", description: "Creates an empty file named ran" });
+    assert.notEqual(described.isError, true);
+    await fs.stat(path.join(root, "ran"));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

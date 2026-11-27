@@ -840,3 +840,72 @@ test("the tools are offered only while Let Live move through Aiden is on", async
   );
   provider?.close?.();
 });
+
+test("closing the provider while enabled() is pending stops handle() and confirmThenAct() before acting", async () => {
+  const h = harness(`<button id="go">Go</button><button id="out" data-live-guard="confirm">Sign out</button>`);
+  try {
+    let goClicks = 0;
+    let outClicks = 0;
+    h.document.getElementById("go")!.addEventListener("click", () => (goClicks += 1));
+    h.document.getElementById("out")!.addEventListener("click", () => (outClicks += 1));
+    const goRef = await h.ref("Go");
+    const outRef = await h.ref("Sign out");
+
+    // 1. Start a guarded confirmation, tap Confirm, then close while the post-OK enabled() check is pending.
+    assert.equal((await h.call("use_aiden", { element: outRef, action: "press" })).status, "waiting_for_user");
+    await h.noteMatching(PROMPT);
+    let releaseConfirmCheck!: () => void;
+    h.switchedOn.hold = new Promise<void>((resolve) => (releaseConfirmCheck = resolve));
+    const shown = h.activity.get();
+    if (shown?.kind === "confirm") shown.confirm();
+    await h.settle();
+    const notesBeforeClose = h.notes.length;
+
+    // 2. Also start an ordinary use_aiden call whose enabled() check is held.
+    let releaseHandleCheck!: () => void;
+    h.switchedOn.hold = new Promise<void>((resolve) => (releaseHandleCheck = resolve));
+    const pendingHandle = h.call("use_aiden", { element: goRef, action: "press" });
+    await h.settle();
+
+    // Close the provider while both enabled() awaits are still open, then release both as enabled=true.
+    h.provider.close();
+    releaseConfirmCheck();
+    releaseHandleCheck();
+    const response = await pendingHandle;
+    await h.settle();
+
+    assert.equal(code(response), "window_unavailable");
+    assert.equal(goClicks, 0, "handle() must not act after close() during enabled()");
+    assert.equal(outClicks, 0, "confirmThenAct() must not act after close() during enabled()");
+    assert.equal(h.notes.length, notesBeforeClose, "no follow-up note after close()");
+  } finally {
+    h.dispose();
+  }
+});
+
+test("barge-in interrupt keeps a pending confirmation waiting, while close() cancels it cleanly", async () => {
+  const h = harness(`<button id="out" data-live-guard="confirm">Sign out</button>`);
+  try {
+    let outClicks = 0;
+    h.document.getElementById("out")!.addEventListener("click", () => (outClicks += 1));
+    const outRef = await h.ref("Sign out");
+    assert.equal((await h.call("use_aiden", { element: outRef, action: "press" })).status, "waiting_for_user");
+    await h.noteMatching(PROMPT);
+
+    // Barge-in must not drop the pending OK prompt.
+    h.provider.interrupt();
+    await h.settle();
+    assert.equal(h.activity.get()?.kind, "confirm");
+    assert.equal(code(await h.call("open_in_aiden", { place: "providers" })), "waiting_for_user");
+
+    // Closing the provider drops the pending OK with no action and no follow-up note.
+    const notesBeforeClose = h.notes.length;
+    h.provider.close();
+    await h.settle();
+    assert.equal(h.activity.get(), null);
+    assert.equal(outClicks, 0);
+    assert.equal(h.notes.length, notesBeforeClose);
+  } finally {
+    h.dispose();
+  }
+});

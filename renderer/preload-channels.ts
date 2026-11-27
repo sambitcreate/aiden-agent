@@ -27,8 +27,6 @@ export const INVOKE_PREFIXES = [
   "imageWorkflows:",
   "localModels:",
   "localVoice:",
-  "modelInsights:",
-  "modelPace:",
   "mcp:",
   "models:",
   "providers:",
@@ -89,6 +87,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:reasoning-delta",
   "chat:status",
   "chat:subagent-context",
+  /** One helper's conversation changed: `{streamId, update}` (see `subagent-transcript.ts`). */
+  "chat:subagent-transcript",
   "chat:subagents",
   "chat:timeline",
   "chat:todo",
@@ -111,6 +111,14 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "bots:allowed:changed",
   /** A Bot's question, approval, hand-off or issue appeared or settled: `{botId}`. The Bots sidebar re-reads its row. */
   "bots:attention",
+  /** Bot bubbles changed: the full `BotBubbleState`. */
+  "bots:bubbles:changed",
+  /** Open in Aiden from a bubble: `{botId}`, show that Bot's chat. */
+  "bots:bubbles:showChat",
+  /** A shrink or grow animation for a bubble overlay (`BotBubbleTransition`); the overlay's own preload receives it. */
+  "bots:bubbles:transition",
+  /** A bubble overlay's display changed size or zoom (`BotBubbleOverlayInfo`); the overlay's own preload receives it. */
+  "bots:bubbles:overlayInfoChanged",
   "botComputers:changed",
   "browser:event",
   "devices:state",

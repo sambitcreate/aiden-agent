@@ -237,7 +237,8 @@ test("with --respawn-child, killing the child leaves a new child under the same 
   }, "a new child to hold the port");
   assert.equal(found.ppid, parent);
   assert.ok(alive(found.pid));
-  assert.notEqual(found.ident, first.ident, "another process, another identity");
+  // The identity (start time to the second, plus the command name) can match a child respawned within the same second, so the watch keys on the PID as well. The new holder is a different PID.
+  assert.notEqual(found.pid, first.pid, "another process");
   // The async helper over a fresh table agrees, binds the identity the watch's look shows, and reads the new holder's folder: it's in apps/web.
   const where = { workspacePath: h.workspace, appRoot: "apps/web" };
   assert.deepEqual(await findRebind({ ppid: parent, port, held: first.held, ...where }, deps()), { ok: true, ...found });

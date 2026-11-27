@@ -1264,3 +1264,96 @@ test("ownedPids is every running job's tree, design, chat and adopted alike, and
     [design.pid!, 900_001, chat.pid!, group, 900_002].sort((a, b) => a - b),
   );
 });
+
+test("an adoption racing with shutdown never registers a job or writes it after close", { skip }, async (t) => {
+  const dir = await tempDir();
+  const id = newBackgroundJobId();
+  let enteredLookup!: () => void;
+  let releaseLookup!: () => void;
+  const lookupEntered = new Promise<void>((resolve) => { enteredLookup = resolve; });
+  const lookupHeld = new Promise<void>((resolve) => { releaseLookup = resolve; });
+  const { jobs } = harness(dir, {
+    adoptSettleMs: 0,
+    processGroupMembers: async (pgid) => {
+      enteredLookup();
+      await lookupHeld;
+      return defaultProcessGroupMembers(pgid);
+    },
+  });
+  const child = spawn("sleep 30", {
+    cwd: dir,
+    detached: true,
+    shell: true,
+    stdio: "ignore",
+    env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
+  });
+  t.after(async () => {
+    try { if (child.pid) process.kill(-child.pid, "SIGKILL"); } catch { /* Already gone. */ }
+    await cleanUp(jobs, dir);
+  });
+  assert.ok(child.pid);
+  const adopting = jobs.adopt({
+    id,
+    chatId: "chat-1",
+    workspaceId: "ws-1",
+    cwd: dir,
+    command: "sleep 30 &",
+    processGroup: child.pid,
+  });
+  await lookupEntered;
+  const shuttingDown = jobs.shutdown();
+  releaseLookup();
+  assert.equal(await adopting, undefined);
+  await shuttingDown;
+  assert.deepEqual(jobs.listAll(), []);
+});
+
+test("an unconfirmed adopted stop blocks workspace teardown and stays in running.json across shutdown", { skip }, async (t) => {
+  const dir = await tempDir();
+  const id = newBackgroundJobId();
+  let failLookup = false;
+  const { jobs } = harness(dir, {
+    adoptSettleMs: 0,
+    processHasEnvironment: async (pid, entry) => {
+      if (failLookup) throw new Error("proc unreadable");
+      return pid === child.pid && entry === `AIDEN_BACKGROUND_JOB=${id}`;
+    },
+    processGroupMembers: async (pgid) => {
+      if (failLookup) throw new Error("ps unavailable");
+      return pgid === child.pid ? [child.pid] : [];
+    },
+  });
+  const child = spawn("sleep 30", {
+    cwd: dir,
+    detached: true,
+    shell: true,
+    stdio: "ignore",
+    env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
+  });
+  t.after(async () => {
+    failLookup = false;
+    try { if (child.pid) process.kill(-child.pid, "SIGKILL"); } catch { /* Already gone. */ }
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  assert.ok(child.pid);
+  const adopted = await jobs.adopt({
+    id,
+    chatId: "chat-1",
+    workspaceId: "ws-1",
+    cwd: dir,
+    command: "sleep 30 &",
+    processGroup: child.pid,
+  });
+  assert.equal(adopted?.state, "running");
+
+  failLookup = true;
+  await assert.rejects(jobs.stopWorkspace("ws-1", "access-changed"), /confirm.*background jobs stopped/u);
+  assert.equal(jobs.get("chat-1", id)?.state, "running");
+
+  await jobs.shutdown();
+  assert.equal(jobs.get("chat-1", id)?.state, "running");
+  const ledger = JSON.parse(await fs.readFile(path.join(dir, "logs", "running.json"), "utf8")) as {
+    jobs: Array<{ id: string; pid: number }>;
+  };
+  assert.ok(ledger.jobs.some((entry) => entry.id === id && entry.pid === child.pid));
+});

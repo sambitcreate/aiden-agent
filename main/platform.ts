@@ -1,4 +1,5 @@
 import {
+  BaseWindow,
   BrowserWindow,
   Notification,
   ShareMenu,
@@ -67,14 +68,16 @@ export const logger = {
   error: (scope: string, ...values: LogValue[]) => writeLog("error", scope, values),
 };
 
-const broadcastObservers = new Set<(channel: NotificationChannel) => void>();
+type BroadcastObserver = (channel: NotificationChannel, botId?: string) => void;
+const broadcastObservers = new Set<BroadcastObserver>();
 
 /**
  * Observe renderer notifications in the main process (the Remote host feed
  * uses this to learn that chats, workspaces or Bots changed). Payloads are
- * deliberately not forwarded.
+ * deliberately not forwarded; a `bots:*` notice passes only the id of the Bot
+ * it names, so an observer can re-read that one Bot.
  */
-export function onBroadcast(observer: (channel: NotificationChannel) => void): () => void {
+export function onBroadcast(observer: BroadcastObserver): () => void {
   broadcastObservers.add(observer);
   return () => broadcastObservers.delete(observer);
 }
@@ -105,10 +108,17 @@ export function registerBroadcastReceiver(
   window.once("closed", () => broadcastReceivers.unregister(window));
 }
 
+function broadcastBotId(channel: NotificationChannel, payload: unknown): string | undefined {
+  if (!channel.startsWith("bots:") || typeof payload !== "object" || payload === null) return undefined;
+  const botId = (payload as { botId?: unknown }).botId;
+  return typeof botId === "string" ? botId : undefined;
+}
+
 function broadcast(channel: NotificationChannel, payload: unknown): void {
+  const botId = broadcastBotId(channel, payload);
   for (const observer of [...broadcastObservers]) {
     try {
-      observer(channel);
+      observer(channel, botId);
     } catch (error) {
       logger.warn("ipc", `A ${channel} observer failed.`, error);
     }
@@ -217,6 +227,7 @@ export function registerNativeHandlers(): void {
 export {
   app,
   autoUpdater,
+  BaseWindow,
   BrowserWindow,
   Notification,
   ShareMenu,

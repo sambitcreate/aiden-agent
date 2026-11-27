@@ -3,6 +3,10 @@ import { sidebarHosts, type SidebarHost } from "../sidebar-remote-groups";
 import type { HostChatCapability } from "./host-chat-adapter";
 import { hostControlRefusal, remoteHostCapabilities } from "./remote-host-adapter";
 import { localComputerNoun } from "../../shared/computer-noun";
+import { isBotAvatarAppearance, type BotAvatar } from "../../shared/bots";
+import { peerFeedBotAttention } from "../../shared/peer-feed-inbox";
+import { clipPendingAttentionSummary } from "../../shared/chat-pending-attention";
+import { remoteBotPhotoAsset, type RemoteBotPhotoAsset } from "./remote-bot-photo-asset";
 
 /**
  * Where new work can start: this Mac or a paired host, the projects each host
@@ -122,16 +126,32 @@ export function reduceCreatedProjects(state: CreatedProjects, event: CreatedProj
 export interface RemoteBotChoice {
   id: string;
   name: string;
+  /** The Bot's description. Searchable, but not shown as the row's line. */
   purpose?: string;
-  /** The host says a turn is running. */
+  /** The Bot's avatar shape and colour as its host sends them; absent when the row has none or a malformed one. */
+  avatar?: BotAvatar;
+  /** The host says a turn is running, and the host is online now. */
   working?: true;
+  /** An approval, a question, a hand-off or an open issue waits on the person (revision 50). Outranks `working`. */
+  needsYou?: true;
   /**
    * The person paused the Bot (only a host that sends this Mac the
-   * `bot:handoffs` rows says so), or a turn stopped part-way and waits to be
-   * resumed.
+   * `bot:handoffs` rows says so), a turn stopped part-way and waits to be
+   * resumed, or the Bot's AI model cannot be used.
    */
-  status?: "paused" | "interrupted";
+  status?: "paused" | "interrupted" | "needs_model";
+  /** The line the host's own Bots list shows under the name (revision 66), one plain line. */
+  preview?: string;
+  /** When the Bot's newest reply arrived, by the host's clock; the row's unread dot compares it with what this Mac showed. */
+  lastReplyAt?: number;
+  /** The Bot's photo, as the host lists it; read on demand. */
+  photo?: RemoteBotPhotoAsset;
+  /** The host read this Bot's summary (revision 66): no `preview` or `lastReplyAt` means it has none. */
+  summarized?: true;
 }
+
+/** The longest preview a remote Bot row shows; a host sends at most this (revision 66). */
+export const REMOTE_BOT_PREVIEW_MAX = 140;
 
 export interface RemoteBotGroup {
   host: NewChatMachine;
@@ -152,21 +172,46 @@ export function remoteBotGroups(
   const byId = new Map(views.map((view) => [view.id, view]));
   const groups: RemoteBotGroup[] = [];
   for (const host of sidebarHosts(views, statuses)) {
-    const bots = (feeds.get(host.id)?.bots ?? [])
-      .map((row) => {
+    const feed = feeds.get(host.id);
+    // A run the host reported before it went offline may have ended since.
+    const hostOnline = host.availability === "online" && feed?.stale !== true;
+    const bots = (feed?.bots ?? [])
+      .map((row): RemoteBotChoice => {
         const purpose = text(row, "purpose");
+        const semantic = (row.avatar as { semantic?: unknown } | null | undefined)?.semantic;
+        const { needsYou } = peerFeedBotAttention(row);
+        // The host already sends one plain line; it is still another computer's text.
+        const preview = clipPendingAttentionSummary(row.preview, REMOTE_BOT_PREVIEW_MAX);
+        const lastReplyAt = typeof row.lastReplyAt === "string" ? Date.parse(row.lastReplyAt) : Number.NaN;
+        const photo = remoteBotPhotoAsset(row);
         return {
           id: row.id,
           name: text(row, "name") ?? "Untitled Bot",
           ...(purpose ? { purpose } : {}),
-          ...(row.sessionState === "running" ? { working: true as const } : {}),
-          ...(row.sessionState === "paused" || row.sessionState === "interrupted"
-            ? { status: row.sessionState as "paused" | "interrupted" }
+          ...(isBotAvatarAppearance(semantic) ? { avatar: semantic } : {}),
+          ...(hostOnline && row.sessionState === "running" ? { working: true as const } : {}),
+          ...(needsYou ? { needsYou: true as const } : {}),
+          ...(row.sessionState === "paused" || row.sessionState === "interrupted" || row.sessionState === "needs_model"
+            ? { status: row.sessionState as "paused" | "interrupted" | "needs_model" }
             : {}),
+          ...(preview ? { preview } : {}),
+          ...(Number.isFinite(lastReplyAt) && lastReplyAt > 0 ? { lastReplyAt } : {}),
+          ...(photo ? { photo } : {}),
+          ...(row.summarized === true ? { summarized: true as const } : {}),
         };
       });
-    if (bots.length === 0) continue;
-    const disabledReason = unavailableReason(host, byId.get(host.id), "botChats", "start Bot chats", platform);
+    const view = byId.get(host.id);
+    if (bots.length === 0) {
+      // A pairing made before this Mac could use another Mac's Bots holds no
+      // Bot grants (they are fixed at pairing), so the feed lists none.
+      if (view && view.features.includes("bot-durable-session-v1") && !view.capabilities.includes("bot:read"))
+        groups.push({
+          host: { ...host, disabledReason: `To use ${host.label}'s Bots here, pair this ${localComputerNoun(platform)} with it again.` },
+          bots: [],
+        });
+      continue;
+    }
+    const disabledReason = unavailableReason(host, view, "botChats", "start Bot chats", platform);
     groups.push({ host: disabledReason ? { ...host, disabledReason } : host, bots });
   }
   return groups;
