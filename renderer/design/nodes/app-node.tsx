@@ -71,6 +71,7 @@ const PATH_CHARS = 60;
 const IPV6_SENTENCE = "This app runs on IPv6 localhost, which the canvas can't show yet. Restart it on 127.0.0.1.";
 const LOCALHOST_SENTENCE = "Design mode only lets apps reach localhost for now.";
 const ACTION_FAILED = "Aiden couldn't do that.";
+const NO_BREAKPOINTS: readonly number[] = Object.freeze([]);
 
 /** A fixed sentence over the frame's last picture: the app isn't live here. */
 export function AppFrameCard({ title, snapshot, children }: { title: string; snapshot: string | undefined; children: React.ReactNode }) {
@@ -377,6 +378,8 @@ export type AppFrameProps = {
   actions?: React.ReactNode;
   /** A monotonic clock for the restore bound (tests pass their own). */
   now?: () => number;
+  /** 3c (S91): what the frame draws with its page's breakpoints (the resize ruler); display only. */
+  ruler?: (breakpoints: readonly number[]) => React.ReactNode;
 };
 
 /** An app frame's body and title row. */
@@ -392,6 +395,7 @@ export function AppFrame({
   titleSlot,
   actions,
   now = monotonicNow,
+  ruler,
 }: AppFrameProps) {
   const { designLive } = useAppCapabilities();
   const snapshotOfApps = useDesignAppsSnapshot(chatId, designLive);
@@ -528,9 +532,12 @@ export function AppFrame({
   });
   // A new route (3b: canvas_update_frame or the picker retargets the frame)
   // starts clean: the old route's path, error, load and stuck state don't carry over.
+  // 3c (S91): the page's breakpoints, for this mount's page only.
+  const [breakpoints, setBreakpoints] = React.useState<{ key: string | null; widths: readonly number[] }>({ key: null, widths: [] });
   const [routeShown, setRouteShown] = React.useState(route);
   if (routeShown !== route) {
     setRouteShown(route);
+    setBreakpoints({ key: null, widths: [] });
     setPage({ key: "", path: null, error: null });
     setLoadedKey(null);
     setStuckKey(null);
@@ -542,6 +549,7 @@ export function AppFrame({
   });
   const shownKey = shown?.key ?? null;
   const shownOrigin = shown?.origin ?? null;
+  const pageBreakpoints = shownKey !== null && breakpoints.key === shownKey ? breakpoints.widths : NO_BREAKPOINTS;
   /** The scheme this mount's page was last told (a page starts light until told). */
   const postedScheme = React.useRef<{ key: string | null; dark: boolean }>({ key: null, dark: false });
   React.useEffect(() => {
@@ -582,6 +590,9 @@ export function AppFrame({
           return;
         case "escape":
           if (enteredRef.current.entered) enteredRef.current.onLeave();
+          return;
+        case "breakpoints":
+          setBreakpoints({ key: shownKey, widths: message.widths });
           return;
         default:
           // Source replies, picks and anchors are Phase 4's (S68).
@@ -806,6 +817,7 @@ export function AppFrame({
           {frame.guide ? <LayoutGuide guide={frame.guide} scale={scale} /> : null}
         </div>
       </CanvasNodeChrome>
+      {ruler ? ruler(pageBreakpoints) : null}
     </div>
   );
 }

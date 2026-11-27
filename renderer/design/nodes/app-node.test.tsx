@@ -993,3 +993,22 @@ test("3c flag off: one aspect-locked resizer, as today, that reports no side", (
   for (const control of controls) press(control);
   assert.deepEqual(started, []);
 });
+
+// ── 3c: breakpoints (S91) ──
+
+test("3c: breakpoints from an earlier route are forgotten", async () => {
+  setup();
+  const frame = appFrame();
+  const ruler = (widths: readonly number[]) => <output aria-label="Breakpoints">{widths.join(",")}</output>;
+  const view = render(<Harness frame={frame} ruler={ruler} />);
+  const iframe = await liveIframe();
+  const { guest } = giveWindow(iframe);
+  fireEvent.load(iframe);
+  post(guest, { type: "aiden-app:breakpoints", widths: [640, 768, 1024] });
+  assert.equal(screen.getByRole("status", { name: "Breakpoints" }).textContent, "640,768,1024");
+  // A list another window posted is never shown.
+  post({ postMessage: noop }, { type: "aiden-app:breakpoints", widths: [500] });
+  assert.equal(screen.getByRole("status", { name: "Breakpoints" }).textContent, "640,768,1024");
+  view.rerender(<Harness frame={{ ...frame, route: "/about" }} ruler={ruler} />);
+  assert.equal(screen.getByRole("status", { name: "Breakpoints" }).textContent, "");
+});

@@ -16,6 +16,13 @@ export const APP_BRIDGE_LIMITS = {
   requestId: 128,
 } as const;
 
+/**
+ * A page's breakpoints (Phase 3c, S91): up to `count` whole widths in CSS px,
+ * from `min` to `max`, strictly ascending. The bridge keeps 200–4000 before
+ * posting; the wider range here only bounds what a page can claim.
+ */
+export const APP_BREAKPOINT_LIMITS = { min: 1, max: 8000, count: 24 } as const;
+
 export type AppBridgeErrorKind = "error" | "rejection" | "overlay" | "module";
 export type AppBridgeSourceAt = { path: string; line: number };
 
@@ -25,6 +32,7 @@ export type AppBridgeMessage =
   | { type: "error"; kind: AppBridgeErrorKind; message: string; at?: AppBridgeSourceAt }
   | { type: "hmr" }
   | { type: "escape" }
+  | { type: "breakpoints"; widths: number[] }
   | { type: "source"; requestId: string; component?: string; owners: string[]; path?: string; line?: number }
   | Extract<DesignBridgeMessage, { type: "picked" | "anchors" }>;
 
@@ -83,6 +91,18 @@ function sourceAt(value: unknown): AppBridgeSourceAt | null {
   return line === null ? null : { path: raw.path, line };
 }
 
+function breakpointWidths(value: unknown): number[] | null {
+  if (!Array.isArray(value) || value.length > APP_BREAKPOINT_LIMITS.count) return null;
+  const widths: number[] = [];
+  for (const width of value) {
+    if (typeof width !== "number" || !Number.isInteger(width)) return null;
+    if (width < APP_BREAKPOINT_LIMITS.min || width > APP_BREAKPOINT_LIMITS.max) return null;
+    if (widths.length > 0 && width <= widths[widths.length - 1]!) return null;
+    widths.push(width);
+  }
+  return widths;
+}
+
 /**
  * Parses a message posted from an app frame. `origin` is the message event's
  * origin; anything that isn't a loopback app origin is dropped.
@@ -105,6 +125,10 @@ export function parseAppBridgeMessage(data: unknown, origin: string): AppBridgeM
     const at = raw.at === undefined ? null : sourceAt(raw.at);
     if (at) message.at = at;
     return message;
+  }
+  if (type === "breakpoints") {
+    const widths = breakpointWidths(raw.widths);
+    return widths ? { type, widths } : null;
   }
   if (type === "source") {
     const requestId = bounded(raw.requestId, APP_BRIDGE_LIMITS.requestId);

@@ -7,7 +7,7 @@ import test from "node:test";
 import { Window } from "happy-dom";
 
 import { parseAppBridgeMessage, type AppBridgeMessage } from "../../../../renderer/shared/design-canvas/app-bridge-messages.js";
-import { APP_BRIDGE_SOURCE, appBridgeInjection } from "./app-bridge-source.js";
+import { APP_BREAKPOINTS_SOURCE, APP_BRIDGE_SOURCE, appBridgeInjection } from "./app-bridge-source.js";
 
 const ORIGIN = "http://127.0.0.1:5173";
 
@@ -246,4 +246,209 @@ test("source-at answers through the React walk, and with no element, owners only
     type: "source", requestId: "s1", component: "Pricing", owners: ["App"], path: "src/Pricing.tsx", line: 13,
   });
   assert.deepEqual(sources.find((message) => message.requestId === "s2"), { type: "source", requestId: "s2", owners: [] });
+});
+
+// Breakpoints (Phase 3c, S91). happy-dom parses `@media`, `@supports`,
+// `@scope` and `@container` from `<style>`, but drops `@layer` blocks,
+// `@import` and media nested in a style rule, so those come from stub sheets
+// whose rule classes carry the browser's constructor names.
+
+class CSSMediaRule {
+  constructor(readonly media: { mediaText: string }, readonly cssRules: unknown[] = []) {}
+}
+class CSSLayerBlockRule {
+  constructor(readonly cssRules: unknown[]) {}
+}
+class CSSStyleRule {
+  constructor(readonly cssRules: unknown[]) {}
+}
+class CSSContainerRule {
+  constructor(readonly cssRules: unknown[]) {}
+}
+class CSSSupportsRule {
+  constructor(readonly cssRules: unknown[]) {}
+}
+class CSSImportRule {
+  constructor(readonly media: { mediaText: string }, public styleSheet: unknown) {}
+}
+const media = (text: string, rules: unknown[] = []) => new CSSMediaRule({ mediaText: text }, rules);
+const sheet = (cssRules: unknown[]) => ({ cssRules });
+/** Adds stub sheets after the page's own. */
+const withSheets = (...extra: unknown[]) => (window: Window) => {
+  const document = window.document;
+  let getter: (() => ArrayLike<unknown>) | undefined;
+  for (let proto: object | null = document; proto && !getter; proto = Object.getPrototypeOf(proto)) {
+    getter = Object.getOwnPropertyDescriptor(proto, "styleSheets")?.get;
+  }
+  assert.ok(getter, "happy-dom has document.styleSheets");
+  Object.defineProperty(document, "styleSheets", {
+    configurable: true,
+    get: () => [...Array.from(getter!.call(document)), ...extra],
+  });
+};
+const styled = (css: string) => `<!doctype html><html><head><style>${css}</style></head><body><main>App</main></body></html>`;
+const VITE = `<script type="module" src="/@vite/client"></script>`;
+const loaded = (view: Page) => {
+  view.window.dispatchEvent(new view.window.Event("load"));
+  return view;
+};
+const ticks = (view: Page) => of(view, "breakpoints").map((message) => message.widths);
+const latest = (view: Page): number[] | undefined => ticks(view)[ticks(view).length - 1];
+
+test("breakpoints come from min-width, max-width and range queries", () => {
+  const view = loaded(page(styled(`
+    @media (min-width: 768px) { a { color: red } }
+    @media (max-width: 767.98px) { a { color: blue } }
+    @media (width >= 64rem) { a { color: green } }
+    @media screen and (min-width: 40em) and (orientation: landscape) { a { color: gold } }
+    @media (min-height: 500px) { a { color: pink } }
+  `)));
+  const ready = view.sent.findIndex((message) => message.type === "ready");
+  const first = view.sent.findIndex((message) => message.type === "breakpoints");
+  assert.ok(ready !== -1 && first > ready, "the list follows ready");
+  assert.deepEqual(ticks(view), [[640, 768, 1024]]);
+});
+
+test("a chained range gives both ends", () => {
+  const view = loaded(page(styled(`@media (640px <= width < 1024px) { a { color: red } }`)));
+  assert.deepEqual(latest(view), [640, 1024]);
+});
+
+test("nested media inside @supports, @layer and @scope count; container queries don't", () => {
+  const css = `
+    @supports (display: grid) { @media (max-width: 499px) { a { color: red } } }
+    @scope (.card) { @media (min-width: 900px) { a { color: red } } }
+    @container (min-width: 400px) { a { color: red } }
+  `;
+  const stub = sheet([
+    new CSSLayerBlockRule([media("(min-width: 1200px)"), new CSSStyleRule([media("(width >= 40rem)")])]),
+    new CSSContainerRule([media("(min-width: 333px)")]),
+  ]);
+  const view = loaded(page(styled(css), { before: withSheets(stub) }));
+  assert.deepEqual(latest(view), [500, 640, 900, 1200], "a media rule nested in a style rule counts; one in a container doesn't");
+});
+
+test("an @import's media and its sheet count, without looping", () => {
+  const opened: string[] = [];
+  const counted = (name: string, rules: unknown[]) => ({
+    get cssRules() {
+      opened.push(name);
+      return rules;
+    },
+  });
+  const firstRules: unknown[] = [];
+  const first = counted("first", firstRules);
+  const second = counted("second", [new CSSImportRule({ mediaText: "all" }, first), media("(min-width: 500px)")]);
+  firstRules.push(new CSSImportRule({ mediaText: "screen and (min-width: 900px)" }, second), media("(max-width: 299px)"));
+  const view = loaded(page(PRICING, { before: withSheets(first, second) }));
+  assert.deepEqual(latest(view), [300, 500, 900]);
+  assert.deepEqual(opened.sort(), ["first", "second"], "each sheet of the cycle is read once");
+});
+
+test("a cross-origin sheet is skipped without throwing", () => {
+  const foreign = {
+    get cssRules(): never {
+      throw new Error("SecurityError: cannot access rules");
+    },
+  };
+  const foreignImport = sheet([new CSSImportRule({ mediaText: "(min-width: 700px)" }, foreign)]);
+  const view = loaded(page(styled(`@media (min-width: 600px) { a { color: red } }`), { before: withSheets(foreign, foreignImport) }));
+  assert.deepEqual(latest(view), [600, 700], "the import's own media still counts");
+  assert.deepEqual(of(view, "error"), []);
+});
+
+test("the walk stops at its caps", () => {
+  const read: number[] = [];
+  const rules = Array.from({ length: 5000 }, (_, index) => ({
+    get constructor() {
+      read.push(index);
+      return CSSMediaRule;
+    },
+    media: { mediaText: `(min-width: ${index < 4000 ? 300 : 250}px)` },
+    cssRules: [],
+  }));
+  const view = loaded(page(styled(""), { before: withSheets(sheet(rules)) }));
+  assert.deepEqual(latest(view), [300], "5 000 rules still give a result");
+  assert.ok(read.length > 0 && read.every((index) => index < 4000), "rules past 4 000 aren't read");
+
+  const opened: number[] = [];
+  const many = Array.from({ length: 70 }, (_, index) => ({
+    get cssRules() {
+      opened.push(index);
+      return [media(`(min-width: ${1000 + index}px)`)];
+    },
+  }));
+  const sheets = loaded(page(PRICING, { before: withSheets(...many) }));
+  assert.equal(new Set(opened).size, 64, "64 sheets are read");
+  assert.deepEqual([...new Set(opened)].sort((a, b) => a - b), Array.from({ length: 64 }, (_, index) => index), "the first 64");
+  assert.equal(latest(sheets)?.length, 24);
+
+  let nested: unknown = media("(min-width: 3000px)");
+  for (let level = 0; level < 9; level += 1) nested = new CSSSupportsRule([nested]);
+  const deep = sheet([nested, new CSSSupportsRule([media("(min-width: 400px)")])]);
+  const long = media(`(min-width: 800px)${" ".repeat(1100)}`);
+  const capped = loaded(page(styled(""), { before: withSheets(deep, sheet([long])) }));
+  assert.deepEqual(latest(capped), [400], "past depth 8 and over 1 024 characters, nothing is read");
+});
+
+test("out-of-range ticks are dropped and the list is capped at 24 before posting", () => {
+  const css = [
+    ...Array.from({ length: 30 }, (_, index) => `@media (min-width: ${300 + index * 10}px) { a { color: red } }`),
+    `@media (min-width: 120px) { a { color: red } }`,
+    `@media (min-width: 4500px) { a { color: red } }`,
+  ].join("\n");
+  const view = loaded(page(styled(css)));
+  const widths = latest(view)!;
+  assert.equal(widths.length, 24);
+  assert.ok(widths.every((width) => width >= 200 && width <= 4000), String(widths));
+  assert.deepEqual(widths, Array.from({ length: 24 }, (_, index) => 300 + index * 10), "the narrowest 24, in order");
+
+  const edges = loaded(page(styled(`@media (min-width: 199.5px) { a {} } @media (max-width: 3999px) { a {} } @media (max-width: 4000px) { a {} }`)));
+  assert.deepEqual(latest(edges), [200, 4000]);
+});
+
+test("removing every media rule sends an empty list once", async () => {
+  const view = loaded(page(`<!doctype html><html><head>${VITE}<style id="app">@media (min-width: 768px) { a { color: red } }</style></head><body></body></html>`));
+  await settle();
+  view.window.dispatchEvent(new view.window.Event("load"));
+  view.hot.fire("vite:afterUpdate");
+  assert.deepEqual(ticks(view), [[768]], "an unchanged list isn't sent again");
+
+  view.window.document.getElementById("app")!.textContent = "@media (min-width: 1024px) { a { color: red } }";
+  view.hot.fire("vite:afterUpdate");
+  view.window.document.getElementById("app")!.remove();
+  view.hot.fire("vite:afterUpdate");
+  view.hot.fire("vite:afterUpdate");
+  assert.deepEqual(ticks(view), [[768], [1024], []]);
+  assert.equal(of(view, "hmr").length, 4, "each update still posts hmr");
+
+  const plain = loaded(page(PRICING));
+  assert.deepEqual(ticks(plain), [], "a page with no breakpoints sends none");
+});
+
+test("breakpointsOf follows the tick table: min and >= ceil, max and > floor + 1, < ceil", () => {
+  const { breakpointsOf } = new Function(`return ${APP_BREAKPOINTS_SOURCE}`)() as { breakpointsOf(text: string): number[] };
+  const cases: Array<[string, number[]]> = [
+    ["(min-width: 600.5px)", [601]],
+    ["(max-width: 600.5px)", [601]],
+    ["(max-width: 600px)", [601]],
+    ["(width >= 600px)", [600]],
+    ["(600px <= width)", [600]],
+    ["(width <= 600px)", [601]],
+    ["(600px >= width)", [601]],
+    ["(width > 600px)", [601]],
+    ["(600px < width)", [601]],
+    ["(width < 600px)", [600]],
+    ["(600px > width)", [600]],
+    ["(1024px > width >= 640px)", [1024, 640]],
+    ["(MIN-WIDTH: 48EM)", [768]],
+    ["(min-width:30rem)", [480]],
+    ["not all and (min-width: 300px), print and (max-width: 299px)", [300, 300]],
+    ["((min-width: 500px) or (max-width: 200px))", [500, 201]],
+    ["(min-height: 600px), (orientation: portrait), (min-aspect-ratio: 16/9)", []],
+    ["(min-device-width: 600px), (min-width: 50%), (min-width: 40vw), (min-width: 600)", []],
+    ["(min-width: ), (min-width 600px), (width = 600px), width >= 600px", []],
+    ["", []],
+  ];
+  for (const [text, expected] of cases) assert.deepEqual(breakpointsOf(text), expected, text);
 });
