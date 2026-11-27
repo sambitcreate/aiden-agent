@@ -39,6 +39,7 @@
         "main/services/aiden-live-thread-store.test.ts",
         "main/services/app-controls-core.test.ts",
         "main/services/design-canvas/app-server/app-routes-core.test.ts",
+        "main/services/design-canvas/app-server/app-routes.test.ts",
         "main/services/workspace-files-touched.test.ts",
         "main/services/ask-user-question-coordinator.test.ts",
         "main/services/ask-user-question-extension.test.ts",
