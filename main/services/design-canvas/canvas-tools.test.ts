@@ -2066,3 +2066,131 @@ test("comments for Aiden are per chat: another chat's sent comment is not listed
   assert.equal((await store.get("chat-1")).comments.find((comment) => comment.id === "from-a")?.reply, undefined);
   assert.equal((await b("canvas_comment", { commentId: "from-b", reply: "On it." })).status, "ok");
 });
+
+// Live app frames (design mode v2 Phase 3a, D15, D17).
+type AppsDep = NonNullable<ToolDeps["apps"]>;
+function liveApps(roots: string[] = ["."], running: string[] = roots): AppsDep {
+  return {
+    snapshot: async (workspaceId) => ({
+      apps: roots.map((appRoot) => ({ workspaceId, appRoot, phase: running.includes(appRoot) ? ("running" as const) : ("stopped" as const) })),
+      candidates: [],
+      chosen: [],
+    }),
+  };
+}
+
+const definition = (tools: ReturnType<typeof createDesignCanvasTools>, name: string) => {
+  const tool = tools.find((entry) => entry.name === name)!;
+  return JSON.parse(JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+};
+
+test("with live apps off, canvas_place_frame and canvas_update_frame are exactly today's, and kind app is refused", async (t) => {
+  const { workspace, call } = await setup(t);
+  const base = { chatId: "chat-1", workspaceRoot: workspace, store: { get: async () => { throw new Error("unused"); }, update: async () => { throw new Error("unused"); }, workspaceIdOf: async () => "ws-1" }, broadcast: () => undefined } as unknown as ToolDeps;
+  const today = createDesignCanvasTools(base);
+  const off = createDesignCanvasTools({ ...base, designLive: false, apps: liveApps() });
+  for (const name of ["canvas_place_frame", "canvas_update_frame", "canvas_read"]) assert.deepEqual(definition(off, name), definition(today, name), name);
+  const on = createDesignCanvasTools({ ...base, designLive: true, apps: liveApps() });
+  assert.notDeepEqual(definition(on, "canvas_place_frame"), definition(today, "canvas_place_frame"));
+  const refused = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing" });
+  assert.match(String(refused.message), /^kind must be one of "file", /u);
+});
+
+test("Aiden places a live app frame for the workspace's one app, reuses it, and duplicate adds another", async (t) => {
+  const { store, call } = await setup(t, { designLive: true, apps: liveApps() });
+  const placed = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing" });
+  assert.equal(placed.status, "placed");
+  assert.equal(placed.placed, "new");
+  assert.deepEqual(
+    { kind: placed.frame.kind, appRoot: placed.frame.appRoot, route: placed.frame.route, viewport: placed.frame.viewport, scale: placed.frame.scale },
+    { kind: "app", appRoot: ".", route: "/pricing", viewport: { width: 1280, height: 800 }, scale: 0.5 },
+  );
+  assert.deepEqual({ w: placed.frame.box.w, h: placed.frame.box.h }, { w: 640, h: 436 }, "the viewport at its scale plus the title row");
+  const doc = await store.get("chat-1");
+  assert.equal(doc.frames.length, 1);
+  assert.equal(doc.frames[0]!.pageId, doc.pages[0]!.id);
+  assert.equal(doc.frames[0]!.createdBy, "aiden");
+
+  const again = await call("canvas_place_frame", { kind: "app", title: "Pricing again", route: "/pricing" });
+  assert.equal(again.placed, "reused");
+  assert.equal(again.frame.id, placed.frame.id);
+  const copy = await call("canvas_place_frame", { kind: "app", title: "Pricing copy", route: "/pricing", duplicate: true });
+  assert.equal(copy.placed, "copy");
+  assert.match(String((await call("canvas_place_frame", { kind: "app", title: "Dark", route: "/dark", dark: true })).message), /dark look/u);
+  const guided = await call("canvas_place_frame", { kind: "app", title: "Grid", route: "/grid", guide: "columns-12" });
+  assert.equal(guided.frame.guide, "columns-12", "a layout guide applies to an app frame");
+  const other = await call("canvas_place_frame", { kind: "app", title: "Home", width: 390, height: 844, scale: 0.4 });
+  assert.equal(other.frame.route, "/");
+  assert.deepEqual(other.frame.viewport, { width: 390, height: 844 });
+  assert.equal((await store.get("chat-1")).frames.length, 4);
+});
+
+test("an unknown app root, a bad route or viewport, and an unnamed root among several are errors naming the rule", async (t) => {
+  const one = await setup(t, { designLive: true, apps: liveApps() });
+  assert.match(String((await one.call("canvas_place_frame", { kind: "app", title: "A", appRoot: "web", route: "/" })).message), /appRoot "web" isn't an app.*"\."/u);
+  for (const route of ["pricing", "//evil.example/", "/a\\b", "/‮b"]) {
+    assert.match(String((await one.call("canvas_place_frame", { kind: "app", title: "A", route })).message), /route must start with one \//u, route);
+  }
+  assert.match(String((await one.call("canvas_place_frame", { kind: "app", title: "A", width: 100 })).message), /width must be a whole number from 200 to 4000/u);
+  assert.match(String((await one.call("canvas_place_frame", { kind: "app", title: "A", scale: 3 })).message), /scale must be from 0\.05 to 2/u);
+
+  const several = await setup(t, { designLive: true, apps: liveApps(["apps/web", "apps/admin"], []) });
+  assert.match(String((await several.call("canvas_place_frame", { kind: "app", title: "A" })).message), /appRoot.*"apps\/web", "apps\/admin"/u);
+  const chosen = await several.call("canvas_place_frame", { kind: "app", title: "Admin", appRoot: "apps/admin", route: "/users" });
+  assert.equal(chosen.frame.appRoot, "apps/admin", "a root that isn't running can still be placed");
+
+  const none = await setup(t, { designLive: true, apps: liveApps([]) });
+  assert.match(String((await none.call("canvas_place_frame", { kind: "app", title: "A" })).message), /no web app/u);
+});
+
+test("canvas_read lists app frames with their route and whether the app runs", async (t) => {
+  const { call } = await setup(t, { designLive: true, apps: liveApps(["apps/web", "apps/admin"], ["apps/web"]) });
+  await call("canvas_place_frame", { kind: "app", title: "Web", appRoot: "apps/web", route: "/pricing" });
+  await call("canvas_place_frame", { kind: "app", title: "Admin", appRoot: "apps/admin" });
+  const read = await call("canvas_read");
+  const apps = [...read.inView, ...read.outsideFrames].filter((frame: { kind: string }) => frame.kind === "app");
+  assert.deepEqual(
+    apps.map((frame: Record<string, unknown>) => ({ appRoot: frame.appRoot, route: frame.route, live: frame.live, viewport: frame.viewport, scale: frame.scale })),
+    [
+      { appRoot: "apps/web", route: "/pricing", live: true, viewport: { width: 1280, height: 800 }, scale: 0.5 },
+      { appRoot: "apps/admin", route: "/", live: false, viewport: { width: 1280, height: 800 }, scale: 0.5 },
+    ],
+  );
+});
+
+test("on an app frame: inspect and variants are refused, dark, paper and print mode error, colorScheme works and a resize keeps the aspect", async (t) => {
+  const { store, call } = await setup(t, { designLive: true, apps: liveApps(), inspect: async () => ({ text: "drawn" }) });
+  const placed = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing" });
+  const id = placed.frame.id as string;
+  assert.equal((await call("canvas_inspect", { frameId: id })).message, "canvas_inspect can't open live app frames yet.");
+  assert.match(String((await call("canvas_duplicate", { id, title: "Looks", variants: [{ label: "Dark", dark: true }] })).message), /Variants are of a page/u);
+  assert.match(String((await call("canvas_update_frame", { id, dark: true })).message), /dark look/u);
+  assert.match(String((await call("canvas_update_frame", { id, paper: "a4" })).message), /paper size/u);
+  assert.match(String((await call("canvas_update_frame", { id, printMode: "flow" })).message), /print mode/u);
+  assert.match(String((await call("canvas_update_frame", { id, designWidth: 390 })).message), /design width/u);
+  assert.match(String((await call("canvas_update_frame", { id, tweaks: { "--x": "1" } })).message), /tweaks/u);
+
+  const dark = await call("canvas_update_frame", { id, colorScheme: "dark" });
+  assert.equal(dark.status, "updated");
+  assert.equal((await store.get("chat-1")).frames[0]!.colorScheme, "dark");
+  assert.match(String((await call("canvas_update_frame", { id, colorScheme: "sepia" })).message), /colorScheme must be "light" or "dark"/u);
+
+  await call("canvas_update_frame", { id, w: 800, h: 450 });
+  const resized = (await store.get("chat-1")).frames[0]!;
+  assert.deepEqual(
+    { scale: resized.scale, viewport: resized.viewport, w: resized.w, h: resized.h },
+    { scale: 0.625, viewport: { width: 1280, height: 800 }, w: 800, h: 536 },
+  );
+  await call("canvas_update_frame", { id, h: 236 });
+  assert.equal((await store.get("chat-1")).frames[0]!.scale, 0.25, "a height alone sets the scale from the viewport's height");
+  const moved = await call("canvas_update_frame", { id, x: 40, y: 50, title: "Pricing live" });
+  assert.equal(moved.status, "updated");
+  const colorScheme = await call("canvas_update_frame", { id: placed.frame.id, colorScheme: "light" });
+  assert.equal(colorScheme.status, "updated");
+});
+
+test("colorScheme is refused on a frame that isn't an app frame", async (t) => {
+  const { call } = await setup(t, { designLive: true, apps: liveApps() });
+  const page = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
+  assert.match(String((await call("canvas_update_frame", { id: page.frame.id, colorScheme: "dark" })).message), /Only a live app frame has a colorScheme/u);
+});

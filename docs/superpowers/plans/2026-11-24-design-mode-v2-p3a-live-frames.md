@@ -1313,6 +1313,14 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
    - A bad `error.at` is dropped, and the error itself is kept.
    - `route` paths must start with `/`.
    - The shared core is a script fragment: the embedding bridge declares `host`, `doc`, `PREFIX` and `send`, then calls `handleCore(type, data)`.
+12. **`canvas_place_frame {kind: "app"}` details (Task 12).**
+    - The `apps` dep is `{ snapshot(workspaceId) }`, an async read of `designAppServers.snapshot`. The roots come from its apps, candidates and chosen roots, and `canvas_read` reads `live` from the same snapshot (phase `running`).
+    - A reused frame takes the new title. It takes a new viewport or scale only when `width`, `height` or `scale` is given.
+    - App placement runs the shared look fields: `guide` applies, and `dark`, `tweaks`, `paper` and `printMode` give the existing kind errors.
+    - `nextTo`, `groupId`, `page`, `x` and `y` work as for other kinds.
+    - `colorScheme` exists on `canvas_update_frame` only with live apps on; on a frame of another kind it gives "Only a live app frame has a colorScheme."
+    - Two behaviours apply in both flag states, since neither touches a tool definition: the aspect-locked resize (width decides the scale, else height) and the `canvas_inspect` refusal for app frames. With the flag off, a stored app frame still resizes correctly and isn't inspected.
+    - The D19 "no `report` call" test is left out. The canvas tools take no analytics dependency, so the test would assert something the code can't do (a tautology the test rules forbid).
 
 ### Task 2 probe outcomes (Linux Space, Electron 43.8.4)
 

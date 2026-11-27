@@ -252,6 +252,14 @@ export type CanvasFrameSummary = {
   radius?: number;
   paper?: DesignFrame["paper"];
   printMode?: DesignFrame["printMode"];
+  /** app: the app it shows, the route, its viewport and how it is drawn (design mode v2 Phase 3a). */
+  appRoot?: string;
+  route?: string;
+  viewport?: { width: number; height: number };
+  scale?: number;
+  colorScheme?: "light" | "dark";
+  /** app: whether its app is running now, which canvas_read adds. */
+  live?: boolean;
   openComments?: number;
 };
 
@@ -358,6 +366,15 @@ export function summarizeFrame(frame: DesignFrame, openComments = 0): CanvasFram
     ...(frame.radius !== undefined ? { radius: frame.radius } : {}),
     ...(frame.paper ? { paper: frame.paper } : {}),
     ...(frame.printMode ? { printMode: frame.printMode } : {}),
+    ...(frame.kind === "app"
+      ? {
+          ...(frame.appRoot !== undefined ? { appRoot: frame.appRoot } : {}),
+          ...(frame.route !== undefined ? { route: frame.route } : {}),
+          ...(frame.viewport ? { viewport: { ...frame.viewport } } : {}),
+          ...(frame.scale !== undefined ? { scale: frame.scale } : {}),
+          ...(frame.colorScheme ? { colorScheme: frame.colorScheme } : {}),
+        }
+      : {}),
     ...(openComments > 0 ? { openComments } : {}),
   };
 }
