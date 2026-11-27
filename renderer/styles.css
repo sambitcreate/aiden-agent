@@ -1762,21 +1762,14 @@ textarea {
 :root[data-reduce-motion="false"] .quick-view-card-slot[data-entering] {
   animation: quick-view-card-enter var(--motion-large-duration) var(--motion-large-easing) both;
 }
-:root[data-reduce-motion="false"] .app-update-banner[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms var(--motion-easing)
-    both;
+:root[data-reduce-motion="false"] .app-update-banner[data-state="open"],
+:root[data-reduce-motion="false"] .assistant-automation-approval[data-state="open"],
+:root[data-reduce-motion="false"] .scheduled-task-detail[data-state="open"],
+:root[data-reduce-motion="false"] .usage-data-notice[data-state="open"] {
+  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
 }
 :root[data-reduce-motion="false"] .app-update-banner[data-state="closed"] {
   animation: aiden-app-update-banner-out 120ms ease-in both;
-}
-:root[data-reduce-motion="false"] .assistant-automation-approval[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
-}
-:root[data-reduce-motion="false"] .scheduled-task-detail[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
-}
-:root[data-reduce-motion="false"] .usage-data-notice[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
 }
 :root[data-reduce-motion="false"] .agent-thinking-shimmer {
   color: transparent;
