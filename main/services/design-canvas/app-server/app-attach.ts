@@ -446,8 +446,9 @@ export type AttachRecheck =
  * one environment read of the subtree, where any background job's marker
  * refuses and an environment that can't be read fails closed. A member that
  * exited since the tick's process table runs nothing and is skipped. A failed
- * read, or a holder that has gone, is a failed look, not a verdict: the next
- * tick's table decides whether it was lost. Never signals anything.
+ * read, a holder that has gone, or a member that exec'd between macOS's two
+ * environment reads (`changed`) is a failed look, not a verdict: the next
+ * tick's look decides, over what runs after the exec. Never signals anything.
  */
 export async function recheckAttached(input: RecheckInput, deps: AttachScanDeps): Promise<AttachRecheck> {
   const notInApp = { ok: false, problem: "attach-not-in-app" } as const;
@@ -469,6 +470,7 @@ export async function recheckAttached(input: RecheckInput, deps: AttachScanDeps)
   if (!marks.ok) return { ok: false, reason: marks.reason };
   if (subtree.some((pid) => marks.marked.has(pid))) return notInApp;
   if (marks.gone.has(input.holder)) return { ok: false, reason: "the holder has gone" };
+  if (subtree.some((pid) => marks.changed.has(pid))) return { ok: false, reason: "a process exec'd during the environment read" };
   if (subtree.some((pid) => marks.unreadable.has(pid) && !marks.gone.has(pid))) return { ok: false, problem: "attach-unreachable" };
   return { ok: true };
 }

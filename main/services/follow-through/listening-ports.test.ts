@@ -703,6 +703,7 @@ test("processEnvironmentMarks on Linux reads each /proc/<pid>/environ and fails 
     marked: new Set([10]),
     unreadable: new Set([12, 13, 14]),
     gone: new Set([13]),
+    changed: new Set(),
   });
 });
 
@@ -730,7 +731,26 @@ test("processEnvironmentMarks on macOS compares ps -E with plain ps, so an envir
     marked: new Set([10]),
     unreadable: new Set([12, 13, 14]),
     gone: new Set([13]),
+    changed: new Set(),
   });
   assert.equal(calls.length, 2, "two ps calls cover every pid");
+  // 15 exec'd in place between the reads: both show it, running different commands.
+  command[15] = "python3 -c wait";
+  environment[15] = " PATH=/bin";
+  const exec = deps.exec;
+  const torn = fakeDeps({
+    platform: "darwin",
+    exec: async (file, args, limits) => {
+      const result = await exec(file, args, limits);
+      return result.ok && !args.includes("-E") ? { ...result, stdout: result.stdout.replace("python3 -c wait", "python3 -c settled") } : result;
+    },
+  });
+  assert.deepEqual(await processEnvironmentMarks([11, 15], "AIDEN_BACKGROUND_JOB=", torn), {
+    ok: true,
+    marked: new Set(),
+    unreadable: new Set([15]),
+    gone: new Set(),
+    changed: new Set([15]),
+  });
   assert.equal((await processEnvironmentMarks([10], "AIDEN_BACKGROUND_JOB=", fakeDeps({ exec: async () => ({ ok: false, reason: "timeout" }) }))).ok, false);
 });
