@@ -3392,6 +3392,14 @@ const acpScratch = createAcpScratchDirectories({
   onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
 });
 
+function endChatWorkspaceSession(chatId: string, label: string): Promise<void> {
+  // SessionEnd for a chat whose hooks ran in this process; never awaited.
+  endWorkspaceChatSession(chatId, undefined, {
+    onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a ${label}: ${lines.join("\n")}`),
+  });
+  return acpScratch.forget(chatId);
+}
+
 /** Keeps the admitted half of `start` out of reach of anything but `start`. */
 const runAdmittedStart = Symbol("runAdmittedStart");
 
@@ -7385,19 +7393,12 @@ export const llmClient = {
 
   /** Remove a deleted chat's agent scratch directory. Never throws. */
   forgetDeletedChat(chatId: string): Promise<void> {
-    // SessionEnd for a chat whose hooks ran in this process; never awaited.
-    endWorkspaceChatSession(chatId, undefined, {
-      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a deleted chat: ${lines.join("\n")}`),
-    });
-    return acpScratch.forget(chatId);
+    return endChatWorkspaceSession(chatId, "deleted chat");
   },
 
   /** Reset workspace-bound hook/ACP scratch state after attaching a chat to a new workspace. */
   resetChatWorkspaceSession(chatId: string): Promise<void> {
-    endWorkspaceChatSession(chatId, undefined, {
-      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a reattached chat: ${lines.join("\n")}`),
-    });
-    return acpScratch.forget(chatId);
+    return endChatWorkspaceSession(chatId, "reattached chat");
   },
 
   /** Close generation admission before chat deletion performs its first await. */
@@ -7418,8 +7419,7 @@ export const llmClient = {
   },
 
   beginChatExport(chatId: string): (() => void) | null {
-    if (chatDeletionGate.isDeleting(chatId)) return null;
-    return chatCopyGate.tryBegin(chatId, this.isChatBusy(chatId));
+    return this.beginChatCopy(chatId);
   },
 
   /** Claim one append-to-generation turn before its first persistence await. */
