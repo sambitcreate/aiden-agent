@@ -1,26 +1,26 @@
 {
   "target": "linux-x64",
-  "builtAt": "2026-11-05T01:07:58.947Z",
+  "builtAt": "2026-11-27T09:53:19.223Z",
   "helpers": {
     "worktree-remover": {
       "sha256": "2164f941716de1ac9a8f0fd3e37c8c9524150d4e4e126c764919e1ca7f0543e8",
-      "source": "bae1c9565939f0bbab15a5562685d17a41156733a0703ad0836e4b0294a45e48"
+      "source": "3c10f5038e443d60f10c4fa0938d7880b3c78d94097527e80d142cc9095af808"
     },
     "lease-flock": {
       "sha256": "604c1d624a183a956c1bfdc5783a860000b183072518df9e53523472071ab770",
-      "source": "cde095d4e2059b8cc252c2f63701ed279f84a6f909c7842bc36c35cdd87a0dcc"
+      "source": "e75663d1f80d2c14dfb027801c86032b5349ae1895b47cdd986b083004925bd9"
     },
     "subagent-run-store": {
-      "sha256": "c2663513ee239274959ad6a93d1e1542446459ee4d427b425ac18acdc82fcf44",
-      "source": "bc81557e2b452e62b924af03d61aa4d561b0a7b3e985b17bc7d6b1e4e2b5f989"
+      "sha256": "be46b9822429ad28b49809e0444b74a042efa76740b854a5b1d80cdb09828939",
+      "source": "ea98b9e0f1ab61e80ed3a6274b0452d0f743c019d0cd6d51438ad1a6b4eea156"
     },
     "subagent-shell-runner": {
       "sha256": "190ea6353dc8e26a137cafd718df76238dc23a8134535fa61c044863cc025c48",
-      "source": "4dbcd343b4f0c0546f7a64b21d67c3115d29f50128e03c02d9ca149cc62b8cb7"
+      "source": "8e6d40cd194d9b2eff81d2232c80e814cdee621555caf49fb2c828e4eb98452d"
     },
     "subagent-file-mutator": {
-      "sha256": "bc729382a59be1f92b5e51246201663297c47dbe15ef8791f913313f76e5f9db",
-      "source": "4843ac1264748c6b3376a2af0ebec983a0e4cb79268aca1c3ba851d42b7c5d69"
+      "sha256": "a6c8358e358943834934689445abec16a052ba26127992c9ec8bb834d13f7220",
+      "source": "ab726d5927f9792e0b97c3aae7718bef73c194d932d3eb45199204652e3e78e5"
     }
   }
 }

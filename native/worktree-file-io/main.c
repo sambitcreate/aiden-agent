@@ -16,6 +16,7 @@
 #include <sys/types.h>
 #include <sys/xattr.h>
 #include <unistd.h>
+#include "../shared/aiden-identity.h"
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0
@@ -182,35 +183,11 @@ static int parent_at(int root, const char *relative, int create,
   }
 }
 
-static int exclusive_regular(const struct stat *metadata) {
-  return S_ISREG(metadata->st_mode) && metadata->st_nlink == 1;
-}
-
 static int same_source(const struct stat *before, const struct stat *after) {
   return before->st_dev == after->st_dev &&
          before->st_ino == after->st_ino &&
          before->st_size == after->st_size &&
-         before->st_mtimespec.tv_sec == after->st_mtimespec.tv_sec &&
-         before->st_mtimespec.tv_nsec == after->st_mtimespec.tv_nsec;
-}
-
-static void digest_hex(const unsigned char bytes[CC_SHA256_DIGEST_LENGTH],
-                       char hex[CC_SHA256_DIGEST_LENGTH * 2 + 1]) {
-  static const char digits[] = "0123456789abcdef";
-  for (size_t index = 0; index < CC_SHA256_DIGEST_LENGTH; index++) {
-    hex[index * 2] = digits[bytes[index] >> 4];
-    hex[index * 2 + 1] = digits[bytes[index] & 15];
-  }
-  hex[CC_SHA256_DIGEST_LENGTH * 2] = '\0';
-}
-
-static int valid_digest(const char *value) {
-  if (strlen(value) != CC_SHA256_DIGEST_LENGTH * 2) return 0;
-  for (size_t index = 0; index < CC_SHA256_DIGEST_LENGTH * 2; index++) {
-    if (!((value[index] >= '0' && value[index] <= '9') ||
-          (value[index] >= 'a' && value[index] <= 'f'))) return 0;
-  }
-  return 1;
+         aiden_same_timestamp(before->st_mtimespec, after->st_mtimespec);
 }
 
 static int test_checkpoint(char marker) {
@@ -259,7 +236,7 @@ static int file_digest(int descriptor, uint64_t length,
   }
   unsigned char bytes[CC_SHA256_DIGEST_LENGTH];
   CC_SHA256_Final(bytes, &digest);
-  digest_hex(bytes, hex);
+  aiden_hex_digest(bytes, hex);
   return 1;
 }
 
@@ -320,7 +297,7 @@ static int list_directory(int argc, char **argv) {
     if (++scanned > 8000 || emitted >= 4000) { truncated = 1; break; }
     struct stat child;
     if (fstatat(current, entry->d_name, &child, AT_SYMLINK_NOFOLLOW) != 0) { truncated = 1; continue; }
-    if (!S_ISDIR(child.st_mode) && !exclusive_regular(&child)) continue;
+    if (!S_ISDIR(child.st_mode) && !aiden_exclusive_regular(&child)) continue;
     if (S_ISDIR(child.st_mode) && skip_directory(entry->d_name)) continue;
     size_t length = strlen(entry->d_name);
     if (length == 0 || length > 255) { truncated = 1; continue; }
@@ -342,7 +319,7 @@ static int editor_file(int argc, char **argv, int edit) {
   if (argc != (edit ? 10 : 8) || !valid_editor_relative(argv[5]) ||
       !decimal(argv[3], &root_device) || !decimal(argv[4], &root_inode) ||
       !decimal(argv[6], &file_device) || !decimal(argv[7], &file_inode) ||
-      (edit && (!valid_digest(argv[8]) || !decimal(argv[9], &input_length) ||
+      (edit && (!aiden_valid_hex_digest(argv[8]) || !decimal(argv[9], &input_length) ||
                 input_length > MAX_EDITOR_BYTES))) return fail("invalid_input");
   unsigned char *input = NULL;
   if (edit) {
@@ -367,7 +344,7 @@ static int editor_file(int argc, char **argv, int edit) {
   }
   int source = openat(parent, leaf, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
   struct stat before, after;
-  if (source < 0 || fstat(source, &before) != 0 || !exclusive_regular(&before) ||
+  if (source < 0 || fstat(source, &before) != 0 || !aiden_exclusive_regular(&before) ||
       before.st_size < 0 || (uint64_t)before.st_dev != file_device ||
       (uint64_t)before.st_ino != file_inode) {
     if (source >= 0) close(source);
@@ -386,13 +363,13 @@ static int editor_file(int argc, char **argv, int edit) {
     total += (size_t)count;
   }
   if (test_checkpoint('B') != 0 || fstat(source, &after) != 0 ||
-      !exclusive_regular(&after) || !same_source(&before, &after)) {
+      !aiden_exclusive_regular(&after) || !same_source(&before, &after)) {
     free(content); close(source); free(input); close(parent); return fail("source_changed");
   }
   unsigned char digest_bytes[CC_SHA256_DIGEST_LENGTH];
   char old_hash[CC_SHA256_DIGEST_LENGTH * 2 + 1];
   CC_SHA256(content, (CC_LONG)total, digest_bytes);
-  digest_hex(digest_bytes, old_hash);
+  aiden_hex_digest(digest_bytes, old_hash);
   if (!edit) {
     printf("r %zu %u %lld %ld %s\n", total,
            (unsigned)(before.st_mode & 07777), (long long)before.st_mtimespec.tv_sec,
@@ -413,7 +390,7 @@ static int editor_file(int argc, char **argv, int edit) {
   }
   char new_hash[CC_SHA256_DIGEST_LENGTH * 2 + 1];
   CC_SHA256(input, (CC_LONG)input_length, digest_bytes);
-  digest_hex(digest_bytes, new_hash);
+  aiden_hex_digest(digest_bytes, new_hash);
   unsigned char nonce[16];
   arc4random_buf(nonce, sizeof(nonce));
   char suffix[sizeof(nonce) * 2 + 1];
@@ -435,9 +412,9 @@ static int editor_file(int argc, char **argv, int edit) {
   if (good && (fchmod(target, before.st_mode & 07777) != 0 || fsync(target) != 0)) good = 0;
   struct stat current;
   if (good && test_checkpoint('D') != 0) good = 0;
-  if (good && (fstat(source, &after) != 0 || !exclusive_regular(&after) || !same_source(&before, &after) ||
+  if (good && (fstat(source, &after) != 0 || !aiden_exclusive_regular(&after) || !same_source(&before, &after) ||
       fstatat(parent, leaf, &current, AT_SYMLINK_NOFOLLOW) != 0 ||
-      !exclusive_regular(&current) || !same_source(&before, &current))) good = 0;
+      !aiden_exclusive_regular(&current) || !same_source(&before, &current))) good = 0;
   if (!good) {
     close(target); (void)unlinkat(parent, temporary, 0);
     close(source); close(parent); return fail("source_changed");
@@ -449,9 +426,9 @@ static int editor_file(int argc, char **argv, int edit) {
   struct stat displaced;
   int moved = openat(parent, recovery, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
   char moved_hash[CC_SHA256_DIGEST_LENGTH * 2 + 1];
-  good = moved >= 0 && fstat(moved, &displaced) == 0 && exclusive_regular(&displaced) && same_source(&before, &displaced) &&
+  good = moved >= 0 && fstat(moved, &displaced) == 0 && aiden_exclusive_regular(&displaced) && same_source(&before, &displaced) &&
       file_digest(moved, (uint64_t)before.st_size, moved_hash) && strcmp(moved_hash, old_hash) == 0 &&
-      fstat(moved, &displaced) == 0 && exclusive_regular(&displaced) && same_source(&before, &displaced);
+      fstat(moved, &displaced) == 0 && aiden_exclusive_regular(&displaced) && same_source(&before, &displaced);
   if (moved >= 0) close(moved);
   if (!good) {
     (void)linkat(parent, recovery, parent, leaf, 0);
@@ -474,7 +451,7 @@ static int editor_file(int argc, char **argv, int edit) {
       saved.st_dev == installed.st_dev && saved.st_ino == installed.st_ino &&
       fsync(parent) == 0;
   if (good) good = unlinkat(parent, temporary, 0) == 0 &&
-      fstat(target, &saved) == 0 && exclusive_regular(&saved);
+      fstat(target, &saved) == 0 && aiden_exclusive_regular(&saved);
   close(target); close(source); close(parent);
   if (!good) return fail("io_failed");
   /* Report the installed descriptor's identity and the staged content hash. */
@@ -1008,7 +985,7 @@ int main(int argc, char **argv) {
   if (!decimal(argv[3], &source_device) || !decimal(argv[4], &source_inode) ||
       !decimal(argv[7], &target_device) || !decimal(argv[8], &target_inode) ||
       !decimal(argv[10], &limit) || limit > MAX_FILE_BYTES ||
-      (restore && !valid_digest(argv[11])) ||
+      (restore && !aiden_valid_hex_digest(argv[11])) ||
       (!restore && strcmp(argv[11], "-") != 0)) return fail("invalid_input");
   uint64_t mode_value = 0;
   if (strcmp(argv[12], "source") != 0 &&
@@ -1111,7 +1088,7 @@ int main(int argc, char **argv) {
   unsigned char digest_bytes[CC_SHA256_DIGEST_LENGTH];
   char hex[CC_SHA256_DIGEST_LENGTH * 2 + 1];
   CC_SHA256_Final(digest_bytes, &digest);
-  digest_hex(digest_bytes, hex);
+  aiden_hex_digest(digest_bytes, hex);
   if (fstat(source, &after) != 0 || !same_source(&before, &after) ||
       copied != (uint64_t)before.st_size) good = 0;
   if (restore && strcmp(hex, argv[11]) != 0) good = 0;

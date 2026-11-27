@@ -17,6 +17,7 @@
 #include <sys/types.h>
 #include <sys/xattr.h>
 #include <unistd.h>
+#include "../shared/aiden-identity.h"
 
 #define MAX_CONTENT_BYTES 200000
 #define MAX_HTML_CONTENT_BYTES (512 * 1024)
@@ -87,52 +88,44 @@ struct Transaction {
   int commit_parent_synced;
 };
 
-static int same_timestamp(struct timespec left, struct timespec right) {
-  return left.tv_sec == right.tv_sec && left.tv_nsec == right.tv_nsec;
-}
-
-static int exclusive_regular(const struct stat *identity) {
-  return S_ISREG(identity->st_mode) && identity->st_nlink == 1;
-}
-
 static int same_read_identity(const struct stat *left,
                               const struct stat *right) {
 #ifdef __APPLE__
-  return exclusive_regular(left) && exclusive_regular(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
          left->st_gid == right->st_gid && left->st_flags == right->st_flags &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         aiden_same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
+         aiden_same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
+         aiden_same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
 #else
-  return exclusive_regular(left) && exclusive_regular(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
          left->st_gid == right->st_gid && left->st_size == right->st_size &&
-         same_timestamp(left->st_mtim, right->st_mtim) &&
-         same_timestamp(left->st_ctim, right->st_ctim);
+         aiden_same_timestamp(left->st_mtim, right->st_mtim) &&
+         aiden_same_timestamp(left->st_ctim, right->st_ctim);
 #endif
 }
 
 static int same_identity(const struct stat *left, const struct stat *right) {
 #ifdef __APPLE__
-  return exclusive_regular(left) && exclusive_regular(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
          left->st_gid == right->st_gid && left->st_flags == right->st_flags &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         aiden_same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
+         aiden_same_timestamp(left->st_ctimespec, right->st_ctimespec) &&
+         aiden_same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
 #else
-  return exclusive_regular(left) && exclusive_regular(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
          left->st_gid == right->st_gid && left->st_size == right->st_size &&
-         same_timestamp(left->st_mtim, right->st_mtim) &&
-         same_timestamp(left->st_ctim, right->st_ctim);
+         aiden_same_timestamp(left->st_mtim, right->st_mtim) &&
+         aiden_same_timestamp(left->st_ctim, right->st_ctim);
 #endif
 }
 
@@ -140,25 +133,25 @@ static int same_identity(const struct stat *left, const struct stat *right) {
 static int same_renamed_identity(const struct stat *left,
                                  const struct stat *right) {
 #ifdef __APPLE__
-  return exclusive_regular(left) && exclusive_regular(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
          left->st_gid == right->st_gid && left->st_flags == right->st_flags &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         aiden_same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
+         aiden_same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
 #else
-  return exclusive_regular(left) && exclusive_regular(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_uid == right->st_uid &&
          left->st_gid == right->st_gid && left->st_size == right->st_size &&
-         same_timestamp(left->st_mtim, right->st_mtim);
+         aiden_same_timestamp(left->st_mtim, right->st_mtim);
 #endif
 }
 
 static int same_file_object(const struct stat *left,
                             const struct stat *right) {
-  return exclusive_regular(left) && exclusive_regular(right) &&
+  return aiden_exclusive_regular(left) && aiden_exclusive_regular(right) &&
          left->st_dev == right->st_dev && left->st_ino == right->st_ino;
 }
 
@@ -184,14 +177,14 @@ static int same_renamed_entry(const struct stat *left,
          left->st_uid == right->st_uid && left->st_gid == right->st_gid &&
          left->st_flags == right->st_flags &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
-         same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
+         aiden_same_timestamp(left->st_mtimespec, right->st_mtimespec) &&
+         aiden_same_timestamp(left->st_birthtimespec, right->st_birthtimespec);
 #else
   return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_mode == right->st_mode && left->st_nlink == right->st_nlink &&
          left->st_uid == right->st_uid && left->st_gid == right->st_gid &&
          left->st_size == right->st_size &&
-         same_timestamp(left->st_mtim, right->st_mtim);
+         aiden_same_timestamp(left->st_mtim, right->st_mtim);
 #endif
 }
 
@@ -550,33 +543,12 @@ static int matches_expected_provenance(const struct Transaction *transaction,
           memcmp(value, transaction->expected_provenance, length) == 0);
 }
 
-static int valid_hex_digest(const char *value) {
-  if (strlen(value) != SHA256_HEX_BYTES)
-    return 0;
-  for (size_t index = 0; index < SHA256_HEX_BYTES; index += 1) {
-    if (!((value[index] >= '0' && value[index] <= '9') ||
-          (value[index] >= 'a' && value[index] <= 'f')))
-      return 0;
-  }
-  return 1;
-}
-
-static void encode_digest(const unsigned char digest[CC_SHA256_DIGEST_LENGTH],
-                          char output[SHA256_HEX_BYTES + 1]) {
-  static const char hex[] = "0123456789abcdef";
-  for (size_t index = 0; index < CC_SHA256_DIGEST_LENGTH; index += 1) {
-    output[index * 2] = hex[digest[index] >> 4];
-    output[index * 2 + 1] = hex[digest[index] & 0x0f];
-  }
-  output[SHA256_HEX_BYTES] = '\0';
-}
-
 static int sha256_bytes(const unsigned char *bytes, size_t length,
                         char output[SHA256_HEX_BYTES + 1]) {
   unsigned char digest[CC_SHA256_DIGEST_LENGTH];
   if (CC_SHA256(bytes, (CC_LONG)length, digest) == NULL)
     return -1;
-  encode_digest(digest, output);
+  aiden_hex_digest(digest, output);
   return 0;
 }
 
@@ -585,7 +557,7 @@ static int sha256_descriptor(int descriptor, size_t maximum,
                              struct stat *verified_identity) {
   struct stat before;
   struct stat after;
-  if (fstat(descriptor, &before) != 0 || !exclusive_regular(&before) ||
+  if (fstat(descriptor, &before) != 0 || !aiden_exclusive_regular(&before) ||
       before.st_size < 0 || (uint64_t)before.st_size > maximum)
     return -1;
   CC_SHA256_CTX context;
@@ -608,24 +580,10 @@ static int sha256_descriptor(int descriptor, size_t maximum,
   if (CC_SHA256_Final(digest, &context) != 1 || fstat(descriptor, &after) != 0 ||
       !same_identity(&before, &after))
     return -1;
-  encode_digest(digest, output);
+  aiden_hex_digest(digest, output);
   if (verified_identity != NULL)
     *verified_identity = after;
   return 0;
-}
-
-static int base64_value(unsigned char value) {
-  if (value >= 'A' && value <= 'Z')
-    return value - 'A';
-  if (value >= 'a' && value <= 'z')
-    return value - 'a' + 26;
-  if (value >= '0' && value <= '9')
-    return value - '0' + 52;
-  if (value == '+')
-    return 62;
-  if (value == '/')
-    return 63;
-  return -1;
 }
 
 static int decode_base64(const char *encoded, size_t maximum,
@@ -652,14 +610,14 @@ static int decode_base64(const char *encoded, size_t maximum,
     return -1;
   size_t output = 0;
   for (size_t index = 0; index < encoded_length; index += 4) {
-    int first = base64_value((unsigned char)encoded[index]);
-    int second = base64_value((unsigned char)encoded[index + 1]);
+    int first = aiden_base64_value((unsigned char)encoded[index]);
+    int second = aiden_base64_value((unsigned char)encoded[index + 1]);
     int third = encoded[index + 2] == '='
                     ? 0
-                    : base64_value((unsigned char)encoded[index + 2]);
+                    : aiden_base64_value((unsigned char)encoded[index + 2]);
     int fourth = encoded[index + 3] == '='
                      ? 0
-                     : base64_value((unsigned char)encoded[index + 3]);
+                     : aiden_base64_value((unsigned char)encoded[index + 3]);
     int final_group = index + 4 == encoded_length;
     if (first < 0 || second < 0 || third < 0 || fourth < 0 ||
         (!final_group &&
@@ -890,29 +848,11 @@ static int revalidate_parent(int root_fd, const char *root_path,
   return matches ? RESULT_OK : RESULT_CONFLICT;
 }
 
-static void random_uuid(char output[37]) {
-  static const char hex[] = "0123456789abcdef";
-  uint8_t bytes[16];
-  arc4random_buf(bytes, sizeof(bytes));
-  bytes[6] = (uint8_t)((bytes[6] & 0x0f) | 0x40);
-  bytes[8] = (uint8_t)((bytes[8] & 0x3f) | 0x80);
-  size_t byte_index = 0;
-  size_t output_index = 0;
-  for (; byte_index < sizeof(bytes); byte_index += 1) {
-    if (output_index == 8 || output_index == 13 || output_index == 18 ||
-        output_index == 23)
-      output[output_index++] = '-';
-    output[output_index++] = hex[bytes[byte_index] >> 4];
-    output[output_index++] = hex[bytes[byte_index] & 0x0f];
-  }
-  output[36] = '\0';
-}
-
 static int create_stage(int parent_fd, const char *request_id,
                         char name[NAME_MAX + 1]) {
   for (int attempt = 0; attempt < MAX_NAME_ATTEMPTS; attempt += 1) {
     char uuid[37];
-    random_uuid(uuid);
+    aiden_random_uuid(uuid);
     int length = snprintf(name, NAME_MAX + 1, "%s%s-%s.tmp", STAGING_PREFIX,
                           request_id, uuid);
     if (length <= 0 || length > NAME_MAX)
@@ -1032,7 +972,7 @@ static int prepare_transaction(int root_fd, const char *root_path,
   if (root_result != RESULT_OK)
     return root_result;
   if (!valid_request_id(request_id) ||
-      !(strcmp(expected, "absent") == 0 || valid_hex_digest(expected)))
+      !(strcmp(expected, "absent") == 0 || aiden_valid_hex_digest(expected)))
     return RESULT_INVALID;
   unsigned char *relative_path = NULL;
   unsigned char *contents = NULL;
@@ -1226,7 +1166,7 @@ static int read_html_file(int root_fd, const char *root_path,
   struct stat after;
   unsigned char *contents = NULL;
   int result = RESULT_CONFLICT;
-  if (fstat(descriptor, &before) != 0 || !exclusive_regular(&before) ||
+  if (fstat(descriptor, &before) != 0 || !aiden_exclusive_regular(&before) ||
       before.st_size < 1 || before.st_size > MAX_HTML_CONTENT_BYTES)
     goto cleanup;
   if (test_pause("AIDEN_SUBAGENT_FILE_MUTATOR_TEST_PAUSE_AFTER_HTML_OPEN") != 0)
@@ -1258,7 +1198,7 @@ static int prepare_inspected_transaction(
     const char *encoded_contents) {
   if (transaction->phase != PHASE_INSPECTED ||
       strcmp(transaction->request_id, request_id) != 0 ||
-      !(strcmp(expected, "absent") == 0 || valid_hex_digest(expected)))
+      !(strcmp(expected, "absent") == 0 || aiden_valid_hex_digest(expected)))
     return RESULT_INVALID;
   if ((transaction->expected_absent && strcmp(expected, "absent") != 0) ||
       (!transaction->expected_absent &&
@@ -1877,7 +1817,7 @@ static int parent_edit_file(int argc, char **argv) {
       parse_identity(argv[6], &file_device) != 0 ||
       parse_identity(argv[7], &file_inode) != 0 ||
       parse_identity(argv[9], &bytes) != 0 ||
-      bytes > MAX_PARENT_EDIT_BYTES || !valid_hex_digest(argv[8]))
+      bytes > MAX_PARENT_EDIT_BYTES || !aiden_valid_hex_digest(argv[8]))
     return parent_edit_error("invalid_input");
 
   unsigned char *contents = malloc(bytes == 0 ? 1 : (size_t)bytes);
@@ -1924,7 +1864,7 @@ static int parent_edit_file(int argc, char **argv) {
                        O_RDWR | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
   struct stat before, after, named;
   if (file_fd < 0 || fstat(file_fd, &before) != 0 ||
-      !exclusive_regular(&before) ||
+      !aiden_exclusive_regular(&before) ||
       (uint64_t)before.st_dev != file_device ||
       (uint64_t)before.st_ino != file_inode ||
       before.st_size < 0 || before.st_size > MAX_PARENT_EDIT_BYTES) {
@@ -1975,7 +1915,7 @@ static int parent_write_file(int argc, char **argv) {
       (overwriting &&
        (parse_identity(argv[7], &file_device) != 0 ||
         parse_identity(argv[8], &file_inode) != 0 ||
-        !valid_hex_digest(argv[9]))))
+        !aiden_valid_hex_digest(argv[9]))))
     return parent_edit_error("invalid_input");
 
   unsigned char *contents = malloc(bytes == 0 ? 1 : (size_t)bytes);
@@ -2023,7 +1963,7 @@ static int parent_write_file(int argc, char **argv) {
   int file_fd = openat(parent_fd, leaf, flags, 0666);
   struct stat before, after, named;
   if (file_fd < 0 || fstat(file_fd, &before) != 0 ||
-      !exclusive_regular(&before) ||
+      !aiden_exclusive_regular(&before) ||
       (overwriting && ((uint64_t)before.st_dev != file_device ||
                        (uint64_t)before.st_ino != file_inode ||
                        before.st_size < 0 ||
