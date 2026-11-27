@@ -560,9 +560,6 @@ export const AIDEN_REMOTE_SIMULATOR_CAPABILITIES = [
   "simulators:control",
 ] as const;
 
-export type AidenRemoteSimulatorCapability =
-  (typeof AIDEN_REMOTE_SIMULATOR_CAPABILITIES)[number];
-
 /**
  * Phone-only opt-in (contract revision 25): watching and touching the serving
  * Mac's shared iOS Simulators from Aiden On The Go. Only `iphone`, `ipad` and
@@ -619,8 +616,6 @@ export const AIDEN_REMOTE_PHONE_RUN_CAPABILITIES = [
 export const AIDEN_REMOTE_BOT_CARD_CAPABILITIES = [
   "bot:cards",
 ] as const;
-
-export type AidenRemoteBotCardCapability = (typeof AIDEN_REMOTE_BOT_CARD_CAPABILITIES)[number];
 
 /**
  * Contract revision 30: a device holding `bot:activity` receives the session
@@ -1077,7 +1072,6 @@ export const AIDEN_REMOTE_RUN_EVENT_TYPES = [
   "cancelled",
   "run.ended",
 ] as const;
-export type AidenRemoteRunEventType = (typeof AIDEN_REMOTE_RUN_EVENT_TYPES)[number];
 
 export const AIDEN_REMOTE_RUN_STATES = [
   "working",
@@ -1113,7 +1107,6 @@ export const AIDEN_REMOTE_EVENT_TYPES = [
 ] as const;
 
 export type AidenRemoteEventType = (typeof AIDEN_REMOTE_EVENT_TYPES)[number];
-export type AidenRemoteTerminalEventType = "done" | "error" | "cancelled";
 
 export const AIDEN_REMOTE_ERROR_CODES = [
   "invalid_request",
@@ -1728,7 +1721,6 @@ export const AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES = [
   "issues",
   "closed",
 ] as const;
-export type AidenRemoteBotSessionEventType = (typeof AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES)[number];
 
 export type AidenRemoteConnectCardStatus = "pending" | "connected" | "dismissed";
 
@@ -1818,8 +1810,6 @@ export type AidenRemoteBotSharedImageMimeType = (typeof AIDEN_REMOTE_BOT_SHARED_
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 /** Revision 45: the longest image name on the wire. */
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_NAME_MAX_CHARS = 255;
-/** Session entry types that only `bot:images` devices receive. */
-export const AIDEN_REMOTE_BOT_IMAGE_ENTRY_TYPES = ["shared_image"] as const;
 
 export const AIDEN_REMOTE_BOT_ROUTINE_PROPOSAL_STATUSES = ["pending", "accepted", "dismissed"] as const;
 export type AidenRemoteBotRoutineProposalStatus = (typeof AIDEN_REMOTE_BOT_ROUTINE_PROPOSAL_STATUSES)[number];
@@ -2126,16 +2116,6 @@ export type AidenRemoteBotIssueKind = (typeof AIDEN_REMOTE_BOT_ISSUE_KINDS)[numb
  * crosses the wire: a card that offered only that shows "Open on your Mac".
  */
 export type AidenRemoteBotIssueAction = Exclude<BotIssueAction, { kind: "open_settings" }>;
-
-/** Every action kind a phone may send. */
-export const AIDEN_REMOTE_BOT_ISSUE_ACTION_KINDS = [
-  "open_chat",
-  "resume_routine",
-  "stop_run",
-  "keep_waiting",
-  "allow_folder",
-  "dismiss_access",
-] as const;
 
 /** How many issues one session projects (the store keeps up to 8 open and 50 settled). */
 export const AIDEN_REMOTE_BOT_ISSUE_MAX = BOT_ISSUE_LIMITS.openPerBot + BOT_ISSUE_LIMITS.retainedResolved;
@@ -3254,7 +3234,6 @@ export function assertNoForbiddenWireKeys(value: unknown, location = "fixture"):
 }
 
 export const AIDEN_REMOTE_SNAPSHOT_REASONS = ["gap", "reset"] as const;
-export type AidenRemoteSnapshotReason = (typeof AIDEN_REMOTE_SNAPSHOT_REASONS)[number];
 
 const EVENT_PAYLOAD_KEYS: Record<AidenRemoteEventType, readonly string[]> = {
   snapshot: ["chatId", "turnId", "nextSequence"],
