@@ -15,7 +15,7 @@ import {
   type DeviceSettings,
   type DeviceTextSize,
 } from "../../../renderer/shared/devices.js";
-import { DeviceActionUnavailableError, type DeviceActionCommand } from "./device-actions.js";
+import { DEVICE_ACTION_LABELS, DeviceActionUnavailableError, type DeviceActionCommand } from "./device-actions.js";
 import type { DeviceHostReady } from "./device-host.js";
 
 const ADB_ACTION_TIMEOUT_MS = 30_000;
@@ -146,19 +146,8 @@ export function androidActionCommands(input: DeviceActionInput): AndroidActionSt
 }
 
 const ACTION_LABELS: Record<DeviceActionInput["type"], string> = {
-  setAppearance: "change the appearance",
-  setTextSize: "change the text size",
+  ...DEVICE_ACTION_LABELS,
   setToggle: "change the setting",
-  setLiquidGlass: "change Liquid Glass",
-  setColorFilter: "change the color filter",
-  openUrl: "open the link",
-  launchApp: "launch the app",
-  terminateApp: "quit the app",
-  sendPush: "deliver the notification",
-  setPermission: "change the permission",
-  setLocation: "set the location",
-  clearLocation: "clear the location",
-  setOrientation: "rotate",
 };
 
 export async function runAndroidDeviceAction(ready: DeviceHostReady, input: DeviceActionInput): Promise<void> {

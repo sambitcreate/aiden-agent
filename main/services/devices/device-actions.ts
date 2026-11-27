@@ -159,7 +159,7 @@ export function iosActionCommand(
   }
 }
 
-const ACTION_LABELS: Record<DeviceActionInput["type"], string> = {
+export const DEVICE_ACTION_LABELS: Readonly<Record<DeviceActionInput["type"], string>> = {
   setAppearance: "change the appearance",
   setTextSize: "change the text size",
   setToggle: "change the accessibility setting",
@@ -180,7 +180,7 @@ export async function runDeviceAction(ready: DeviceHostReady, input: DeviceActio
   const result = await ready.run(command, args, { timeoutMs: SIMCTL_ACTION_TIMEOUT_MS, ...options });
   if (result.code !== 0) {
     const detail = result.stderr.trim().split("\n").slice(-1)[0]?.trim();
-    throw new Error(`The simulator could not ${ACTION_LABELS[input.type]}${detail ? `: ${detail}` : "."}`);
+    throw new Error(`The simulator could not ${DEVICE_ACTION_LABELS[input.type]}${detail ? `: ${detail}` : "."}`);
   }
 }
 
