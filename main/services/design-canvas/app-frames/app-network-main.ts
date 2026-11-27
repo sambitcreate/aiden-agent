@@ -307,6 +307,29 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
     return registry.appContext(appFrameRef(frame, inMain ? mainFrameIdOf(main) : null), inMain) !== null;
   };
 
+  /**
+   * For handlers Electron gives only a frame, from any default-session window
+   * (the main window, Quick Chat, the pill, bot bubbles, export windows): the
+   * frame is app context when it or an ancestor is on an app origin or another
+   * loopback origin (which covers export windows), or when it sits in the main
+   * window under an admitted app frame. A detached or unreadable frame is.
+   */
+  const frameIsApp = (frame: FrameLike): boolean => {
+    try {
+      if ((frame as { detached?: boolean }).detached === true) return true;
+      let top: FrameLike = frame;
+      for (let current: FrameLike | null = frame, depth = 0; current && depth < 64; current = current.parent, depth++) {
+        if (appOriginOf(current.url) || loopbackNotRenderer(originOf(current.url))) return true;
+        top = current;
+      }
+      const mainId = mainFrameIdOf(deps.mainContents());
+      if (mainId === null || top.frameTreeNodeId !== mainId) return false;
+      return registry.appContext(appFrameRef(frame, mainId), true) !== null;
+    } catch {
+      return true;
+    }
+  };
+
   removals.push(
     deps.permissions.addDenyLayer(SUBSCRIBER, {
       denyCheck: (contents, _permission, requestingOrigin, details) => {
@@ -328,13 +351,13 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
         return appOriginOf(details.requestingUrl);
       },
       denyDisplay: (request) => {
+        const security = (request as { securityOrigin?: string }).securityOrigin;
+        const securityOrigin = originOf(security);
+        if ((securityOrigin !== null && deps.isAppOrigin(securityOrigin)) || loopbackNotRenderer(securityOrigin)) return true;
         const frame = (request as { frame?: FrameLike | null }).frame ?? null;
-        if (!frame) return false;
-        try {
-          return registry.appContext(appFrameRef(frame, mainFrameIdOf(deps.mainContents())), true) !== null || appOriginOf(frame.url);
-        } catch {
-          return true;
-        }
+        // Without a frame (it navigated or closed), only Aiden's own documents pass.
+        if (!frame) return !ownUrl(security);
+        return frameIsApp(frame);
       },
       denyDevice: (details) => {
         const origin = originOf(details.origin);
@@ -357,8 +380,8 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
         if (!contents) return "cancel";
         return isMainContents(contents) || registry.isExportContents(contents.id) ? "cancel" : undefined;
       }
-      const main = deps.mainContents();
-      return frameInAppContext(main, details.frame) ? "cancel" : undefined;
+      if (!details.frame) return "cancel";
+      return frameIsApp(details.frame) ? "cancel" : undefined;
     }),
   );
 

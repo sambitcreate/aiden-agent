@@ -394,6 +394,39 @@ test("the serial chooser, which names no frame, cancels in the main window and e
   assert.deepEqual(choose(s, "select-serial-port", { contents: { id: 5 } }), { prevented: false, chosen: undefined }, "another window");
 });
 
+test("display capture and HID/USB choosers fail closed without a frame, deny export windows, and leave Aiden's other windows alone", () => {
+  const s = setup();
+  const app = s.admit();
+  s.permissionDispatcher.ownerSlot("gemini-live").setDisplayMediaRequestHandler((_request, callback) => callback({ video: "owner" } as never));
+  const display = (request: { frame: Frame | null; securityOrigin: string }) => {
+    let streams: unknown = "unanswered";
+    (s.permissions.state.display as unknown as (...args: unknown[]) => void)(request, (value: unknown) => (streams = value));
+    return streams;
+  };
+  const OWNER = { video: "owner" };
+  // Quick Chat, the pill and bot bubbles share the default session in windows of their own.
+  const quickChat = frame(900, null, "file:///app/build/renderer/quick-chat.html");
+  // An export window's main frame is the app's own page.
+  const exportFrame = frame(950, null, `${ORIGIN}/pricing`);
+  const exportChild = frame(951, exportFrame, "about:blank");
+
+  assert.deepEqual(display({ frame: app, securityOrigin: ORIGIN }), {});
+  assert.deepEqual(display({ frame: null, securityOrigin: ORIGIN }), {}, "a frame that navigated away");
+  assert.deepEqual(display({ frame: null, securityOrigin: "http://127.0.0.1:9999" }), {});
+  assert.deepEqual(display({ frame: null, securityOrigin: "https://example.com" }), {}, "unknown without a frame");
+  assert.deepEqual(display({ frame: exportFrame, securityOrigin: ORIGIN }), {});
+  assert.deepEqual(display({ frame: exportChild, securityOrigin: ORIGIN }), {});
+  assert.deepEqual(display({ frame: null, securityOrigin: "file://" }), OWNER, "Aiden's renderer");
+  assert.deepEqual(display({ frame: s.window().main, securityOrigin: "file://" }), OWNER);
+  assert.deepEqual(display({ frame: quickChat, securityOrigin: "file://" }), OWNER, "Quick Chat isn't an app");
+
+  for (const event of ["select-hid-device", "select-usb-device"]) {
+    assert.deepEqual(choose(s, event, { frame: null }), { prevented: true, chosen: "" }, `${event} without a frame`);
+    assert.deepEqual(choose(s, event, { frame: exportChild }), { prevented: true, chosen: "" }, `${event} in an export window`);
+    assert.deepEqual(choose(s, event, { frame: quickChat }), { prevented: false, chosen: undefined }, `${event} in Quick Chat`);
+  }
+});
+
 // ---- Downloads (D8, E3) -------------------------------------------------------
 
 test("downloads from an export window or an app-context frame are cancelled; the main frame's aren't", () => {
