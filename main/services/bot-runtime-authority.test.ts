@@ -26,12 +26,14 @@ import type {
 import { BotCapabilityNoticeRequiredError } from "./bot-capability-store-core.js";
 import {
   BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES,
+  BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE,
   assertBotRuntimeProviderSelection,
   BotRuntimeAuthorityError,
   createBotRuntimeAuthorityResolver,
   type BotRuntimeAuthorityDependencies,
 } from "./bot-runtime-authority.js";
 import type { BotManagedWorkspaceResolution } from "./bot-managed-workspace-core.js";
+import { modelBindingAfterAdmissionFailure, runBotHealthChecks } from "./bot-health/checks.js";
 import type { Chat } from "./types.js";
 
 const fp = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -317,6 +319,7 @@ function fixture(input: {
   omitModelAuthority?: boolean;
   fullWebSearchEnabled?: boolean;
   skillsEnabled?: boolean;
+  noticeRequiredMessage?: string;
 } = {}) {
   const inventoryLeases = new BotRuntimeInventoryLeaseRegistry();
   let currentSnapshot = input.currentSnapshot ?? snapshot();
@@ -454,6 +457,7 @@ function fixture(input: {
     },
     inventoryLeases,
     skillsEnabled: async () => skillsEnabled,
+    ...(input.noticeRequiredMessage ? { noticeRequiredMessage: input.noticeRequiredMessage } : {}),
   };
   return {
     resolver: createBotRuntimeAuthorityResolver(deps),
@@ -486,11 +490,12 @@ function fixture(input: {
 async function expectFailure(
   operation: Promise<unknown>,
   classification: BotRuntimeAuthorityError["classification"],
+  message: string = BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES[classification],
 ): Promise<void> {
   await assert.rejects(operation, (error: unknown) => {
     assert.ok(error instanceof BotRuntimeAuthorityError);
     assert.equal(error.classification, classification);
-    assert.equal(error.message, BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES[classification]);
+    assert.equal(error.message, message);
     return true;
   });
 }
@@ -712,10 +717,48 @@ test("missing admitted Bot model authority fails closed for Full and Custom acce
 test("the sole store admission gate prevents Full authority before audience notice acceptance", async () => {
   const app = fixture();
   app.requireNotice();
+  // The wire classification stays access_unavailable; the text says the notice is what is missing.
   await expectFailure(
     app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
     "access_unavailable",
+    BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE,
   );
+  // The default text names no host's commands: the desktop and phones show it as is.
+  assert.doesNotMatch(BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE, /aiden bots|`/u);
+  // A host with its own fix replaces the text; the classification is unchanged.
+  const cli = fixture({ noticeRequiredMessage: "Run `aiden bots acknowledge` on this server." });
+  cli.requireNotice();
+  await expectFailure(
+    cli.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
+    "access_unavailable",
+    "Run `aiden bots acknowledge` on this server.",
+  );
+});
+
+test("Bot health skips the Model check for a Bot waiting on its notice and asks only about real drift", async () => {
+  // The desktop probes admission and reads the refusal; healthy everything else.
+  const healthOf = async (app: ReturnType<typeof fixture>) => runBotHealthChecks("bot-a", {
+    sessionState: async () => "idle",
+    refreshModelBinding: async () => {
+      try {
+        await app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" });
+        return "current";
+      } catch (error) { return modelBindingAfterAdmissionFailure(error); }
+    },
+    providerAuth: async () => "ok",
+    connections: async () => ({ degraded: [] }),
+    computer: async () => "none",
+  }, { trigger: "manual", signal: new AbortController().signal, now: () => 1 });
+  const waiting = fixture();
+  waiting.requireNotice();
+  const pending = await healthOf(waiting);
+  assert.equal(pending.results.find((result) => result.id === "model")?.status, "skipped");
+  assert.equal(pending.results.some((result) => result.status === "needs_you"), false, JSON.stringify(pending.results));
+  const drifted = fixture();
+  drifted.driftAtAdmission("model");
+  const model = (await healthOf(drifted)).results.find((result) => result.id === "model");
+  assert.equal(model?.status, "needs_you");
+  assert.deepEqual(model?.failure, { kind: "access_changed", code: "model_changed" });
 });
 
 test("fresh inventory changes invalidate an admitted effect lease", async () => {
@@ -782,6 +825,7 @@ test("failed runtime admission releases its inventory lease", async () => {
   await expectFailure(
     app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
     "access_unavailable",
+    BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE,
   );
   assert.equal(app.activeInventoryLeases, 0);
 });

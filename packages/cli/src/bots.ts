@@ -7,6 +7,7 @@ import { createBotOpenWorkRoutineOrigin, createBotRoutineOriginSender } from "..
 import { createBotRoutineService } from "../../../main/services/scheduled-bot-routines.js";
 import type { createCliScheduler } from "./schedules.ts";
 import { cliDurableBotMarker, enableCliDurableBots } from "./bot-durable-migration.ts";
+import { LegacyBotChatFence } from "./legacy-bot-chat-fence.ts";
 import { createCliDurableBots, type CliDurableBotToolContext } from "./bot-durable.ts";
 import { subagentsEnabled } from "../../../main/services/subagents/feature-flag.js";
 import { createBotSubagentTool, deleteCliBotSubagentHistory } from "./bot-subagents.ts";
@@ -53,7 +54,7 @@ import type { AidenRemoteStateDocument } from "../../../main/services/aiden-remo
 import { verifyApprovedRootIdentity } from "../../../main/services/aiden-remote-approved-roots.js";
 import type { BotAccessUpdate, BotChatAccessUpdate, BotNoticeAcknowledgement } from "../../../renderer/shared/bot-capabilities.js";
 import type { BotCreateInput, BotUpdateInput } from "../../../renderer/shared/bots.js";
-import { JsonStore, readJson } from "./state.ts";
+import { JsonStore, readJson, requireJsonFile } from "./state.ts";
 import { listCliProviders } from "./providers.ts";
 import type { createDaemonChats } from "./daemon-chats.ts";
 
@@ -82,8 +83,27 @@ function checkpointFile<T>(agentDir: string, name: string) {
   };
 }
 
+const BOTS_USAGE = {
+  acknowledge: `Usage: bots acknowledge '{"version":"<version from bots notice>","decision":"continue_full|customize_first","confirmedForeground":true}'`,
+  create: "Usage: bots create <JSON file with bot and optional access>",
+  update: "Usage: bots update <JSON file with the Bot update>",
+  access: "Usage: bots access <bot-id> [JSON file with expectedRevision and access]",
+  chat: "Usage: bots chat <bot-id> <JSON file with providerId and model>",
+  chatAccess: "Usage: bots chat-access <JSON file with botId, chatId, expectedRevision and access>",
+  send: "Usage: bots send <bot-id> <JSON file with text and requestId>",
+} as const;
+
+/** `bots acknowledge` takes the decision inline, as JSON. */
+function parseAcknowledgement(value: string | undefined): BotNoticeAcknowledgement {
+  if (!value) throw new Error(BOTS_USAGE.acknowledge);
+  try { return JSON.parse(value) as BotNoticeAcknowledgement; }
+  catch { throw new Error(`The acknowledgement is not valid JSON. ${BOTS_USAGE.acknowledge}`); }
+}
+
 /** The CLI host owner's Bot capability audience (`aiden bots …`, remote Bot Files). */
 export const CLI_BOT_OWNER_AUDIENCE_ID = "cli:local";
+/** The notice refusal on `aiden serve`, where the notice is acknowledged with these commands. */
+export const CLI_BOT_NOTICE_REQUIRED_MESSAGE = "This Bot can't act until the Bot access notice is accepted on this server. Run `aiden bots notice`, then `aiden bots acknowledge`, or give the Bot Custom access.";
 
 export async function createCliBots(agentDir: string, daemon: ReturnType<typeof createDaemonChats>) {
   const settings = new JsonStore<AppSettings>(join(agentDir, "aiden.json"), {});
@@ -128,7 +148,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     return { botId, paused: true as const, since: record.since };
   }
   const managedWorkspace = createBotManagedWorkspaceService({ root });
-  const mutationGate = new BotMutationGate(), inventoryLeases = new BotRuntimeInventoryLeaseRegistry();
+  const mutationGate = new BotMutationGate(), inventoryLeases = new BotRuntimeInventoryLeaseRegistry(), legacyChatFence = new LegacyBotChatFence();
   const approvedRoots = () => readJson<Pick<AidenRemoteStateDocument, "approvedRoots">>(join(agentDir, "remote.json"), { approvedRoots: [] }).approvedRoots;
   const incarnations = createBotCapabilityIncarnationStore(capabilities);
   const mcp = createCliMcpPool(agentDir), web = createCliWebSearch(agentDir);
@@ -188,7 +208,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     },
   });
   await application.initialize();
-  const authority = createBotRuntimeAuthorityResolver({ botStore, chatStore: daemon.chatStore, capabilityStore: capabilities, catalog, managedWorkspace, inventoryLeases });
+  const authority = createBotRuntimeAuthorityResolver({ botStore, chatStore: daemon.chatStore, capabilityStore: capabilities, catalog, managedWorkspace, inventoryLeases, noticeRequiredMessage: CLI_BOT_NOTICE_REQUIRED_MESSAGE });
   let rootFingerprint = JSON.stringify(approvedRoots());
   const watcher = watch(agentDir, (_event, filename) => {
     if (["auth.json", "models.json", "aiden-mcp.json", "web-search.json"].includes(String(filename))) inventoryLeases.invalidate("inventory_changed");
@@ -280,6 +300,8 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   }) : undefined;
   let routines: ReturnType<typeof createBotRoutineService> | undefined;
   return { application, botStore, capabilities, catalog, managedWorkspace, mutationGate, inventoryLeases, authority, tools, durable, isPaused, assertNotPaused,
+    /** A paired device's Bot-chat writes: one Bot at a time, and ordered against `enable-durable`. */
+    legacyChatMutations: { run: <T>(botId: string, operation: () => Promise<T>) => legacyChatFence.shared(() => mutationGate.run(botId, operation)) },
     get routines() { return routines; },
     setScheduler(scheduler: ReturnType<typeof createCliScheduler>) {
       if (!durable) return;
@@ -302,6 +324,15 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
         defaultTimezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone, notifyChanged: () => {},
       });
     },
+    /**
+     * False once durable Bot sessions are on or being enabled: legacy Bot chats
+     * are then history only. An unreadable marker counts as enabled, so it
+     * fails closed for Bot chats and never throws into a caller.
+     */
+    legacyChatsAllowed: () => {
+      if (durable) return false;
+      try { return !cliDurableBotMarker(agentDir); } catch { return false; }
+    },
     assertLegacyChatAllowed() { if (durable || cliDurableBotMarker(agentDir)) throw new Error("This Bot uses durable sessions. Restart the daemon after migration and use bots send or the Bot session endpoint."); },
     async instructions(admission: BotRuntimeAuthorityAdmission) {
       await admission.revalidateBeforeEffect();
@@ -320,11 +351,11 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     async command(args: string[]) {
       const [action = "list", id, input] = args, audienceId = CLI_BOT_OWNER_AUDIENCE_ID;
       switch (action) {
-        case "enable-durable": return enableCliDurableBots(agentDir, daemon);
+        case "enable-durable": return enableCliDurableBots(agentDir, daemon, legacyChatFence);
         case "session": if (!durable) throw new Error("Run bots enable-durable, then restart the daemon."); return durable.runtime.state(id);
         case "send": {
-          if (!durable || !input) throw new Error("Usage: bots send <bot-id> <JSON file with text and requestId>");
-          const fields = readJson<Record<string, unknown>>(input, {});
+          if (!durable || !id || !input) throw new Error(BOTS_USAGE.send);
+          const fields = requireJsonFile<Record<string, unknown>>(input, BOTS_USAGE.send);
           const { botId, ...message } = parseBotSend({ ...fields, botId: id });
           return durable.runtime.send(botId, message);
         }
@@ -338,12 +369,16 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
         case "get": return application.get(id);
         case "catalog": return application.capabilityCatalog(audienceId, id);
         case "notice": return application.noticeStatus(audienceId);
-        case "acknowledge": return application.acknowledgeNotice(audienceId, JSON.parse(id) as BotNoticeAcknowledgement);
-        case "create": return application.createBot({ audienceId, ...readJson<{ bot: BotCreateInput; access?: BotAccessUpdate }>(id, undefined!) });
-        case "update": return application.updateBot(readJson<BotUpdateInput>(id, undefined!));
-        case "access": return input ? application.updateBotAccess({ audienceId, botId: id, ...readJson<{ expectedRevision: string; access: BotAccessUpdate }>(input, undefined!) }) : application.getBotAccess(id);
-        case "chat": return application.createChat({ audienceId, botId: id, ...readJson<{ providerId: string; model: string }>(input, undefined!) });
-        case "chat-access": return application.updateChatAccess({ audienceId, ...readJson<{ botId: string; chatId: string; expectedRevision: string; access: BotChatAccessUpdate }>(id, undefined!) });
+        case "acknowledge": return application.acknowledgeNotice(audienceId, parseAcknowledgement(id));
+        case "create": return application.createBot({ audienceId, ...requireJsonFile<{ bot: BotCreateInput; access?: BotAccessUpdate }>(id, BOTS_USAGE.create) });
+        case "update": return application.updateBot(requireJsonFile<BotUpdateInput>(id, BOTS_USAGE.update));
+        case "access":
+          if (!id) throw new Error(BOTS_USAGE.access);
+          return input ? application.updateBotAccess({ audienceId, botId: id, ...requireJsonFile<{ expectedRevision: string; access: BotAccessUpdate }>(input, BOTS_USAGE.access) }) : application.getBotAccess(id);
+        case "chat":
+          if (!id) throw new Error(BOTS_USAGE.chat);
+          return application.createChat({ audienceId, botId: id, ...requireJsonFile<{ providerId: string; model: string }>(input, BOTS_USAGE.chat) });
+        case "chat-access": return application.updateChatAccess({ audienceId, ...requireJsonFile<{ botId: string; chatId: string; expectedRevision: string; access: BotChatAccessUpdate }>(id, BOTS_USAGE.chatAccess) });
         case "pause": if (!id) throw new Error("Usage: bots pause <bot-id>"); return pauseBot(id);
         case "unpause": if (!id) throw new Error("Usage: bots unpause <bot-id>"); await (durable ? durable.runtime.unpause(id) : pauses.unpause(id)); return { botId: id, paused: false };
         default: throw new Error("Usage: bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access|pause|unpause");

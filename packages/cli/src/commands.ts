@@ -17,6 +17,19 @@ export const CLI_COMMANDS: readonly string[] = [
 // Each command loads its own module on demand, so an administration command
 // does not evaluate the daemon, Telegram, speech, or pairing code it is not
 // going to run.
+/** Where each `bots` subcommand takes a JSON file. */
+const BOTS_FILE_ARGUMENT: Readonly<Record<string, number>> = { create: 1, update: 1, "chat-access": 1, access: 2, chat: 2, send: 2 };
+
+/**
+ * The server reads a Bots file argument, and its working directory is not the
+ * caller's (it is `/` under launchd), so a relative path is made absolute here.
+ */
+function botsArgsForDaemon(args: string[], cwd: string): string[] {
+  const index = BOTS_FILE_ARGUMENT[args[0] ?? ""];
+  if (index === undefined || !args[index]) return args;
+  return args.map((arg, position) => position === index ? resolve(cwd, arg) : arg);
+}
+
 export async function dispatchCommand(agentDir: string, cwd: string, args: string[]): Promise<boolean> {
   const [command, ...rest] = args;
   let result: unknown;
@@ -54,7 +67,7 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
     case "schedule": result = await (await import("./schedules.ts")).scheduleCommand(agentDir, rest); break;
     case "telegram": result = await (await import("./telegram.ts")).telegramCommand(agentDir, rest); break;
     case "speech": result = await (await import("./speech.ts")).speechCommand(agentDir, rest); break;
-    case "bots": result = await (await import("./schedules.ts")).remoteDaemonCommand(agentDir, "bots", rest); break;
+    case "bots": result = await (await import("./schedules.ts")).remoteDaemonCommand(agentDir, "bots", botsArgsForDaemon(rest, cwd)); break;
     case "remote": {
       if (rest[0] === "check") {
         if (rest.length !== 1) throw new Error("Usage: aiden remote check");

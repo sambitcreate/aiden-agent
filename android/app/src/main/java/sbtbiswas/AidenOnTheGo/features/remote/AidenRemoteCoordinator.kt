@@ -28,6 +28,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceArchiveStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import kotlinx.serialization.builtins.ListSerializer
@@ -35,13 +36,27 @@ import okhttp3.OkHttpClient
 import java.io.File
 import java.util.UUID
 
-data class AidenConnectionIssue(val title: String, val message: String, val canRetry: Boolean) {
+/**
+ * Why the active computer can't be reached. [pairAgain] offers the pairing screen: the pairing is
+ * kept, but only a new one can reach this computer again.
+ */
+data class AidenConnectionIssue(val title: String, val message: String, val canRetry: Boolean, val pairAgain: Boolean = false) {
     companion object {
-        fun classify(error: Throwable): AidenConnectionIssue = when (error) {
-            is javax.net.ssl.SSLException, AidenRemoteClientException.MissingTrustConfiguration ->
+        private val pairingRequired =
+            AidenConnectionIssue("Pairing required", "Open Connections on the computer and pair this device again.", canRetry = false, pairAgain = true)
+
+        fun classify(error: Throwable): AidenConnectionIssue = when {
+            error is javax.net.ssl.SSLException || error === AidenRemoteClientException.MissingTrustConfiguration ->
                 AidenConnectionIssue("Verify this computer", "The computer's secure identity could not be verified. Check it on the desktop and pair again if its identity changed.", false)
-            AidenRemoteClientException.MissingCredential ->
-                AidenConnectionIssue("Pairing required", "Open Connections on the computer and pair this device again.", false)
+            error === AidenRemoteClientException.MissingCredential -> pairingRequired
+            // The computer no longer knows this device (its records were reset or pruned). Retrying
+            // can't help, and only a decoded answer says so: an unreadable 401 stays retryable.
+            error is AidenRemoteClientException.Server && error.statusCode == 401 && error.isDecodedEnvelope &&
+                error.body.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.AUTHENTICATION_REQUIRED -> pairingRequired
+            else -> classifyTransport(error)
+        }
+
+        private fun classifyTransport(error: Throwable): AidenConnectionIssue = when (error) {
             is sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException ->
                 AidenConnectionIssue("Update required", "The computer returned data this app cannot use. Update Aiden on both devices, then retry.", true)
             is java.net.SocketTimeoutException ->
@@ -579,7 +594,7 @@ class AidenRemoteCoordinator(
     private var activationGeneration: Long = 0
     private var pinnedHttp: Pair<PinnedHttpKey, OkHttpClient>? = null
 
-    private data class PinnedHttpKey(val serverSpkiSha256: String, val trust: AidenPairingTrust?)
+    private data class PinnedHttpKey(val serverSpkiSha256: String, val trust: AidenPairingTrust?, val endpoint: String)
 
     /**
      * One OkHttp client per pinned trust anchor. Retrying or re-activating the
@@ -587,9 +602,9 @@ class AidenRemoteCoordinator(
      * sessions instead of building a fresh client each time.
      */
     private fun pinnedHttpClient(installation: AidenInstallation): OkHttpClient {
-        val key = PinnedHttpKey(installation.serverSpkiSha256, installation.pairingTrust)
+        val key = PinnedHttpKey(installation.serverSpkiSha256, installation.pairingTrust, installation.endpoint)
         pinnedHttp?.let { (cachedKey, cached) -> if (cachedKey == key) return cached }
-        return AidenRemoteClient.createOkHttpClient(key.serverSpkiSha256, key.trust)
+        return AidenRemoteClient.createOkHttpClient(key.serverSpkiSha256, key.trust, key.endpoint)
             .also { pinnedHttp = key to it }
     }
 
@@ -764,7 +779,7 @@ class AidenRemoteCoordinator(
 
         scope.launch {
             try {
-                val server = newClient.server()
+                val server = newClient.server().requireInstance(installation)
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 _connectionState.value = AidenConnectionState.CONNECTED
                 val serverCapabilities = server.serverCapabilities ?: server.capabilities
@@ -950,7 +965,7 @@ class AidenRemoteCoordinator(
         return try {
             val completeCapabilities = client.updateDeviceCapabilities(requested)
             if (!isCurrent(generation, installation.id, client)) return server
-            val refreshed = client.server()
+            val refreshed = client.server().requireInstance(installation)
             if (!isCurrent(generation, installation.id, client)) return server
             // The legacy aggregate can keep Bot/chat clients working, but it
             // is not proof that the new progress grant was accepted. Require
@@ -980,6 +995,9 @@ class AidenRemoteCoordinator(
                 throw error
             }
             server
+        } catch (error: AidenRemoteContractException.InvalidPairingExchange) {
+            // `/server` answered for another desktop instance: stop, never carry on with it.
+            throw error
         } catch (_: Exception) {
             server
         }
@@ -1000,8 +1018,8 @@ class AidenRemoteCoordinator(
         val outcome = request(client, server, installation) {
             isCurrent(generation, installation.id, client)
         } ?: return server
-        val granted = outcome.granted ?: return outcome.server
-        val refreshed = outcome.server
+        val refreshed = outcome.server.requireInstance(installation)
+        val granted = outcome.granted ?: return refreshed
         installationStore.updateServerCapabilities(
             instanceId = installation.instanceId,
             serverCapabilities = refreshed.serverCapabilities ?: refreshed.capabilities,
@@ -1113,6 +1131,15 @@ class AidenRemoteCoordinator(
 
     private fun cachedWorkspaces(instanceId: String): List<AidenWorkspace> =
         readSnapshotCache.load(instanceId, AidenReadSnapshotKeys.WORKSPACES, workspaceListSerializer).orEmpty()
+
+    /**
+     * A `/server` answer from another desktop instance never stands in for this pairing's, even
+     * over the same pin: the connection stops, as on iOS (`AidenHostConnection.load`).
+     */
+    private fun AidenServer.requireInstance(installation: AidenInstallation): AidenServer {
+        if (instanceId != installation.instanceId) throw AidenRemoteContractException.InvalidPairingExchange
+        return this
+    }
 
     private fun isCurrent(generation: Long, installationId: String, client: AidenRemoteClient): Boolean =
         activationGeneration == generation &&

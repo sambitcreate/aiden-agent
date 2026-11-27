@@ -7,6 +7,18 @@
 
 import type { BotHealthCheckResult, BotHealthReport } from "../../../renderer/shared/bot-health.js";
 
+/**
+ * What a failed admission probe says about the Model check. Only real
+ * authority drift is the person's to fix. A Bot waiting on its access notice
+ * (an `access_unavailable` refusal flagged `noticeRequired`) has not drifted,
+ * and anything else could not tell. Matched by name, since the error may come
+ * from another module instance.
+ */
+export function modelBindingAfterAdmissionFailure(error: unknown): "drifted" | "unknown" {
+  if (!(error instanceof Error) || error.name !== "BotRuntimeAuthorityError") return "unknown";
+  return (error as { noticeRequired?: unknown }).noticeRequired === true ? "unknown" : "drifted";
+}
+
 export interface BotHealthCheckDeps {
   sessionState(botId: string): Promise<string>;
   /** Admission repairs a model setting that only went stale; "drifted" needs the person. */

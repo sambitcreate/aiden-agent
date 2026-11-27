@@ -412,7 +412,7 @@ class AidenSimulatorsViewModel(
         }
 
         fun errorFor(error: Exception): AidenSimulatorViewerError = when {
-            error is AidenRemoteClientException.Server && (error.statusCode == 401 || error.statusCode == 403) ->
+            error is AidenRemoteClientException.Server && error.isUnauthorized ->
                 AidenSimulatorViewerError.REFUSED
             error is AidenRemoteClientException.Server && error.statusCode == 404 -> AidenSimulatorViewerError.SHARING_OFF
             error is AidenRemoteClientException.Server && error.statusCode == 429 -> AidenSimulatorViewerError.CAPACITY

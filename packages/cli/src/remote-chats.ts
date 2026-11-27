@@ -13,7 +13,7 @@ import type { AidenIdempotencyLedger, AidenIdempotencySnapshot } from "../../../
 import type { AidenRemoteStateRegistry } from "../../../main/services/aiden-remote-state.js";
 import type { createDaemonChats } from "./daemon-chats.ts";
 import type { createCliWorkspaceApplication } from "./workspace-application.ts";
-import type { createCliBots } from "./bots.ts";
+import { CLI_BOT_OWNER_AUDIENCE_ID, type createCliBots } from "./bots.ts";
 import { listCliProviders } from "./providers.ts";
 import { JsonStore, readJson } from "./state.ts";
 import { createCliChatForks } from "./daemon-forks.ts";
@@ -84,8 +84,12 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     snapshot, persist: (write) => journal.save(write), idempotency, persistIdempotency,
     onPersistenceError: () => process.stderr.write("aiden: Remote stream persistence failed.\n"),
   });
+  // Only while legacy Bot chats run: with durable sessions on, a Bot's workspace
+  // chat is history only, as on the desktop, so a device keeps its own audience
+  // (which has no notice record) and every write there is refused.
+  const botAudience = (deviceId: string) => bots.legacyChatsAllowed() ? CLI_BOT_OWNER_AUDIENCE_ID : deviceId;
   const chats = new AidenRemoteChatService({ application, chatStore: daemon.chatStore, generation: daemon.llmClient,
-    streams, models: modelService, bots: bots.botStore, botMutations: bots.mutationGate,
+    streams, models: modelService, bots: bots.botStore, botMutations: bots.legacyChatMutations,
     isFolderWorkspace: async (workspaceId) => analyticsWorkspaceKind(await workspace.configStore.getWorkspace(workspaceId)) !== "none",
     // Refused before the message is kept, so the same key runs once the folder is back (desktop parity).
     workspaceFolderRefusal: async (workspaceId) => {
@@ -105,7 +109,21 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     },
     // An outside MCP app's chats and turns are never product analytics.
     deviceReportsAnalytics: async (deviceId) => (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId)?.type !== "agent",
-    retainedBotChatAuthorizer: (input) => bots.application.authorizeRetainedChat({ ...input, audienceId: input.deviceId }),
+    // Paired devices have no route to acknowledge the Bot access notice, so a
+    // device's legacy Bot chat is admitted as the server's owner, whose notice
+    // is acknowledged on the host (`aiden bots acknowledge`). With durable
+    // sessions on, the old chat is history: reads only, and every write route
+    // (turns, rename, triage, fork, attachments, stream answers) is refused.
+    retainedBotChatAuthorizer: (input) => input.access === "write" && !bots.legacyChatsAllowed()
+      ? false
+      : bots.application.authorizeRetainedChat({ ...input, audienceId: botAudience(input.deviceId) }),
+    botAudience,
+    // A second guard: the authorizer above already refuses a turn on a durable
+    // Bot's old chat (404) before the service runs. The service consults this
+    // on every turn and checks the chat's botId only when it is true, so it
+    // must stay cheap and never throw: a corrupt marker reads as durable,
+    // which refuses Bot chats and leaves ordinary chats untouched.
+    durableBotSessions: () => !bots.legacyChatsAllowed(),
     botTurnAuthorityPreflight: (input) => bots.preflight(input),
     // Refused before the ledger records anything, so the same key runs after `aiden bots unpause`.
     botPaused: (botId) => bots.isPaused(botId),

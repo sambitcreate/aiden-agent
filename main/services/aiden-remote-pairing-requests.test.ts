@@ -64,6 +64,7 @@ function harness(options: {
   resolveTransport?: () => Promise<AidenPairingRequestTransportIdentity>;
   displayName?: () => string;
   hostCapabilities?: boolean;
+  progressCapabilitySupported?: (capability: string) => boolean;
 } = {}) {
   let stored: AidenRemoteStateDocument = createDefaultAidenRemoteState(() => Buffer.alloc(24, 9));
   let failNextSave = false;
@@ -98,6 +99,7 @@ function harness(options: {
     displayName: options.displayName ?? (() => "Studio Mac"),
     botCapabilitiesSupported: () => true,
     hostCapabilitiesSupported: () => options.hostCapabilities ?? true,
+    ...(options.progressCapabilitySupported ? { progressCapabilitySupported: options.progressCapabilitySupported } : {}),
     onChanged: () => {
       changes += 1;
     },
@@ -300,6 +302,35 @@ test("an allowed request delivers the desktop exchange grants, sealed, and the c
   assert.ok(grant.capabilities.includes("host:events"));
   assert.ok(grant.capabilities.includes("runs:control"));
   assert.equal(service.list().length, 0);
+});
+
+test("an allowed request grants only the progress capabilities the host serves, as a QR exchange does", async () => {
+  const served = new Set(["tasks:read", "agents:read"]);
+  const { service, registry, stored } = harness({ progressCapabilitySupported: (capability) => served.has(capability) });
+  const { keys, created } = await open(service);
+  const waiting = service.poll(created.requestId, created.pollSecret);
+  await service.respond(created.requestId, "allow");
+  const status = await waiting;
+  assert.ok(status.envelope);
+  const grant = openPeerPairingRequestGrant(status.envelope, {
+    requestId: created.requestId,
+    publicKey: keys.publicKey,
+    privateKey: keys.privateKey,
+    endpoint: ENDPOINT,
+    serverSpkiSha256: SPKI,
+  });
+  for (const unserved of ["questions:respond", "skills:invoke", "app-controls:read", "app-controls:respond"]) {
+    assert.equal(grant.capabilities.includes(unserved as never), false, unserved);
+  }
+  assert.ok(grant.capabilities.includes("tasks:read"));
+  assert.ok(grant.capabilities.includes("agents:read"));
+  // The same host's QR exchange grants the same set.
+  const pairing = new AidenRemotePairingService(stored().instanceId, registry, undefined, undefined, undefined,
+    () => true, () => true, (capability) => served.has(capability));
+  const bootstrap = pairing.begin(ENDPOINT, SPKI).bootstrap;
+  const exchanged = await pairing.exchange({ secret: bootstrap.secret, deviceName: "Other Mac", deviceType: "mac",
+    clientVersion: "0.52.0", acceptsDisplayName: true, acceptsBotCapabilities: true, acceptsProgressCapabilities: true }, "10.0.0.2");
+  assert.deepEqual([...grant.capabilities].sort(), [...exchanged.capabilities].sort());
 });
 
 test("the envelope opens only for the requester and only for the identity it connected to", async () => {

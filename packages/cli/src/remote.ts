@@ -1,3 +1,5 @@
+import type { AidenRemotePairingWindowStatus } from "../../../main/services/aiden-remote-pairing.js";
+import { aidenRemoteHostPlatform } from "../../../main/services/aiden-remote-protocol.js";
 import { createCliMcpPool } from "./mcp.ts";
 import { selectedMcpServers } from "../../../main/services/mcp-selection.js";
 import { createCliBots } from "./bots.ts";
@@ -159,6 +161,27 @@ export async function setRemoteNetwork(service: TailscaleTransportService, tails
 }
 
 /** Shared protocol services retain their own identity, revision and authorization checks. */
+/** `remote pair-status`: what `aiden remote pair-status` and a waiting `aiden serve` read. */
+export type CliPairingStatus =
+  | Exclude<AidenRemotePairingWindowStatus, { state: "finishing" }>
+  | { sessionId: string; state: "finishing" }
+  | { sessionId: string; state: "paired"; deviceId: string }
+  | { state: "none" };
+
+/**
+ * The shared window stays `finishing` once a device is issued (the desktop
+ * shows that until the phone confirms); for this command the pairing is done.
+ */
+export function cliPairingStatus(status: AidenRemotePairingWindowStatus | undefined): CliPairingStatus {
+  if (!status) return { state: "none" };
+  if (status.state === "finishing") {
+    return status.deviceId
+      ? { sessionId: status.sessionId, state: "paired", deviceId: status.deviceId }
+      : { sessionId: status.sessionId, state: "finishing" };
+  }
+  return { sessionId: status.sessionId, state: status.state };
+}
+
 export async function createCliRemote(agentDir: string, chats: ReturnType<typeof createDaemonChats>, scheduler: ReturnType<typeof createCliScheduler>, options: { port?: number; mcpPort?: number; discovery?: AidenRemoteBonjourPublisher; bots?: Awaited<ReturnType<typeof createCliBots>> } = {}) {
   const bots = options.bots ?? await createCliBots(agentDir, chats);
   chats.setBots(bots);
@@ -213,6 +236,8 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
   } });
   const lanHostnames = await aidenRemoteLanHostnames();
   const service = new AidenRemoteService({ state, appVersion: VERSION, hostname: lanHostnames.endpoint, tailscale, bonjour: options.discovery ?? bonjourPublisher(),
+    // The `/health?detail=host` descriptor names the platform, as on the desktop.
+    hostPlatform: aidenRemoteHostPlatform(process.platform),
     loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({ directory: join(agentDir, "remote-tls"), hostnames: lanHostnames.certificate, opensslPath: "openssl" }),
     workspaceApi: async (instanceId) => {
       const browser = new AidenRemoteWorkspaceBrowserService({ instanceId, state, approvalStore: agentDir });
@@ -317,7 +342,7 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
           return { revoked: await revokeDevice(value) };
         }
         case "pair": { if (value !== "lan" && value !== "tailscale") throw new Error("Usage: remote pair lan|tailscale"); return value === "tailscale" ? beginTailscalePairing(service, tailscale) : service.beginPairing(value); }
-        case "pair-status": return service.pairingStatus() ?? { state: "none" };
+        case "pair-status": return cliPairingStatus(service.pairingStatus());
         case "pair-cancel": { if (!value) throw new Error("Provide a pairing session id."); return { closed: await service.closePairing(value) }; }
         case "roots": return (await state.snapshot()).approvedRoots.map(({ id, label }) => ({ id, label }));
         case "approve-root": return roots.addLocalFolder(value, { confirmHomeDirectory: args[2] === "--entire-home" });

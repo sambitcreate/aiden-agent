@@ -102,7 +102,11 @@ async function fixture(options: {
   streamsAvailable?: boolean;
   runInputAvailable?: boolean;
   questionsAvailable?: boolean;
-  skillsAvailable?: boolean;
+  /**
+   * `false` leaves skills out; `"unwired"` keeps the catalog method a real chat
+   * service always has but reports `supportsSkills: false`, as on `aiden serve`.
+   */
+  skillsAvailable?: boolean | "unwired";
   agentInterruptAvailable?: boolean;
   deviceType?: "iphone" | "ipad" | "android" | "mac" | "linux" | "agent";
   /** The id the registry answers for the credential; a normal device id when absent. */
@@ -320,6 +324,10 @@ async function fixture(options: {
               capability !== "chat:continue-in-new-chat" &&
               capability !== "stream:snapshot-reasons" &&
               capability !== "bot:needs-you" &&
+              capability !== "bot:watches" &&
+              capability !== "bot:open-work" &&
+              capability !== "bot:routine-models" &&
+              capability !== "bot:peers" &&
               capability !== "chat:agent-slider",
           )
         ) {
@@ -568,6 +576,7 @@ async function fixture(options: {
       ...(options.skillsAvailable === false
         ? {}
         : {
+            supportsSkills: options.skillsAvailable !== "unwired",
             chatSkillCatalog: async (deviceId, id) => {
               calls.push(`skill-catalog:${deviceId}:${id}`);
               return {
@@ -2709,6 +2718,71 @@ test("a device opts into Bot session cards with bot:cards, and only then is serv
   }
 });
 
+test("a Bot opt-in the host does not advertise is neither granted nor projected, so capabilities stay within serverCapabilities", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = (accepts: string[]) => ({ method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts }) });
+  // Chat progress is served, but no watch, open-work, routine-model or peer routes are wired.
+  const host = await fixture({ capabilities: ["server:read", "bot:read", "chat:read"], acceptsBotCapabilities: true, deviceType: "mac" });
+  try {
+    for (const capability of ["bot:watches", "bot:open-work", "bot:routine-models", "bot:peers"]) {
+      assert.equal((await fetch(`${host.base}/device/capabilities`, negotiate([capability]))).status, 404, capability);
+    }
+    assert.equal(host.calls.some((call) => call.startsWith("device-capabilities:")), false, "nothing was granted");
+  } finally {
+    await host.close();
+  }
+  // A grant held from earlier is left out of `/server` where it is not advertised.
+  const holder = await fixture({ capabilities: ["server:read", "bot:read", "chat:read", "bot:watches"], acceptsBotCapabilities: true, deviceType: "mac" });
+  try {
+    const server = await (await fetch(`${holder.base}/server`, { headers })).json();
+    assert.equal(server.capabilities.includes("bot:watches"), false);
+    assert.ok(server.capabilities.every((capability: string) => server.serverCapabilities.includes(capability)), JSON.stringify(server));
+  } finally {
+    await holder.close();
+  }
+  // A device paired without Bot capabilities is offered no Bot opt-in, even where Bot sessions are served.
+  const plain = await fixture({ capabilities: ["server:read", "tasks:read"], acceptsProgressCapabilities: true, deviceType: "iphone", botSessions: recordingRevision27Sessions([], { memory: true, proactive: true }) });
+  try {
+    assert.equal((await fetch(`${plain.base}/device/capabilities`, negotiate(["bot:cards"]))).status, 404);
+    const server = await (await fetch(`${plain.base}/server`, { headers })).json();
+    assert.ok(server.capabilities.every((capability: string) => server.serverCapabilities.includes(capability)), JSON.stringify(server));
+  } finally {
+    await plain.close();
+  }
+});
+
+test("a negotiated grant the host stopped serving drops out of /server and returns once served again", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  // A desktop that negotiated background jobs and simulator control while the host served both.
+  const held: AidenRemoteCapability[] = ["server:read", "chat:read", "chat:write", "tasks:read", "chat:jobs", "simulators:control"];
+  const subset = (server: { capabilities: string[]; serverCapabilities: string[] }) =>
+    server.capabilities.every((capability) => server.serverCapabilities.includes(capability));
+  // The host has since turned off background jobs and has no simulators.
+  const off = await fixture({ capabilities: held, acceptsProgressCapabilities: true, deviceType: "mac" });
+  try {
+    const server = await (await fetch(`${off.base}/server`, { headers })).json();
+    assert.ok(subset(server), JSON.stringify(server));
+    assert.equal(server.capabilities.includes("chat:jobs"), false);
+    assert.equal(server.capabilities.includes("simulators:control"), false);
+    // Base grants are always offered, so they stay.
+    assert.deepEqual(["server:read", "chat:read", "chat:write", "tasks:read"].filter((capability) => server.capabilities.includes(capability)), ["server:read", "chat:read", "chat:write", "tasks:read"]);
+    // Reading `/server` rewrites no grant.
+    assert.equal(off.calls.some((call) => call.startsWith("device-capabilities:")), false);
+  } finally {
+    await off.close();
+  }
+  // With jobs served again, the same stored grant is projected again.
+  const on = await fixture({ capabilities: held, acceptsProgressCapabilities: true, deviceType: "mac",
+    backgroundJobs: {} as import("./aiden-remote-router.js").AidenRemoteRouterDependencies["backgroundJobs"] });
+  try {
+    const server = await (await fetch(`${on.base}/server`, { headers })).json();
+    assert.ok(subset(server), JSON.stringify(server));
+    assert.equal(server.capabilities.includes("chat:jobs"), true);
+  } finally {
+    await on.close();
+  }
+});
+
 test("Bot capability catalogs strictly route optional authenticated Bot targets", async () => {
   const app = await fixture({
     capabilities: ["bot:read"],
@@ -4595,6 +4669,38 @@ test("chat skills route gates on negotiated skills:invoke and advertises its fea
     assert.equal(missing.status, 404);
   } finally {
     noSurface.close();
+  }
+
+  // A chat service always has the catalog method; without the catalog, the
+  // invocation resolver and the device gate (`aiden serve`) skills are neither
+  // advertised, offered, granted on upgrade nor listed.
+  const unwired = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "skills:invoke"],
+    acceptsProgressCapabilities: true,
+    skillsAvailable: "unwired",
+  });
+  try {
+    const server = await (await fetch(`${unwired.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-skills-v1"), false);
+    assert.equal(server.serverCapabilities.includes("skills:invoke"), false);
+    // A device that negotiated skills while the host still offered them reads
+    // grants within serverCapabilities, which iOS and Android reject otherwise.
+    assert.deepEqual(
+      server.capabilities.filter((capability: string) => !server.serverCapabilities.includes(capability)),
+      [],
+    );
+    const missing = await fetch(`${unwired.base}/chats/chat-1/skills`, { headers });
+    assert.equal(missing.status, 404);
+    assert.equal(unwired.calls.some((call) => call.startsWith("skill-catalog:")), false);
+    const upgrade = await fetch(`${unwired.base}/device/capabilities`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ accepts: ["skills:invoke"] }),
+    });
+    assert.equal(upgrade.status, 404);
+    assert.equal(unwired.calls.some((call) => call.startsWith("device-capabilities:")), false);
+  } finally {
+    unwired.close();
   }
 });
 

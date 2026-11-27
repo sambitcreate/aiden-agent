@@ -16,6 +16,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -62,9 +63,9 @@ class AidenBotRevision25ContractTest {
             .decodeFromJsonElement(AidenServer.serializer(), fixture.getValue("server"))
         assertTrue(server.supportsBotMemory)
         assertTrue(server.supportsBotProactive)
-        // Either feature is enough to ask the Mac for `bot:cards`.
-        assertTrue(server.offersBotCards)
-        assertFalse(server.copy(features = server.features - AidenRemoteProtocol.BOT_MEMORY_FEATURE - AidenRemoteProtocol.BOT_PROACTIVE_FEATURE).offersBotCards)
+        // The features alone are not an offer of `bot:cards`: only the Mac's capability list is.
+        assertFalse(server.offersBotCards)
+        assertTrue(server.copy(serverCapabilities = server.serverCapabilities.orEmpty() + AidenRemoteCapability.BOT_CARDS).offersBotCards)
         // The retired greeting is gone from every Bot shape the host sends.
         for (element in listOf(fixture.getValue("botDetail"), pair("botCreate", "request"), pair("botCreate", "response"), pair("botIdentity", "response"))) {
             assertFalse(element.jsonObject.containsKey("openingGreeting"))

@@ -2332,12 +2332,13 @@ final class AidenBotSessionModel {
         )
     }
 
-    /// 401 or 403, or a pairing that's gone: this phone no longer reaches this Bot.
+    /// The pairing itself is gone: a revoked credential, a missing one, or another
+    /// installation now active. Only this discards what waited to go to the Bot.
     private static func isAccessLoss(_ error: Error) -> Bool {
         guard let error = error as? AidenRemoteClientError else { return false }
         switch error {
-        case let .server(status, _), let .unexpectedStatus(status):
-            return status == 401 || status == 403
+        case .server:
+            return error.isCredentialRevoked
         case .missingCredential, .installationChanged:
             return true
         default:

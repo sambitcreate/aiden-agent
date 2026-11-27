@@ -2,6 +2,18 @@ import { ensurePrivateDirectory } from "../../../main/services/private-storage.t
 import { join } from "node:path";
 import { createConnection } from "node:net";
 export const daemonSocket = (agentDir: string) => join(agentDir, "serve.sock");
+
+/**
+ * Unix socket paths hold 104 bytes on macOS and 108 on Linux, including the
+ * final NUL. A longer path fails at `listen` or `chmod` with an error that
+ * never names the cause (macOS even binds a truncated path), so refuse it first.
+ */
+export function assertDaemonSocketPathFits(agentDir: string, platform: NodeJS.Platform = process.platform): void {
+  if (platform === "win32") return; // A named pipe, not a filesystem path.
+  const path = daemonSocket(agentDir), limit = platform === "darwin" ? 103 : 107, bytes = Buffer.byteLength(path);
+  if (bytes <= limit) return;
+  throw new Error(`The server's control socket path is ${bytes} bytes, over the ${limit}-byte limit for Unix sockets on this system: ${path}. Set AIDEN_CODING_AGENT_DIR to a shorter directory (the default ~/.aiden/agent fits).`);
+}
 export async function remoteDaemonCommand(agentDir: string, command: string, args: string[]): Promise<unknown> {
   ensurePrivateDirectory(agentDir, "reject");
   return new Promise((resolve, reject) => {

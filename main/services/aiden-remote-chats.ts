@@ -1469,6 +1469,15 @@ export class AidenRemoteChatService {
       durableBotSessions?: () => boolean;
       botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
       /**
+       * The Bot capability audience a paired device's Bot-chat turn is
+       * admitted under, for the turn preflight and the generation run. The
+       * host's `retainedBotChatAuthorizer` applies the same mapping to writes.
+       * Omitted, each device is its own audience (the desktop). `aiden serve`
+       * maps every device to its owner audience, whose access notice is
+       * acknowledged on the host: paired devices have no route to acknowledge it.
+       */
+      botAudience?: (deviceId: string) => string;
+      /**
        * Whether the person paused this Bot (plan §7). A paused Bot's chat
        * refuses turns; a throw (an unreadable pause record) refuses too.
        */
@@ -1785,6 +1794,17 @@ export class AidenRemoteChatService {
     });
   }
 
+  /**
+   * Whether this host lists and runs chat skills (`chat-skills-v1`,
+   * `skills:invoke`): it needs the catalog, the invocation resolver and the
+   * device grant lookup. `aiden serve` has no skill registry and wires none.
+   */
+  get supportsSkills(): boolean {
+    return this.options.skillCatalog !== undefined &&
+      this.options.resolveSkillInvocation !== undefined &&
+      this.options.deviceSupportsSkillInvocation !== undefined;
+  }
+
   /** Whether this host can record read markers for `POST /chats/{chatId}/read`. */
   get supportsReadMarkers(): boolean {
     return this.options.readMarkers !== undefined;
@@ -2076,6 +2096,11 @@ export class AidenRemoteChatService {
     return {
       botId: metadata.botId,
     };
+  }
+
+  /** The Bot capability audience a device's Bot-chat turns are admitted under. */
+  private botAudienceFor(deviceId: string): string {
+    return this.options.botAudience?.(deviceId) ?? deviceId;
   }
 
   /**
@@ -2896,7 +2921,7 @@ export class AidenRemoteChatService {
               throw new Error("Bot turn authority is unavailable.");
             }
             const preflightResult = await preflight({
-              audienceId: deviceId,
+              audienceId: this.botAudienceFor(deviceId),
               botId: authoritative.botId,
               chatId: authoritative.id,
               providerId: selection.providerId,
@@ -2951,7 +2976,7 @@ export class AidenRemoteChatService {
             providerId: selection.providerId,
             model: selection.modelId,
             thinkingLevel: turnThinkingLevel,
-            ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
+            ...(authoritative.botId ? { botAudienceId: this.botAudienceFor(deviceId) } : {}),
             ...(inlineVisuals ? { inlineVisuals } : {}),
             // A lead chat's started chat asks on the desktop card, which always reads questions.
             ...(isChatAudience(deviceId) || (await this.options.deviceSupportsQuestionPrompts?.(deviceId)) === true

@@ -118,6 +118,11 @@ function mapAuthorityError(error: unknown): never {
       404,
     );
   }
+  // Waiting on the access notice is not a grant that changed: refreshing
+  // will not help until the notice is acknowledged on the host.
+  if (error.noticeRequired) {
+    throw new AidenRemoteServiceError("capability_denied", error.message, 403, false);
+  }
   throw new AidenRemoteServiceError(
     "operation_stale",
     "This Bot's file access changed. Refresh the conversation and try again.",

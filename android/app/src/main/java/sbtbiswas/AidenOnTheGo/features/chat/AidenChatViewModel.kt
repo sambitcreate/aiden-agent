@@ -1075,8 +1075,7 @@ class AidenChatViewModel(
 
     private fun isProgressCredentialRevoked(error: Throwable): Boolean {
         val serverError = error as? sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException.Server ?: return false
-        return serverError.statusCode == 401 ||
-            serverError.body.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.CREDENTIAL_REVOKED
+        return serverError.isCredentialRevoked
     }
 
     private fun isProgressCapabilityDenied(error: Throwable): Boolean {

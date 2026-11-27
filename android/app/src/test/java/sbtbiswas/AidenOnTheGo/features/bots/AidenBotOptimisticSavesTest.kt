@@ -434,12 +434,14 @@ class AidenBotOptimisticSavesTest {
         var losesAnswer = false
         var refuses = false
         var revoked = false
+        var denied = false
 
         suspend fun create(request: AidenBotCreateRequest, key: UUID): AidenBotDetail {
             requests += request to key
             gate?.await()
             if (refuses) throw refused()
-            if (revoked) throw AidenRemoteClientException.UnexpectedStatus(401)
+            if (denied) throw AidenRemoteClientException.Server(403, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.CAPABILITY_DENIED, "This device can't make Bots.", "req_1", false))
+            if (revoked) throw AidenRemoteClientException.Server(401, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.CREDENTIAL_REVOKED, "Pair again.", "req_1", false))
             val created = made.getOrPut(key) { bot.copy(name = request.name, purpose = request.purpose, revision = "bot_made_${made.size + 1}") }
             if (losesAnswer) {
                 losesAnswer = false
@@ -790,6 +792,19 @@ class AidenBotOptimisticSavesTest {
         val last = launchWith(root, mac)
         last.restore()
         assertNull(last.failure.value)
+    }
+
+    // F15: a create the Mac refuses for this device's grants keeps the ask, unlike a revocation.
+    @Test
+    fun aCreateRefusedAsCapabilityDeniedKeepsTheAsk() = runTest {
+        val root = tempFolder.newFolder("outbox")
+        val mac = CreatingMac().apply { denied = true }
+        val flow = launchWith(root, mac)
+        flow.send(flow.start(AidenBotCreateDraft(name = "Chef"), catalog)!!)
+        assertEquals("Chef", flow.failure.value?.draft?.name)
+        val after = launchWith(root, mac)
+        after.restore()
+        assertEquals("the ask survives a relaunch", "Chef", after.failure.value?.draft?.name)
     }
 
     @Test

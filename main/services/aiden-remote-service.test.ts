@@ -923,7 +923,7 @@ test("a paired profile fails closed with typed remediation instead of moving its
     portCandidates: [pairedPort, alternatePort],
   });
   try {
-    await app.state.issueDevice({ name: "Previous iPhone", type: "iphone", clientVersion: "1" });
+    const issued = await app.state.issueDevice({ name: "Previous iPhone", type: "iphone", clientVersion: "1" });
     await assert.rejects(
       app.service.setEnabled(true),
       (error: unknown) => error instanceof AidenRemotePortInUseError
@@ -938,6 +938,12 @@ test("a paired profile fails closed with typed remediation instead of moving its
     assert.equal(app.persisted().lanPortCommitted, false);
     assert.equal(app.bonjour.starts, 0);
     assert.equal(await canBind(alternatePort), true);
+    // A removed device stays listed but strands nothing, so the profile is fresh again and moves.
+    assert.equal(await app.state.revokeDevice(issued.device.id), true);
+    await app.service.setEnabled(true);
+    assert.equal(app.persisted().lanPort, alternatePort);
+    assert.equal(app.persisted().lanPortCommitted, true);
+    assert.deepEqual(app.bonjour.inputs.map((input) => input.port), [alternatePort]);
   } finally {
     await app.cleanup();
     await closeReservedPort(blocker);
@@ -1318,6 +1324,44 @@ test("renaming the Mac updates authenticated projection and Bonjour without rota
     assert.equal(app.persisted().instanceId, identity);
     assert.equal((await app.state.listDevices())[0]?.id, deviceId);
     assert.equal(app.bonjour.inputs[app.bonjour.inputs.length - 1]?.displayName, "Studio Mac");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("a paired device is never granted a capability the host's /server does not offer", async () => {
+  // No workspace API: none of the progress surfaces (tasks, agents, questions,
+  // app controls, skills) is served on this host.
+  const app = await fixture();
+  try {
+    await app.service.setEnabled(true);
+    const { bootstrap } = await app.service.beginPairing("lan");
+    const paired = await insecureJson<{ credential: string; capabilities: string[] }>(
+      app.persisted().lanPort,
+      "/api/aiden/v1/pairing/exchange",
+      {
+        method: "POST",
+        body: {
+          secret: bootstrap.secret,
+          deviceName: "Phone",
+          deviceType: "iphone",
+          clientVersion: "1",
+          acceptsProgressCapabilities: true,
+        },
+      },
+    );
+    assert.equal(paired.status, 200);
+    const server = await insecureJson<{ capabilities: string[]; serverCapabilities: string[] }>(
+      app.persisted().lanPort,
+      "/api/aiden/v1/server",
+      { headers: { authorization: `Bearer ${paired.body.credential}`, "aiden-protocol-version": "1" } },
+    );
+    assert.equal(server.status, 200);
+    assert.deepEqual(
+      paired.body.capabilities.filter((capability) => !server.body.serverCapabilities.includes(capability)),
+      [],
+    );
+    assert.deepEqual([...server.body.capabilities].sort(), [...paired.body.capabilities].sort());
   } finally {
     await app.cleanup();
   }
@@ -2044,6 +2088,26 @@ test("failed pairing removes only the new route when existing access stays enabl
     assert.equal((await f.state.snapshot()).connectionMode, "both");
     assert.equal((await f.state.snapshot()).tailscaleOwnership, undefined);
     assert.equal(f.tailscale.disconnects, 1);
+  } finally { await f.cleanup(); }
+});
+
+test("a removed device is kept for Settings but neither counts as paired nor pins the connection method", async () => {
+  const f = await fixture({ tailscaleAssessment: { state: "owned" } });
+  try {
+    await f.service.setEnabled(true);
+    const issued = await f.state.issueDevice({ name: "Old phone", type: "iphone", clientVersion: "1" });
+    assert.equal((await f.service.status()).pairedDeviceCount, 1);
+    // A live phone could be stranded by a method change, so guided setup refuses one.
+    await assert.rejects(f.service.setupPairing("tailscale", await f.state.snapshot()), /saved connection/);
+    assert.equal(await f.state.revokeDevice(issued.device.id), true);
+    assert.equal((await f.service.status()).pairedDeviceCount, 0);
+    const listed = await f.state.listDevices();
+    assert.equal(listed.length, 1, "the removed phone stays listed");
+    assert.notEqual(listed[0]?.revokedAt, undefined);
+    // Nothing is left to strand, so the person may now switch to Tailscale.
+    const pairing = await f.service.setupPairing("tailscale", await f.state.snapshot());
+    assert.ok(pairing.qrPayload);
+    assert.equal((await f.state.snapshot()).connectionMode, "tailscale");
   } finally { await f.cleanup(); }
 });
 

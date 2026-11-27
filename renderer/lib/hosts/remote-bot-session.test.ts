@@ -17,6 +17,8 @@ import {
   hostServesBotHandoffs,
   hostSharesBotSessions,
   remoteBotPlanView,
+  remoteBotSessionGap,
+  remoteBotSessionGapDescription,
   remoteBotSessionView,
   withOlderRemoteBotEntries,
   withRereadOlderRemoteBotEntries,
@@ -258,6 +260,26 @@ test("only hosts that serve durable Bot sessions to this Mac get the Bot convers
   assert.equal(hostSharesBotSessions({ features: ["bot-durable-session-v1"], capabilities: grants }), true);
   assert.equal(hostSharesBotSessions({ features: [], capabilities: grants }), false);
   assert.equal(hostSharesBotSessions({ features: ["bot-durable-session-v1"], capabilities: ["bot:read", "chat:read"] }), false);
+});
+
+test("a host that can't share a Bot's conversation is told the step that would help", () => {
+  // A desktop at revision 25+ serves durable sessions; this Mac's pairing lacks the grants.
+  const repair = { features: ["bot-delete-v1", "bot-durable-session-v1"] };
+  assert.equal(remoteBotSessionGap(repair), "repair");
+  assert.match(remoteBotSessionGapDescription(repair, "Studio"), /Pair this device with Studio again/);
+
+  // `aiden serve` with durable Bot sessions off: updating would not help, the server's owner opts in.
+  const server = { features: ["bot-delete-v1"] };
+  assert.equal(remoteBotSessionGap(server), "enable_durable");
+  const serverCopy = remoteBotSessionGapDescription(server, "nas");
+  assert.match(serverCopy, /aiden bots enable-durable/);
+  assert.match(serverCopy, /on nas/);
+  assert.doesNotMatch(serverCopy, /Update Aiden/);
+
+  // A host older than revision 25 advertises neither Bot token.
+  const older = { features: [] };
+  assert.equal(remoteBotSessionGap(older), "update");
+  assert.equal(remoteBotSessionGapDescription(older, "Old Mac"), "Update Aiden on Old Mac to chat with its Bots here.");
 });
 
 /** The shared fixture's frames, applied in order as the follower would. */

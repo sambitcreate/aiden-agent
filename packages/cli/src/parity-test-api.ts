@@ -91,3 +91,4 @@ export * from "./server-visuals.ts";
 export { projectAidenRemoteChat } from "../../../main/services/aiden-remote-chats.js";
 
 export { createPromptCacheTelemetry, promptCacheWarmsSinceLastResponse } from "../../../main/services/pi-cache-telemetry.js";
+export { LegacyBotChatFence } from "./legacy-bot-chat-fence.ts";

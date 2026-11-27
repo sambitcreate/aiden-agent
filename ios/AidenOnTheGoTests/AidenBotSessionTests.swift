@@ -3319,7 +3319,7 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         _ = await model.send("Plan my week.")
         try await stored(store, key, count: 1)
 
-        transport.failNextSend(with: try serverError(status: 403, code: "capability_denied"))
+        transport.failNextSend(with: try serverError(status: 401, code: "credential_revoked"))
         transport.queueSession(.success(try session(.idle, seq: 5)))
         await model.load()
         XCTAssertEqual(model.outgoing, [])
@@ -3632,6 +3632,73 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         }
     }
 
+    /// F15: a refusal of this Bot chat while the pairing stands keeps what's unsent,
+    /// marked failed. Only a revoked credential (above) discards it.
+    func testACapabilityDeniedRefusalKeepsTheUnsentMessageAsFailed() async throws {
+        let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
+        let (store, _) = temporaryStore()
+        let cache = AidenBotSessionCache()
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session(.idle)))
+        let model = model(transport, key: key, cache: cache, store: store)
+        await model.load()
+        transport.failNextSend(with: URLError(.networkConnectionLost))
+        _ = await model.send("Plan my week.")
+        try await stored(store, key, count: 1)
+
+        transport.failNextSend(with: try serverError(status: 403, code: "capability_denied"))
+        transport.queueSession(.success(try session(.idle, seq: 5)))
+        await model.load()
+        XCTAssertEqual(model.outgoing.map(\.text), ["Plan my week."])
+        XCTAssertEqual(model.outgoing.first?.status, .failed)
+        XCTAssertNotEqual(model.errorMessage, "That message wasn’t sent. Please try again.")
+        try await stored(store, key, count: 1)
+
+        // A refused feed and a refused refresh keep it too.
+        transport.queueStreamFailure(try serverError(status: 403, code: "capability_denied"))
+        let listener = Task { await model.listen() }
+        try await waitUntil({ transport.streamRequests >= 1 && model.isStreamDown }, what: "the refused feed")
+        listener.cancel()
+        await listener.value
+        transport.queueSession(.failure(try serverError(status: 403, code: "capability_denied")))
+        await model.load()
+        XCTAssertEqual(model.outgoing.map(\.text), ["Plan my week."])
+        XCTAssertNotNil(model.errorMessage, "the refusal is shown")
+        XCTAssertNotEqual(model.errorMessage, "That message wasn’t sent. Please try again.")
+        try await stored(store, key, count: 1)
+    }
+
+    func testOnlyARefusalTheMacSpelledOutSendsTryAgainOnANewKey() async throws {
+        // A decoded capability_denied answered this key without running it: Try again is new.
+        let refused = FakeBotSessionTransport()
+        let refusedModel = await loaded(refused, try session(.idle))
+        refused.failNextSend(with: try serverError(status: 403, code: "capability_denied"))
+        _ = await refusedModel.send("Plan my week.")
+        let failed = try XCTUnwrap(refusedModel.outgoing.first)
+        XCTAssertEqual(failed.status, .failed)
+        let retried = await refusedModel.retrySend(failed.id)
+        XCTAssertTrue(retried)
+        guard refused.sendKeys.count == 2 else { return XCTFail("Try again sends once: \(refused.sendKeys.count)") }
+        XCTAssertNotEqual(refused.sendKeys[1], refused.sendKeys[0], "the Mac settled the refused key")
+
+        // An unreadable 403 may not be the Mac's answer: the message stays and keeps its key.
+        let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
+        let (store, _) = temporaryStore()
+        let unreadable = FakeBotSessionTransport()
+        unreadable.queueSession(.success(try session(.idle)))
+        let model = model(unreadable, key: key, store: store)
+        await model.load()
+        unreadable.failNextSend(with: AidenRemoteClientError.unexpectedStatus(403))
+        _ = await model.send("Plan my week.")
+        XCTAssertEqual(model.outgoing.map(\.text), ["Plan my week."])
+        XCTAssertEqual(model.look(of: try XCTUnwrap(model.outgoing.first)), .sending, "not Couldn't send")
+        try await stored(store, key, count: 1)
+        unreadable.queueSession(.success(try session(.idle, seq: 5)))
+        await model.load()
+        guard unreadable.sendKeys.count == 2 else { return XCTFail("the next load sends it again: \(unreadable.sendKeys.count)") }
+        XCTAssertEqual(unreadable.sendKeys[0], unreadable.sendKeys[1], "the same message, the same key")
+    }
+
     func testAStreamThatLosesAccessPurgesAndSaysSoWithoutTheRefreshOverwritingIt() async throws {
         let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
         let (store, _) = temporaryStore()
@@ -3639,7 +3706,7 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         let model = model(transport, key: key, store: store)
         _ = await model.send("Plan my week.")
         try await stored(store, key, count: 1)
-        transport.queueStreamFailure(try serverError(status: 401, code: "authentication_required"))
+        transport.queueStreamFailure(try serverError(status: 401, code: "credential_revoked"))
         let listener = Task { await model.listen() }
         try await waitUntil({ model.outgoing.isEmpty }, what: "the purge")
         listener.cancel()
@@ -3647,8 +3714,8 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(model.errorMessage, "That message wasn’t sent. Please try again.")
         try await stored(store, key, count: 0)
 
-        transport.queueSession(.failure(try serverError(status: 401, code: "authentication_required")))
-        await model.load() // the refresh fails with 401 too: the notice stays
+        transport.queueSession(.failure(try serverError(status: 401, code: "credential_revoked")))
+        await model.load() // the refresh is refused as revoked too: the notice stays
         XCTAssertEqual(model.errorMessage, "That message wasn’t sent. Please try again.")
     }
 
@@ -3876,7 +3943,7 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         transport.failNextSend(with: URLError(.networkConnectionLost))
         _ = await closing?.send("Plan my week.")
         try await stored(store, other, count: 1)
-        transport.failNextSend(with: try serverError(status: 403, code: "capability_denied"))
+        transport.failNextSend(with: try serverError(status: 403, code: "credential_revoked"))
         transport.queueSession(.success(try session(.idle, seq: 5)))
         await closing?.load()
         closing = nil
@@ -6539,7 +6606,7 @@ extension AidenBotSessionTests {
         XCTAssertTrue(taken)
         XCTAssertEqual(model.outgoing.map(\.text), ["Waits for the machine"])
         model.draft = "Not sent, not lost"
-        transport.queueSession(.failure(AidenRemoteClientError.unexpectedStatus(403)))
+        transport.queueSession(.failure(try serverError(status: 401, code: "credential_revoked", message: "Pair again.")))
 
         await model.load()
         await model.waitForDraftPersistence()

@@ -2682,6 +2682,16 @@ test("chat skill catalog revalidates the workspace projection and narrows Bot ch
 
 test("chat skill catalog fails closed without a wired registry", async () => {
   const app = fixture(chat());
+  // The catalog method always exists, so hosts ask whether skills are wired.
+  assert.equal(app.service.supportsSkills, false);
+  const catalogOnly = fixture(chat(), { skillCatalog: async () => [] });
+  assert.equal(catalogOnly.service.supportsSkills, false, "listing without running would offer skills a turn refuses");
+  const wired = fixture(chat(), {
+    skillCatalog: async () => [],
+    deviceSupportsSkillInvocation: async () => true,
+    resolveSkillInvocation: async () => { throw new Error("not reached"); },
+  });
+  assert.equal(wired.service.supportsSkills, true);
   await assert.rejects(
     app.service.chatSkillCatalog("device-1", "chat-1"),
     (error: unknown) =>

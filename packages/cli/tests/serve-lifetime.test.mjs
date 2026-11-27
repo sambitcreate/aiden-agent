@@ -2,7 +2,7 @@
 // daemon processes, their control socket and the artifacts they leave behind.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { createConnection, createServer, Server } from "node:net";
@@ -31,8 +31,8 @@ function sandbox(t) {
 const run = (args, env) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", timeout: 60_000, env });
 
 /** A foreground server with Remote off, resolved once its control socket answers. */
-async function foreground(t, box) {
-  const child = spawn(process.execPath, [cli, "serve", "--no-remote"], { env: box.env, stdio: ["ignore", "ignore", "pipe"] });
+async function foreground(t, box, cwd) {
+  const child = spawn(process.execPath, [cli, "serve", "--no-remote"], { env: box.env, stdio: ["ignore", "ignore", "pipe"], ...(cwd ? { cwd } : {}) });
   let stderr = "";
   child.stderr.setEncoding("utf8").on("data", (part) => { stderr += part; });
   const exited = new Promise((resolveExit) => child.once("exit", (code, signal) => resolveExit({ code, signal })));
@@ -133,6 +133,55 @@ test("a failed startup releases its lease and the next start succeeds", posix, a
   assert.equal(existsSync(box.lock), false, "the lease went with the failed start");
   rmSync(box.socket, { recursive: true, force: true });
   const server = await foreground(t, box);
+  server.child.kill("SIGTERM");
+  assert.deepEqual(await server.exited, { code: 0, signal: null }, server.stderr());
+});
+
+test("a data directory too deep for a Unix socket is refused up front with the limit and the fix", posix, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aiden-serve-long-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const limit = process.platform === "darwin" ? 103 : 107;
+  // One byte over: `<agentDir>/serve.sock` is exactly limit + 1 bytes.
+  const padding = limit + 1 - Buffer.byteLength(join(root, "serve.sock")) - 1;
+  const agentDir = join(root, "d".repeat(padding)), home = join(root, "home");
+  mkdirSync(agentDir, { mode: 0o700 }); mkdirSync(home);
+  assert.equal(Buffer.byteLength(api.daemonSocket(agentDir)), limit + 1);
+  const env = { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" };
+  for (const args of [["serve", "--no-remote"], ["serve", "--daemon", "--no-remote"]]) {
+    const refused = run(args, env);
+    assert.notEqual(refused.status, 0, args.join(" "));
+    assert.match(refused.stderr, new RegExp(`${limit + 1} bytes, over the ${limit}-byte limit`, "u"), args.join(" "));
+    assert.match(refused.stderr, /AIDEN_CODING_AGENT_DIR/u);
+    // Refused before anything started: no lease, socket or server log.
+    assert.equal(existsSync(join(agentDir, "serve.lock")), false);
+    assert.equal(existsSync(api.daemonSocket(agentDir)), false);
+  }
+  // At the limit itself the server starts.
+  const fits = join(root, "d".repeat(padding - 1));
+  mkdirSync(fits, { mode: 0o700 });
+  const box = { agentDir: fits, socket: api.daemonSocket(fits), env: { ...env, AIDEN_CODING_AGENT_DIR: fits } };
+  const server = await foreground(t, box);
+  server.child.kill("SIGTERM");
+  assert.deepEqual(await server.exited, { code: 0, signal: null }, server.stderr());
+});
+
+test("a Bots file argument is read from the caller's directory, not the server's", posix, async (t) => {
+  const box = sandbox(t);
+  // Under launchd the server runs in `/`; the caller is somewhere else entirely.
+  const server = await foreground(t, box, "/");
+  const work = join(box.agentDir, "..", "work"); mkdirSync(work);
+  writeFileSync(join(work, "rel.json"), JSON.stringify({ bot: { name: "Rel", instructions: "Hi", avatar: { version: 1, shape: "wisp", color: "lilac" } } }));
+  const bots = (args) => spawnSync(process.execPath, [cli, "bots", ...args], { encoding: "utf8", timeout: 60_000, env: box.env, cwd: work });
+  // A missing file is named where the caller meant it.
+  const missing = bots(["create", "missing.json"]);
+  assert.notEqual(missing.status, 0);
+  const named = [work, realpathSync(work)].map((folder) => `No file at ${join(folder, "missing.json")}`);
+  assert.ok(named.some((text) => missing.stderr.includes(text)), missing.stderr);
+  // A present one reaches the Bot service, which judges its contents (no provider here).
+  const created = bots(["create", "rel.json"]);
+  assert.notEqual(created.status, 0);
+  assert.doesNotMatch(created.stderr, /No file at/u, created.stderr);
+  assert.match(created.stderr, /requires an available provider and model/u, created.stderr);
   server.child.kill("SIGTERM");
   assert.deepEqual(await server.exited, { code: 0, signal: null }, server.stderr());
 });

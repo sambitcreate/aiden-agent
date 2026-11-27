@@ -194,15 +194,21 @@ struct ContentView: View {
     @State private var sceneConnectionRefreshInProgress = false
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: true)
     @State private var connectScheduler: AidenHostConnectScheduler?
+    /// The pairing flow, opened from the recovery banner's Pair again.
+    @State private var showsPairAgain = false
 
     @ViewBuilder
     private var connectionRecovery: some View {
         if case .offline = coordinator.connectionState, let issue = coordinator.connectionIssue {
             // The Machines page reports each machine's own state, and makes
-            // another the default or pairs a new one.
-            AidenConnectionRecoveryView(coordinator: coordinator, issue: issue) {
-                shellRoute = .machines
-            }
+            // another the default or pairs a new one. Pair again opens the
+            // pairing flow itself, as Machines' Add does.
+            AidenConnectionRecoveryView(
+                coordinator: coordinator,
+                issue: issue,
+                switchConnection: { shellRoute = .machines },
+                pairAgain: { showsPairAgain = true }
+            )
         }
     }
 
@@ -221,6 +227,13 @@ struct ContentView: View {
                 navigationRequest: $navigationRequest,
                 routeRequest: $shellRoute,
                 tabRequest: $shellTab
+            )
+        }
+        .sheet(isPresented: $showsPairAgain) {
+            AidenPairingView(
+                coordinator: coordinator,
+                onClose: { showsPairAgain = false },
+                onPaired: { showsPairAgain = false }
             )
         }
         .task { await coordinator.start() }
@@ -476,6 +489,7 @@ struct AidenConnectionRecoveryView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let issue: AidenConnectionIssue
     let switchConnection: () -> Void
+    let pairAgain: () -> Void
 
     @Environment(\.aidenPalette) private var palette
 
@@ -512,8 +526,14 @@ struct AidenConnectionRecoveryView: View {
         if issue.canRetry {
             Button("Retry connection") { Task { await coordinator.connectActiveInstallation() } }
         }
-        Button("Switch connection", action: switchConnection)
-            .accessibilityHint("Opens Computers, to choose another computer or pair one.")
+        if issue.pairAgain {
+            // The computer forgot this device: the one way back is pairing it again.
+            Button("Pair again", action: pairAgain)
+                .accessibilityHint("Opens pairing, to pair this device with the computer again.")
+        } else {
+            Button("Switch connection", action: switchConnection)
+                .accessibilityHint("Opens Computers, to choose another computer or pair one.")
+        }
     }
 }
 

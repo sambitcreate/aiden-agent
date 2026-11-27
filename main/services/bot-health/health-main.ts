@@ -9,7 +9,7 @@ import { botCapabilityCatalog, botCapabilityStore } from "../bot-capability-serv
 import { setBotRoutineAfterPersonFailure } from "../bot-routine-recovery-main.js";
 import { scheduleStore } from "../schedule-store.js";
 import { providerFailureFromLegacyPiMessage } from "../provider-failure.js";
-import { runBotHealthChecks, type BotHealthCheckDeps } from "./checks.js";
+import { modelBindingAfterAdmissionFailure, runBotHealthChecks, type BotHealthCheckDeps } from "./checks.js";
 import { createBotHealthReports, createBotRoutinePreflight, reconcileHealthIssues } from "./preflight.js";
 
 /** How often the timers are re-read from the schedule (local file only). */
@@ -28,8 +28,7 @@ const checks: BotHealthCheckDeps = {
       await probeBotAdmission(botId);
       return "current";
     } catch (error) {
-      // Only a real authority drift is the person's to fix; anything else is unknown.
-      return error instanceof Error && error.name === "BotRuntimeAuthorityError" ? "drifted" : "unknown";
+      return modelBindingAfterAdmissionFailure(error);
     }
   },
   providerAuth: async (botId, signal) => {

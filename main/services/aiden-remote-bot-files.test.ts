@@ -13,6 +13,7 @@ import { AidenOpaqueHandleStore } from "./aiden-remote-opaque-handles.js";
 import { AIDEN_REMOTE_BASE_PATH, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import {
+  BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE,
   BotRuntimeAuthorityError,
   type BotRuntimeAuthorityAdmission,
   type BotRuntimeEffectiveAuthority,
@@ -208,9 +209,8 @@ test("a device paired without its own Full Access notice opens Bot Files under t
     createdAt: 1,
     updatedAt: 1,
   };
-  // Only the Mac owner accepted Full Access. The runtime resolver folds the
-  // store's missing-notice rejection for any other audience into
-  // access_unavailable, which Bot Files reports as a stale-access 409.
+  // Only the Mac owner accepted Full Access. The runtime resolver refuses any
+  // other audience with a notice-required access_unavailable, as here.
   const acceptedAudiences = new Set(["desktop:local"]);
   const service = new AidenRemoteBotFileService({
     instanceId: "instance-1",
@@ -219,7 +219,7 @@ test("a device paired without its own Full Access notice opens Bot Files under t
     authority: {
       admit: async ({ audienceId, botId, chatId }): Promise<BotRuntimeAuthorityAdmission> => {
         if (!acceptedAudiences.has(audienceId)) {
-          throw new BotRuntimeAuthorityError("access_unavailable");
+          throw new BotRuntimeAuthorityError("access_unavailable", BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE, { noticeRequired: true });
         }
         return {
           authority: authorityFixture({
@@ -255,6 +255,15 @@ test("a device paired without its own Full Access notice opens Bot Files under t
       () => service.read("device-other", "chat-1", file.id),
       (error: unknown) =>
         error instanceof AidenRemoteServiceError && error.code === "handle_wrong_device",
+    );
+    // Once the owner withdraws the notice, Files says what is missing: a refusal
+    // that a refresh cannot fix, not a stale grant to retry.
+    acceptedAudiences.clear();
+    await assert.rejects(
+      () => service.list("device-new-iphone", "chat-1"),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "capability_denied" &&
+        error.status === 403 && error.retryable === false && error.message === BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE,
     );
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });

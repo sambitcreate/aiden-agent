@@ -263,7 +263,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure" | "moveToNewWorktree" | "supportsNewWorktrees" | "supportsContinueInNewChat" | "supportsAgentSlider" | "setTriage" | "supportsTriage">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "supportsSkills" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure" | "moveToNewWorktree" | "supportsNewWorktrees" | "supportsContinueInNewChat" | "supportsAgentSlider" | "setTriage" | "supportsTriage">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -1819,7 +1819,12 @@ function requireNegotiatedProgressCapability(
   );
 }
 
-function progressCapabilitySupported(
+/**
+ * Whether this host serves a progress capability. `/server.serverCapabilities`,
+ * the progress features, `POST /device/capabilities` and the pairing grants all
+ * use this one predicate, so a host never grants what it does not offer.
+ */
+export function progressCapabilitySupported(
   dependencies: AidenRemoteRouterDependencies,
   capability: AidenRemoteProgressCapability,
 ): boolean {
@@ -1828,12 +1833,72 @@ function progressCapabilitySupported(
   }
   if (capability === "app-controls:read" || capability === "app-controls:respond") return Boolean(dependencies.appControls);
   if (capability === "skills:invoke") {
-    return typeof dependencies.chats?.chatSkillCatalog === "function";
+    return dependencies.chats?.supportsSkills === true && typeof dependencies.chats.chatSkillCatalog === "function";
   }
   if (!dependencies.chats || !dependencies.chatProgress?.openEvents) return false;
   return capability === "tasks:read"
     ? Boolean(dependencies.chatProgress.taskSnapshot)
     : Boolean(dependencies.chatProgress.agentRoster);
+}
+
+/**
+ * Bot opt-ins: `serverCapabilities` lists each only for a Bot-aware device
+ * while its routes are wired, so negotiation and the grant projection check
+ * them against that same list rather than predicates of their own.
+ */
+const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES: readonly string[] = [
+  ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PLAN_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
+];
+
+/** True when `/server` sends this device the additive `serverCapabilities` inventory. */
+function receivesServerCapabilities(
+  device: Pick<AidenRemoteRouterAuthenticatedDevice, "acceptsBotCapabilities" | "acceptsProgressCapabilities">,
+): boolean {
+  return device.acceptsBotCapabilities === true || device.acceptsProgressCapabilities === true;
+}
+
+/**
+ * A device's grants as this host projects them. Only the projection changes:
+ * the stored grants stay, so one comes back when the host serves it again.
+ *
+ * A device sent `serverCapabilities` sees only grants that list holds for it,
+ * because iOS and Android reject a `/server` whose `capabilities` reach
+ * outside it: a negotiated grant the host stopped advertising (background
+ * jobs turned off, a simulator host gone, a Bot route unwired) is left out.
+ * A legacy device is sent no inventory and no client checks it, so it keeps
+ * its grants, less a progress grant or Bot opt-in this host does not serve.
+ * Routes still check the stored grant and refuse what is not served.
+ */
+function servedDeviceCapabilities(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  capabilities: Iterable<AidenRemoteCapability>,
+  dependencies: AidenRemoteRouterDependencies,
+): AidenRemoteCapability[] {
+  const advertised = new Set<string>(advertisedServerCapabilities(device, dependencies));
+  if (receivesServerCapabilities(device)) {
+    return [...capabilities].filter((capability) => advertised.has(capability));
+  }
+  return [...capabilities].filter((capability) =>
+    ((AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability)
+      ? progressCapabilitySupported(dependencies, capability as AidenRemoteProgressCapability)
+      : true) &&
+    (!AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES.includes(capability) || advertised.has(capability)));
 }
 
 function hostCapabilitySupported(
@@ -2770,10 +2835,9 @@ export function createAidenRemoteRequestHandler(
           name: dependencies.displayName(),
           appVersion: dependencies.appVersion,
           ...(peerRoutes === undefined ? {} : { peerRoutes }),
-          capabilities: [...device.capabilities],
+          capabilities: servedDeviceCapabilities(device, device.capabilities, dependencies),
           ...(device.name ? { deviceName: device.name } : {}),
-          ...(device.acceptsBotCapabilities === true ||
-            device.acceptsProgressCapabilities === true
+          ...(receivesServerCapabilities(device)
             ? {
                 serverCapabilities: advertisedServerCapabilities(
                   device,
@@ -2874,11 +2938,13 @@ export function createAidenRemoteRequestHandler(
             400,
           );
         }
+        const advertised = new Set<string>(advertisedServerCapabilities(device, dependencies));
         for (const capability of input.accepts) {
           if (capability.startsWith("app-controls:") && !await dependencies.appControls?.enabled()) throw new AidenRemoteServiceError("capability_denied", "Allow paired-device chat controls in Aiden Agent on your computer first.", 403);
           if ((AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
-            // An opt-in to two session entry types, not an authority: any
-            // device may hold it while the host serves Bot sessions.
+            // An opt-in to two session entry types, not an authority. It
+            // needs Bot sessions here; the advertised check after this
+            // chain also requires a device paired with Bot capabilities.
             if (!dependencies.botSessions) {
               throw new AidenRemoteServiceError("not_found", "Bot sessions are unavailable on this Aiden installation.", 404);
             }
@@ -3002,12 +3068,20 @@ export function createAidenRemoteRequestHandler(
                 404,
               );
             }
+          } else if (AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES.includes(capability)) {
+            // Watches, open work, routine models and peers: the advertised
+            // list below is their only check.
           } else if (!progressCapabilitySupported(dependencies, capability as AidenRemoteProgressCapability)) {
             throw new AidenRemoteServiceError(
               "not_found",
               "This progress capability is unavailable on this Aiden installation.",
               404,
             );
+          }
+          // A Bot opt-in is granted only where `/server` advertises it to this
+          // device, so its grants never exceed `serverCapabilities`.
+          if (AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES.includes(capability) && !advertised.has(capability)) {
+            throw new AidenRemoteServiceError("not_found", "This Bot capability is unavailable on this Aiden installation.", 404);
           }
         }
         const updated = await dependencies.devices.upgradeDeviceCapabilities(
@@ -3021,7 +3095,13 @@ export function createAidenRemoteRequestHandler(
             403,
           );
         }
-        writeJson(response, 200, { capabilities: updated.capabilities });
+        // Negotiating a progress grant opts the device into `serverCapabilities`.
+        const negotiated = {
+          ...device,
+          acceptsProgressCapabilities: device.acceptsProgressCapabilities === true ||
+            input.accepts.some((capability) => (AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability)),
+        };
+        writeJson(response, 200, { capabilities: servedDeviceCapabilities(negotiated, updated.capabilities, dependencies) });
         return;
       }
       if (path === "/bots/messaging" && request.method === "PUT") {
@@ -5072,15 +5152,16 @@ export function createAidenRemoteRequestHandler(
         route = "chatSkills";
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (typeof dependencies.chats?.chatSkillCatalog !== "function") {
+        const skillChats = dependencies.chats;
+        if (!skillChats?.chatSkillCatalog || !progressCapabilitySupported(dependencies, "skills:invoke")) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         requireNegotiatedProgressCapability(device, "skills:invoke");
-        await requireChatAccess(dependencies.chats, device, chatSkillsMatch[1]!, "read");
+        await requireChatAccess(skillChats, device, chatSkillsMatch[1]!, "read");
         writeJson(
           response,
           200,
-          await dependencies.chats.chatSkillCatalog(device.id, chatSkillsMatch[1]!, device.capabilities.has("app-controls:read")),
+          await skillChats.chatSkillCatalog(device.id, chatSkillsMatch[1]!, device.capabilities.has("app-controls:read")),
         );
         return;
       }

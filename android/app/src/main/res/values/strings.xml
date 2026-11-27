@@ -201,7 +201,10 @@
     <string name="pairing_import">Import &amp; pair</string>
     <string name="pairing_in_progress">Pairing with your desktop…</string>
     <string name="pairing_in_progress_short">Pairing…</string>
+    <string name="connection_pair_again">Pair again</string>
     <string name="pairing_failed">Couldn\'t pair with that desktop. Check the code and try again.</string>
+    <string name="pairing_desktop_unverified">Couldn\'t verify this desktop. Scan its QR code instead.</string>
+    <string name="pairing_desktop_unverified_qr">Couldn\'t verify this desktop. Open a new pairing window on it and scan again.</string>
     <string name="camera_prompt_title">Scan the pairing code</string>
     <string name="camera_prompt_body">Point your camera at the QR code Aiden Agent shows on your desktop.</string>
     <string name="camera_prompt_blocked">Camera access is off for Aiden. Turn it on in Settings, or use the setup code instead.</string>

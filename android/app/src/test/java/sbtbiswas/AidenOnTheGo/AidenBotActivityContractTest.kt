@@ -405,8 +405,6 @@ class AidenBotActivityContractTest {
     @Test
     fun aGrantIsAskedForOnlyFromAMacThatAnnouncesItsFeatureAndOnlyWhenNotHeld() {
         val rows = listOf(
-            AidenRemoteProtocol.BOT_MEMORY_FEATURE to listOf(AidenRemoteCapability.BOT_CARDS),
-            AidenRemoteProtocol.BOT_PROACTIVE_FEATURE to listOf(AidenRemoteCapability.BOT_CARDS),
             AidenRemoteProtocol.CHAT_AGENTS_FEATURE to listOf(AidenRemoteCapability.AGENTS_READ),
             AidenRemoteProtocol.CHAT_QUESTION_PROMPTS_FEATURE to listOf(AidenRemoteCapability.QUESTIONS_RESPOND),
             AidenRemoteProtocol.CHAT_SKILLS_FEATURE to listOf(AidenRemoteCapability.SKILLS_INVOKE),
@@ -438,11 +436,33 @@ class AidenBotActivityContractTest {
         val all = macWith(
             listOf(AidenRemoteProtocol.BOT_MEMORY_FEATURE, AidenRemoteProtocol.BOT_PROACTIVE_FEATURE, AidenRemoteProtocol.BOT_ACTIVITY_FEATURE),
             emptyList(),
-            offers = listOf(AidenRemoteCapability.BOT_ACTIVITY)
+            offers = listOf(AidenRemoteCapability.BOT_CARDS, AidenRemoteCapability.BOT_ACTIVITY)
         )
         assertEquals(
             listOf(AidenRemoteCapability.BOT_CARDS, AidenRemoteCapability.BOT_ACTIVITY),
             aidenProgressCapabilitiesToRequest(all, installationHolding())
+        )
+    }
+
+    // A host refuses a `bot:*` opt-in its capability list doesn't offer, and that would fail the
+    // whole call. So `bot:cards` is asked for only when offered, as on iOS, and a Mac with the
+    // memory and proactive features but no offer still gets asked for the progress grants.
+    @Test
+    fun botCardsIsAskedForOnlyWhenOfferedAndNeverTakesTheProgressGrantsDown() {
+        val features = listOf(
+            AidenRemoteProtocol.BOT_MEMORY_FEATURE, AidenRemoteProtocol.BOT_PROACTIVE_FEATURE,
+            AidenRemoteProtocol.CHAT_TASKS_FEATURE, AidenRemoteProtocol.CHAT_AGENTS_FEATURE
+        )
+        val base = listOf(AidenRemoteCapability.CHAT_READ)
+        val progress = listOf(AidenRemoteCapability.TASKS_READ, AidenRemoteCapability.AGENTS_READ)
+        assertEquals(
+            "no bot:cards offer: the progress grants alone",
+            progress,
+            aidenProgressCapabilitiesToRequest(macWith(features, base), installationHolding())
+        )
+        assertEquals(
+            progress + AidenRemoteCapability.BOT_CARDS,
+            aidenProgressCapabilitiesToRequest(macWith(features, base, offers = listOf(AidenRemoteCapability.BOT_CARDS)), installationHolding())
         )
     }
 

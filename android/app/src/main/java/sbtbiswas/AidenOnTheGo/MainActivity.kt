@@ -375,7 +375,8 @@ class MainActivity : ComponentActivity() {
                                     onNavigateToWorkspaceGit = { wsId -> push(AidenScreen.WorkspaceGit(wsId)) },
                                     onOpenSettings = { push(AidenScreen.Settings()) },
                                     onOpenInstallations = { push(AidenScreen.Installations) },
-                                    onNavigateToBotMemory = { botId -> push(AidenScreen.BotMemory(botId)) }
+                                    onNavigateToBotMemory = { botId -> push(AidenScreen.BotMemory(botId)) },
+                                    onPairDesktop = { push(AidenScreen.PairDesktop) }
                                 )
                             }
                             is AidenScreen.ChatDetail -> {

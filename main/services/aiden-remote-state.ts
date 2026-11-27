@@ -83,6 +83,17 @@ export function isAidenRemotePairedDevice<T extends { type: AidenRemoteDeviceTyp
 ): device is T & { type: AidenRemotePairedDeviceType } {
   return device.type !== "agent";
 }
+
+/**
+ * A paired phone, tablet or computer that is still connected: revoked devices
+ * stay in the document as tombstones (Settings lists them as removed), but
+ * they neither count as paired nor tie this computer to its saved connection.
+ */
+export function isAidenRemoteLivePairedDevice<T extends { type: AidenRemoteDeviceType; revokedAt?: number }>(
+  device: T,
+): device is T & { type: AidenRemotePairedDeviceType } {
+  return isAidenRemotePairedDevice(device) && device.revokedAt === undefined;
+}
 export type AidenRemoteConnectionMode = "lan" | "tailscale" | "both";
 
 interface StoredAidenRemoteDevice {

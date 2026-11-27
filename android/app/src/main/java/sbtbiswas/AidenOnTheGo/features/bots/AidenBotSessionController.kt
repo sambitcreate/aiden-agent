@@ -382,13 +382,24 @@ fun aidenBotOutboxFailureStep(
 fun aidenBotMessageFailureIsAmbiguous(error: Throwable): Boolean =
     AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER)
 
-/** 401 or 403, or a pairing that's gone: this phone no longer reaches this Bot. */
+/**
+ * The pairing itself is gone: a revoked credential, a missing one, or another installation now
+ * active. Only this discards what waited to go to the Bot, as on iOS.
+ */
 fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
     is AidenRemoteClientException.Server -> error.isCredentialRevoked
-    is AidenRemoteClientException.UnexpectedStatus -> error.statusCode == 401 || error.statusCode == 403
     is AidenRemoteClientException.MissingCredential, is AidenRemoteClientException.InstallationChanged -> true
     else -> false
 }
+
+/**
+ * The Mac refused this phone this Bot chat (a decoded 403 `capability_denied`, or another decoded
+ * 401/403) while the pairing stands. The chat says it has no access; nothing unsent is discarded.
+ * An unreadable 401/403 is an ordinary failure. A send's refusal is settled by
+ * [aidenBotMessageFailureIsAmbiguous], which keeps the key of an unreadable one.
+ */
+fun aidenBotAccessDenied(error: Exception): Boolean =
+    error is AidenRemoteClientException.Server && error.isDecodedEnvelope && error.isUnauthorized && !error.isCredentialRevoked
 
 /**
  * The audience-shaping Bot session grants [installation] holds. The Mac shapes a
@@ -938,8 +949,9 @@ class AidenBotSessionController(
             val missing = (error as? AidenRemoteClientException.Server)?.statusCode == 404
             val lost = aidenBotLostAccess(error)
             if (lost) purgeForAccessLoss()
+            val denied = lost || aidenBotAccessDenied(error)
             _state.update {
-                it.copy(isLoading = false, loadFailed = it.session == null, botMissing = it.botMissing || missing, accessLost = it.accessLost || lost)
+                it.copy(isLoading = false, loadFailed = it.session == null, botMissing = it.botMissing || missing, accessLost = it.accessLost || denied)
             }
             if (missing) failWaiting()
             false
@@ -1124,10 +1136,12 @@ class AidenBotSessionController(
                     failWaiting()
                     return
                 }
-                // This phone isn't allowed to read the chat: retrying cannot help, and nothing unsent is kept.
-                if (aidenBotLostAccess(error)) {
+                // This phone isn't allowed to read the chat: retrying cannot help. Only a pairing
+                // that's gone discards what's unsent; a refusal keeps it for when access is back.
+                val lost = aidenBotLostAccess(error)
+                if (lost || aidenBotAccessDenied(error)) {
                     downJob?.cancel()
-                    purgeForAccessLoss()
+                    if (lost) purgeForAccessLoss()
                     _state.update { it.copy(isLoading = false, loadFailed = it.session == null, accessLost = true) }
                     return
                 }

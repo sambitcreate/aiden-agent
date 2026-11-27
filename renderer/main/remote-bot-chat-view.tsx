@@ -35,7 +35,7 @@ import { composerHistoryFromBotEntries } from "../lib/composer-history";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { remoteBotPhotoAsset } from "../lib/hosts/remote-bot-photo-asset";
 import { markRemoteBotSeen, remoteBotShownReplyAt } from "../lib/remote-bot-seen";
-import { hostServesBotHandoffs, hostSharesBotSessions } from "../lib/hosts/remote-bot-session";
+import { hostServesBotHandoffs, hostSharesBotSessions, remoteBotSessionGapDescription } from "../lib/hosts/remote-bot-session";
 import { useRemoteBotSession } from "../lib/hosts/use-remote-bot-session";
 import { browserApi, peerHostsApi } from "../lib/ipc";
 import type { Attachment } from "../lib/types";
@@ -157,7 +157,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const avatar = botAvatar(feed.data, botId);
   const row = feed.data?.bots.find((bot) => bot.id === botId);
   const photoUrl = useRemoteBotPhoto(hostId, botId, row ? remoteBotPhotoAsset(row) : undefined);
-  // A host too old to share the conversation is told so below, without asking it.
+  // A host that doesn't share the conversation is told why below, without asking it.
   const shared = !host || hostSharesBotSessions(host);
   const live = useRemoteBotSession(hostId, botId, shared);
   // The newest reply the chat shows is not unread when the person leaves. Only
@@ -375,11 +375,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       centered(
         <EmptyState
           title="This Bot's chat isn't shared"
-          description={
-            features.has("bot-durable-session-v1")
-              ? `This device can see ${hostName}'s Bots but can't chat with them. Pair it again from ${hostName} to update its access.`
-              : `Update Aiden on ${hostName} to chat with its Bots here.`
-          }
+          description={remoteBotSessionGapDescription({ features: host?.features ?? [] }, hostName)}
           action={
             <Button variant="filled" onClick={() => void navigate(botListLocation())}>
               All Bots

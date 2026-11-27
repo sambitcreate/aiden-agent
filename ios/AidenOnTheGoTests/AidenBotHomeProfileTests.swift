@@ -1231,9 +1231,9 @@ final class AidenBotInstantEditTests: XCTestCase {
     func testAPendingCreateGoesWithAccessAndWithAnUnpair() async throws {
         let mac = CreateMac()
 
-        // The Mac refuses this phone: nothing of the ask stays on disk.
+        // The Mac revoked this phone: nothing of the ask stays on disk.
         let refusedRoot = createRoot()
-        mac.createErrors = [AidenRemoteClientError.unexpectedStatus(403)]
+        mac.createErrors = [try Self.decodedServerError(403, "credential_revoked")]
         let refused = createFlow(refusedRoot)
         await refused.submit(input, operations: try createOperations(mac)) { _ in }
         XCTAssertNotNil(refused.failure)
@@ -1251,6 +1251,35 @@ final class AidenBotInstantEditTests: XCTestCase {
         let relaunched = createFlow(root)
         await relaunched.restore(instanceId: "mac_a", deviceId: "device_1")
         XCTAssertNil(relaunched.failure)
+    }
+
+    @MainActor
+    func testACreateRefusedWithoutLosingAccessKeepsItsAnswers() async throws {
+        // A refusal that leaves the pairing in place, decoded or unreadable, is not lost access.
+        for refusal in [
+            try Self.decodedServerError(403, "capability_denied"),
+            try Self.decodedServerError(401, "authentication_required"),
+            AidenRemoteClientError.unexpectedStatus(403),
+        ] {
+            let root = createRoot()
+            let mac = CreateMac()
+            mac.createErrors = [refusal]
+            let flow = createFlow(root)
+            await flow.submit(input, operations: try createOperations(mac)) { _ in }
+            XCTAssertEqual(flow.failure?.input, input, "\(refusal)")
+
+            let relaunched = createFlow(root)
+            await relaunched.restore(instanceId: "mac_a", deviceId: "device_1")
+            XCTAssertEqual(relaunched.failure?.input, input, "the ask is still on disk after \(refusal)")
+        }
+    }
+
+    private static func decodedServerError(_ status: Int, _ code: String) throws -> AidenRemoteClientError {
+        let body = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"\#(code)","message":"Refused.","requestId":"req_refused","retryable":false}"#.utf8)
+        )
+        return .server(statusCode: status, body: body)
     }
 
     @MainActor

@@ -4640,6 +4640,33 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
+    func testAComputerThatForgotThisDeviceAsksToPairAgainAndKeepsThePairing() async throws {
+        for (status, body, pairAgain) in [
+            (401, #"{"error":{"code":"authentication_required","message":"Pair this device.","requestId":"r","retryable":false}}"#, true),
+            (401, "not json", false),
+        ] {
+            let store = AidenInstallationStore(keychain: AidenRemoteMemoryKeychain())
+            _ = try store.savePairing(
+                makeExchange(instanceId: "forgot", deviceId: "device", credential: "credential"),
+                trust: makeSystemTrust(), name: "Studio Mac"
+            )
+            let session = makeSession()
+            AidenRemoteMockURLProtocol.handler = { request in Self.response(for: request, status: status, json: body) }
+            let coordinator = AidenRemoteCoordinator(installationStore: store, clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            })
+
+            await coordinator.connectActiveInstallation()
+
+            let issue = try XCTUnwrap(coordinator.connectionIssue, body)
+            XCTAssertEqual(issue.pairAgain, pairAgain, body)
+            XCTAssertEqual(issue.canRetry, !pairAgain, "retrying a forgotten device can never succeed: \(body)")
+            XCTAssertEqual(issue.title, pairAgain ? "Pairing required" : "Computer unavailable", body)
+            XCTAssertEqual(store.installations.map(\.id), ["forgot"], "only a revoked credential forgets the pairing: \(body)")
+        }
+    }
+
+    @MainActor
     func testInstallationStoreKeepsCredentialsScopedAndSwitchesWithoutLeakage() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)
@@ -5347,6 +5374,75 @@ final class AidenRemoteClientTests: XCTestCase {
             XCTAssertEqual(installation.deviceCapabilities.contains(.tasksRead), outcome == "success", outcome)
             XCTAssertEqual(installation.deviceCapabilities.contains(.agentsRead), outcome == "success", outcome)
             XCTAssertTrue(Set(installation.deviceCapabilities).isSubset(of: Set(installation.serverCapabilities ?? [])), outcome)
+        }
+    }
+
+    /// A `/server` answer for another instance after a grant call stops the
+    /// connection, as the first check does: it goes offline, keeps the pairing,
+    /// saves none of the grants and asks for nothing more.
+    @MainActor
+    func testAForeignServerAnswerAfterAGrantCallTakesTheConnectionOffline() async throws {
+        // After the progress batch, and after a grant asked for alone.
+        for afterProgressBatch in [true, false] {
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-own", deviceId: "device-own", credential: "credential-own"),
+                trust: makeSystemTrust(),
+                name: "Own Mac"
+            )
+            let session = makeSession()
+            var serverRequests = 0
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    serverRequests += 1
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": serverRequests == 1 ? "instance-own" : "instance-other",
+                        "name": "Own Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": ["server:read", "workspace:read"],
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read", "bot:handoffs"],
+                        "features": afterProgressBatch ? ["chat-tasks-v1"] : [],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-09-14T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    let granted = ["server:read", "workspace:read"] + asked
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+
+            let label = afterProgressBatch ? "after the progress batch" : "after a grant asked for alone"
+            guard case .offline = coordinator.connectionState else {
+                return XCTFail("\(label): expected offline, got \(coordinator.connectionState)")
+            }
+            XCTAssertEqual(accepts, [afterProgressBatch ? ["tasks:read"] : ["bot:handoffs"]], "\(label): nothing more is asked for")
+            let reloaded = AidenInstallationStore(keychain: keychain)
+            XCTAssertEqual(reloaded.installations.map(\.id), ["instance-own"], "\(label): the pairing stays")
+            let installation = try XCTUnwrap(reloaded.activeInstallation)
+            XCTAssertFalse(installation.deviceCapabilities.contains(.tasksRead), label)
+            XCTAssertFalse(installation.deviceCapabilities.contains(.botHandoffs), label)
         }
     }
 
