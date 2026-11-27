@@ -249,39 +249,17 @@ function isBotCapability(value: unknown): value is "bot:read" | "bot:write" {
   return value === "bot:read" || value === "bot:write";
 }
 
-function isProgressCapability(
-  value: unknown,
-): value is (typeof AIDEN_REMOTE_PROGRESS_CAPABILITIES)[number] {
-  return (
-    typeof value === "string" &&
-    (AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(value)
-  );
+function capabilityGuard<const V extends string>(
+  vocabulary: readonly V[],
+): (value: unknown) => value is V {
+  const allowed: readonly string[] = vocabulary;
+  return (value: unknown): value is V => typeof value === "string" && allowed.includes(value);
 }
 
-function isSimulatorCapability(
-  value: unknown,
-): value is (typeof AIDEN_REMOTE_SIMULATOR_CAPABILITIES)[number] {
-  return (
-    typeof value === "string" &&
-    (AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(value)
-  );
-}
-
-function isHostCapability(
-  value: unknown,
-): value is (typeof AIDEN_REMOTE_HOST_CAPABILITIES)[number] {
-  return (
-    typeof value === "string" &&
-    (AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(value)
-  );
-}
-
-function isPhoneRunCapability(value: unknown): boolean {
-  return (
-    typeof value === "string" &&
-    (AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(value)
-  );
-}
+const isProgressCapability = capabilityGuard(AIDEN_REMOTE_PROGRESS_CAPABILITIES);
+const isSimulatorCapability = capabilityGuard(AIDEN_REMOTE_SIMULATOR_CAPABILITIES);
+const isHostCapability = capabilityGuard(AIDEN_REMOTE_HOST_CAPABILITIES);
+const isPhoneRunCapability = capabilityGuard(AIDEN_REMOTE_PHONE_RUN_CAPABILITIES);
 
 /**
  * Host authority a device type may hold: desktops hold the full host
@@ -296,14 +274,7 @@ export function mayHoldSimulatorCapabilities(type: AidenRemoteDeviceType): boole
   return type === "mac" || type === "linux";
 }
 
-function isMobileSimulatorCapability(
-  value: unknown,
-): value is (typeof AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES)[number] {
-  return (
-    typeof value === "string" &&
-    (AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(value)
-  );
-}
+const isMobileSimulatorCapability = capabilityGuard(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES);
 
 /**
  * Opt-ins negotiated after pairing (`bot:cards`, `bot:activity`,
@@ -312,14 +283,7 @@ function isMobileSimulatorCapability(
  * device type, and never more authority than the device's own grants already
  * carry.
  */
-function isOptInCapability(
-  value: unknown,
-): value is (typeof AIDEN_REMOTE_OPT_IN_CAPABILITIES)[number] {
-  return (
-    typeof value === "string" &&
-    (AIDEN_REMOTE_OPT_IN_CAPABILITIES as readonly string[]).includes(value)
-  );
-}
+const isOptInCapability = capabilityGuard(AIDEN_REMOTE_OPT_IN_CAPABILITIES);
 
 /**
  * The phone simulator viewer grant (contract revision 26) belongs to phones

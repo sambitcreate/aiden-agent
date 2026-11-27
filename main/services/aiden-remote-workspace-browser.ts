@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { verifyApprovedRootIdentity } from "./aiden-remote-approved-roots.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { mapHandleError as mapRemoteHandleError } from "./aiden-remote-file-shared.js";
 import {
   AidenOpaqueHandleError,
   AidenOpaqueHandleStore,
@@ -82,28 +83,11 @@ function safeLabel(value: string, fallback: string): string {
 }
 
 function mapHandleError(error: unknown): never {
-  if (!(error instanceof AidenOpaqueHandleError)) throw error;
-  const status = error.code === "handle_wrong_device"
-    ? 403
-    : error.code === "handle_expired"
-      ? 410
-      : error.code === "handle_capacity"
-        ? 429
-        : error.code === "root_policy_changed" ||
-            error.code === "filesystem_identity_changed" ||
-            error.code === "path_outside_root"
-          ? 409
-          : 400;
-  throw new AidenRemoteServiceError(
-    error.code,
-    error.code === "handle_expired"
-      ? "This folder-browser link expired. Refresh the approved roots and try again."
-      : error.code === "handle_capacity"
-        ? "Aiden's folder-browser handle capacity is temporarily full."
-        : "This folder-browser link is no longer valid.",
-    status,
-    error.code === "handle_capacity",
-  );
+  mapRemoteHandleError(error, {
+    expired: "This folder-browser link expired. Refresh the approved roots and try again.",
+    capacity: "Aiden's folder-browser handle capacity is temporarily full.",
+    invalid: "This folder-browser link is no longer valid.",
+  });
 }
 
 export class AidenRemoteWorkspaceBrowserService {

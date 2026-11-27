@@ -849,40 +849,14 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
 export type AidenRemoteNegotiableCapability =
   (typeof AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES)[number];
 
+/**
+ * Every capability a paired device may hold (`bot:read`/`bot:write` are base
+ * grants assigned at pairing, not post-pairing opt-ins).
+ */
 export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_LEGACY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_CAPABILITIES,
-  ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
-  ...AIDEN_REMOTE_SIMULATOR_CAPABILITIES,
-  ...AIDEN_REMOTE_HOST_CAPABILITIES,
-  ...AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_PLAN_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES,
-  ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
-  ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
-  ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
-  ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
-  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
-  ...AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES,
-  ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
-  ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
-  ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
-  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
-  ...AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
+  ...AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -2975,16 +2949,28 @@ function isAllowedBotQuestionHeader(root: string, path: readonly string[]): bool
   return SESSION_ROOTS.has(root) && path.slice(-4).join(".") === "question.questions.[].header";
 }
 
+function walkJsonEntries(
+  value: unknown,
+  visit: (key: string, path: readonly string[]) => void,
+  path: readonly string[] = [],
+): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) walkJsonEntries(entry, visit, [...path, "[]"]);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = [...path, key];
+    visit(key, childPath);
+    walkJsonEntries(child, visit, childPath);
+  }
+}
+
 function assertNoPrivateBotWireFields(value: unknown): void {
   if (!isRecord(value)) return;
-  const visit = (current: unknown, root: string, path: readonly string[]): void => {
-    if (Array.isArray(current)) {
-      for (const entry of current) visit(entry, root, [...path, "[]"]);
-      return;
-    }
-    if (!isRecord(current)) return;
-    for (const [key, child] of Object.entries(current)) {
-      const childPath = [...path, key];
+  for (const [root, child] of Object.entries(value)) {
+    if (!AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS.has(root)) continue;
+    walkJsonEntries(child, (key, childPath) => {
       if (
         isPrivateBotWireKey(key) &&
         !isAllowedBotIdentityField(root, childPath) &&
@@ -2992,32 +2978,18 @@ function assertNoPrivateBotWireFields(value: unknown): void {
       ) {
         throw new Error(`Forbidden private Bot wire key ${key} at ${root}.${childPath.join(".")}.`);
       }
-      visit(child, root, childPath);
-    }
-  };
-  for (const [root, child] of Object.entries(value)) {
-    if (AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS.has(root)) visit(child, root, []);
+    });
   }
 }
 
 function assertNoPrivateChildProjectionFields(value: unknown, label: string): void {
-  const visit = (current: unknown, path: readonly string[]): void => {
-    if (Array.isArray(current)) {
-      for (const entry of current) visit(entry, [...path, "[]"]);
-      return;
+  walkJsonEntries(value, (key, childPath) => {
+    if (isPrivateChildProjectionKey(key)) {
+      throw new Error(
+        `${label} contains private child field ${childPath.join(".")}.`,
+      );
     }
-    if (!isRecord(current)) return;
-    for (const [key, child] of Object.entries(current)) {
-      const childPath = [...path, key];
-      if (isPrivateChildProjectionKey(key)) {
-        throw new Error(
-          `${label} contains private child field ${childPath.join(".")}.`,
-        );
-      }
-      visit(child, childPath);
-    }
-  };
-  visit(value, []);
+  });
 }
 
 const AIDEN_REMOTE_PRIVATE_CHAT_SUMMARY_KEYS = new Set([
@@ -3034,25 +3006,15 @@ const AIDEN_REMOTE_PRIVATE_CHAT_SUMMARY_KEYS = new Set([
 ]);
 
 function assertNoPrivateSummaryProjectionFields(value: unknown, label: string): void {
-  const visit = (current: unknown, path: readonly string[]): void => {
-    if (Array.isArray(current)) {
-      for (const entry of current) visit(entry, [...path, "[]"]);
-      return;
+  walkJsonEntries(value, (key, childPath) => {
+    if (
+      AIDEN_REMOTE_PRIVATE_CHAT_SUMMARY_KEYS.has(normalizedPrivateWireKey(key)) ||
+      isPrivateBotWireKey(key) ||
+      isPrivateChildProjectionKey(key)
+    ) {
+      throw new Error(`${label} contains private field ${childPath.join(".")}.`);
     }
-    if (!isRecord(current)) return;
-    for (const [key, child] of Object.entries(current)) {
-      const childPath = [...path, key];
-      if (
-        AIDEN_REMOTE_PRIVATE_CHAT_SUMMARY_KEYS.has(normalizedPrivateWireKey(key)) ||
-        isPrivateBotWireKey(key) ||
-        isPrivateChildProjectionKey(key)
-      ) {
-        throw new Error(`${label} contains private field ${childPath.join(".")}.`);
-      }
-      visit(child, childPath);
-    }
-  };
-  visit(value, []);
+  });
 }
 
 function isValidJsonString(value: string): boolean {

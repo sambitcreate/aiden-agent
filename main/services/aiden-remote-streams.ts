@@ -1596,7 +1596,7 @@ export class AidenRemoteStreamService {
     return this.pendingQuestionForStream(stream.streamId) ?? null;
   }
 
-  questionChatId(deviceId: string, promptId: string): string {
+  private requireQuestion(deviceId: string, promptId: string): QuestionRecord {
     this.prune();
     const question = this.questions.get(promptId);
     if (
@@ -1610,7 +1610,24 @@ export class AidenRemoteStreamService {
         409,
       );
     }
-    return question.chatId;
+    return question;
+  }
+
+  private firstPendingForChat<T>(
+    chatId: string,
+    find: (streamId: string) => T | undefined,
+  ): T | null {
+    this.prune();
+    for (const stream of this.streams.values()) {
+      if (stream.chatId !== chatId || terminal(stream.state)) continue;
+      const pending = find(stream.streamId);
+      if (pending) return pending;
+    }
+    return null;
+  }
+
+  questionChatId(deviceId: string, promptId: string): string {
+    return this.requireQuestion(deviceId, promptId).chatId;
   }
 
   supportsQuestionPrompts(): boolean {
@@ -1638,15 +1655,7 @@ export class AidenRemoteStreamService {
         { deviceId, route: "POST /questions/{id}/respond", resourceId: promptId, key },
         { promptId, cancelled: input.cancelled, answers: input.answers },
         async () => {
-          this.prune();
-          const question = this.questions.get(promptId);
-          if (!question || question.deviceId !== deviceId || question.expiresAt <= this.options.now()) {
-            throw new AidenRemoteServiceError(
-              "question_expired",
-              "This question is no longer available.",
-              409,
-            );
-          }
+          const question = this.requireQuestion(deviceId, promptId);
           const response = parseAskUserQuestionResponse(
             {
               version: ASK_USER_QUESTION_VERSION,
@@ -1687,23 +1696,11 @@ export class AidenRemoteStreamService {
   }
 
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null {
-    this.prune();
-    for (const stream of this.streams.values()) {
-      if (stream.chatId !== chatId || terminal(stream.state)) continue;
-      const approval = this.pendingApprovalForStream(stream.streamId);
-      if (approval) return approval;
-    }
-    return null;
+    return this.firstPendingForChat(chatId, (streamId) => this.pendingApprovalForStream(streamId));
   }
 
   pendingQuestionForChat(chatId: string): AidenRemotePendingQuestion | null {
-    this.prune();
-    for (const stream of this.streams.values()) {
-      if (stream.chatId !== chatId || terminal(stream.state)) continue;
-      const question = this.pendingQuestionForStream(stream.streamId);
-      if (question) return question;
-    }
-    return null;
+    return this.firstPendingForChat(chatId, (streamId) => this.pendingQuestionForStream(streamId));
   }
 
   respondQuestionFromHost(chatId: string, promptId: string, value: unknown): boolean {
