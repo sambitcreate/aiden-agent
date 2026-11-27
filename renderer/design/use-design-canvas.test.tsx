@@ -580,11 +580,17 @@ test("a moved answer reaching a canvas that has already closed does nothing", as
     "designCanvas:save": () => new Promise<SaveReply>((resolve) => (answer = resolve)),
   });
   await act(async () => controller.change(addNote("b")));
-  await tick(800);
+  // Something waits for the edit to be saved, and the canvas unmounts before the answer.
+  let saved: boolean | undefined;
+  const flushed = controller.flush().then((result) => (saved = result));
+  await settle();
   view.unmount();
   await act(async () => answer({ ok: false, reason: "moved", workspaceId: "workspace-2" }));
   await settle();
+  await flushed;
+  assert.equal(saved, false, "the store never got the edit");
   assert.deepEqual(movedTo, []);
+  assert.equal(saves().length, 1);
 });
 
 test("undoing a reply leaves an edit the person made without a step of its own during it, such as a text frame growing", async () => {
@@ -1357,10 +1363,12 @@ test("reducer: a moved answer reaching a closing canvas ends it without opening 
     const state = close(savingState());
     assert.equal(state.lifecycle, "closing", name);
     const moved = reduceDesignCanvasSync(state, { type: "save_moved", workspaceId: "ws-2" });
-    assert.equal(moved.state.lifecycle, "disposed", name);
     assert.deepEqual(effectTypes(moved), ["finish"], name);
     assert.equal(moved.state.unsent.length, 0, name);
     assert.deepEqual(selectDesignCanvasGuard(moved.state), { dirty: false, saving: false }, name);
+    assert.equal(isDesignCanvasFlushComplete(moved.state), false, `${name}: the dropped edits were never kept`);
+    assert.deepEqual(reduceDesignCanvasSync(moved.state, { type: "flush_requested" }).effects, [], name);
+    assert.deepEqual(reduceDesignCanvasSync(moved.state, { type: "dispose" }).effects, [], name);
   }
 });
 
