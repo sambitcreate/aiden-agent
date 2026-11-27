@@ -366,8 +366,18 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
     }),
   );
   removals.push(
-    deps.permissions.onWillDownload(SUBSCRIBER, (_item, contents, frame) => {
+    deps.permissions.onWillDownload(SUBSCRIBER, (item, contents, frame) => {
       if (registry.isExportContents(contents.id)) return "cancel";
+      if (!frame) {
+        // The frame is gone (it navigated or closed); the item still names who started it.
+        let initiator: string | null = null;
+        try {
+          initiator = originOf(item.getInitiatorOrigin?.());
+        } catch {
+          return "cancel";
+        }
+        return (initiator !== null && deps.isAppOrigin(initiator)) || loopbackNotRenderer(initiator) ? "cancel" : undefined;
+      }
       return frameInAppContext(contents, frame) ? "cancel" : undefined;
     }),
   );

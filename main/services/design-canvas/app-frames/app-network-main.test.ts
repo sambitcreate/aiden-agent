@@ -433,15 +433,20 @@ test("downloads from an export window or an app-context frame are cancelled; the
   const s = setup();
   const app = s.admit();
   s.network!.registry.addExportContents(42);
-  const download = (contents: { id: number }, target: Frame | null) => {
+  const download = (contents: { id: number }, target: Frame | null, initiator = "file://") => {
     let prevented = false;
     let cancelled = false;
-    s.permissions.emitter.emit("will-download", { preventDefault: () => (prevented = true) }, { cancel: () => (cancelled = true) }, contents, target);
+    const item = { cancel: () => (cancelled = true), getInitiatorOrigin: () => initiator };
+    s.permissions.emitter.emit("will-download", { preventDefault: () => (prevented = true) }, item, contents, target);
     return prevented && cancelled;
   };
   assert.equal(download({ id: 42 }, null), true, "E3");
   assert.equal(download(s.window().contents, app), true);
   assert.equal(download(s.window().contents, s.window().main), false);
+  // The frame is gone by the time the download starts: its initiator decides.
+  assert.equal(download(s.window().contents, null, ORIGIN), true, "an app page that navigated away");
+  assert.equal(download(s.window().contents, null, "http://127.0.0.1:9999"), true, "another loopback page");
+  assert.equal(download(s.window().contents, null, "file://"), false, "Aiden's renderer");
 });
 
 // ---- Window recreation (R7) and events ---------------------------------------------
