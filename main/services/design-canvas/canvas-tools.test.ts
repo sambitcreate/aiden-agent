@@ -52,7 +52,7 @@ async function canvasFixture(root: string) {
       pages: designTurnPages({ views, chatId, ...(deps.viewState ? { message: deps.viewState } : {}) }),
       ...deps,
     });
-  return { workspaceStore, canvases, views, store, personShows, turn };
+  return { workspaceStore, canvases, views, store, personShows, turn, workspaces };
 }
 
 async function setup(t: test.TestContext, extra: Partial<ToolDeps> = {}) {
@@ -2157,6 +2157,32 @@ test("an unknown app root, a bad route or viewport, and an unnamed root among se
 
   const none = await setup(t, { designLive: true, apps: liveApps([]) });
   assert.match(String((await none.call("canvas_place_frame", { kind: "app", title: "A" })).message), /no web app/u);
+});
+
+test("a chat moved to another workspace while its apps are being looked up places no frame in either canvas", async (t) => {
+  let release!: () => void;
+  const looked = new Promise<void>((resolve) => (release = resolve));
+  let asked!: () => void;
+  const asking = new Promise<void>((resolve) => (asked = resolve));
+  const apps: AppsDep = {
+    snapshot: async (workspaceId) => {
+      asked();
+      await looked;
+      // Only ws-1 has an app at ".", so the root checked there isn't one in ws-2.
+      return { apps: workspaceId === "ws-1" ? [{ workspaceId, appRoot: ".", phase: "running" as const }] : [], candidates: [], chosen: [] };
+    },
+  };
+  const { call, store, workspaces } = await setup(t, { designLive: true, apps });
+  const placing = call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing" });
+  await asking;
+  workspaces["chat-1"] = "ws-2";
+  release();
+  const answer = await placing;
+  assert.equal(answer.status, "error");
+  assert.match(String(answer.message), /moved to another workspace/u);
+  assert.equal((await store.get("chat-1")).frames.length, 0, "the workspace it moved to gets no frame for an app it doesn't have");
+  workspaces["chat-1"] = "ws-1";
+  assert.equal((await store.get("chat-1")).frames.length, 0, "nor does the one it left");
 });
 
 test("canvas_read lists app frames with their route and whether the app runs", async (t) => {
