@@ -388,9 +388,6 @@ export interface ModelListPanelProps {
   pageKey: string;
   /** The accessible name of the list ("Chat model"). */
   label?: string;
-  /** The filter field's accessible name. */
-  filterLabel?: string;
-  placeholder?: string;
   /** Says what the section is when it is not a tab panel. */
   sectionProps?: React.HTMLAttributes<HTMLElement>;
 }
@@ -413,8 +410,6 @@ export function ModelListPanel({
   searchRef,
   pageKey,
   label = "Chat model",
-  filterLabel = "Filter chat models",
-  placeholder = "Filter models…",
   sectionProps,
 }: ModelListPanelProps) {
   const { pinnedModels: pinned, recentModels, save: saveModelPreferences } = useModelPreferences();
@@ -562,8 +557,8 @@ export function ModelListPanel({
           ref={searchRef}
           value={search}
           onValueChange={onSearchChange}
-          aria-label={filterLabel}
-          placeholder={placeholder}
+          aria-label="Filter chat models"
+          placeholder="Filter models…"
         />
         <CommandList>
           <CommandEmpty>No models found.</CommandEmpty>

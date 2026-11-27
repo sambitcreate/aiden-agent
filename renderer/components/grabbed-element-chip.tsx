@@ -527,7 +527,6 @@ export interface GrabbedElementChipsProps {
   disabled?: boolean;
   onRemove?: (elementId: string) => void;
   textOnlyModel?: boolean;
-  className?: string;
 }
 
 export function GrabbedElementChips({
@@ -537,11 +536,10 @@ export function GrabbedElementChips({
   disabled = false,
   onRemove,
   textOnlyModel = false,
-  className,
 }: GrabbedElementChipsProps) {
   if (elements.length === 0) return null;
   return (
-    <div className={cn(mode === "composer" && "mb-1.5 px-1.5", className)}>
+    <div className={cn(mode === "composer" && "mb-1.5 px-1.5")}>
       <ul
         aria-label={mode === "composer" ? "Selected browser elements" : "Included browser elements"}
         className={cn("flex flex-wrap gap-1.5", mode === "transcript" && "justify-end")}

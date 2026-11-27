@@ -92,7 +92,6 @@ export interface SubagentDetailProps {
   now?: number;
   /** Live context reading; supplied only while the run is active. */
   contextUsage?: SubagentContextUsageV1;
-  className?: string;
 }
 
 export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetailProps>(
@@ -110,7 +109,6 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
       onRetryRefresh,
       now = Date.now(),
       contextUsage,
-      className,
     },
     headingRef,
   ) {
@@ -233,7 +231,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     ) : null;
 
     return (
-      <article className={cn("relative flex h-full min-h-0 flex-col", className)}>
+      <article className="relative flex h-full min-h-0 flex-col">
         <div
           ref={scrollRef}
           onScroll={updateScrollPosition}

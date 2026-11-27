@@ -189,7 +189,6 @@ export interface SubagentChipsProps {
   reference?: SubagentMessageReferenceV1;
   runs?: readonly SubagentRunSnapshot[];
   onOpen: (runId: string, trigger: HTMLButtonElement) => void;
-  className?: string;
 }
 
 function subagentGroupSummaryParts(
@@ -250,7 +249,6 @@ export function SubagentChips({
   reference,
   runs = [],
   onOpen,
-  className,
 }: SubagentChipsProps) {
   const snapshotsById = React.useMemo(
     () => new Map(runs.map((run) => [run.runId, run] as const)),
@@ -311,7 +309,7 @@ export function SubagentChips({
   return (
     <section
       ref={sectionRef}
-      className={cn("min-w-0", className)}
+      className="min-w-0"
       role="group"
       aria-label={count}
       data-subagent-group={groupKey}
