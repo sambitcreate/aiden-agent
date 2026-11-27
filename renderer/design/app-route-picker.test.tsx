@@ -101,6 +101,7 @@ test("Add waits for the canvas's pending save, then places on the page on screen
     flush: async () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
       log.push("flush");
+      return true;
     },
     place: async (request) => {
       log.push(`place ${request.appRoot} ${request.route} ${request.pageId} ${request.viewSize?.w ?? "-"}`);
@@ -111,6 +112,23 @@ test("Add waits for the canvas's pending save, then places on the page on screen
   });
   await place(".", "/pricing");
   assert.deepEqual(log, ["flush", "place . /pricing page-2 800"]);
+});
+
+test("Add places nothing while the canvas can't be saved, since main's copy would be older than the screen", async () => {
+  for (const flush of [async () => false, async () => Promise.reject(new Error("offline"))]) {
+    const requests: string[] = [];
+    const place = appRoutePlacer({
+      flush,
+      place: async (request) => {
+        requests.push(request.route);
+        return { placed: "f", pageId: request.pageId };
+      },
+      pageId: () => "page-2",
+      viewSize: () => undefined,
+    });
+    assert.deepEqual(await place(".", "/pricing"), { error: "unsaved" });
+    assert.deepEqual(requests, [], "main is never asked");
+  }
 });
 
 test("a dynamic row takes its value, prefilled from canvas.json, and refuses an empty or unsafe one", async () => {
@@ -184,6 +202,7 @@ test("main's refusals show in the dialog, which stays open", async () => {
   for (const [error, copy] of [
     ["bad-route", "That address isn't a page of this app."],
     ["full", "This page is full. Remove a frame or use another page."],
+    ["unsaved", "The canvas couldn't be saved, so the page wasn't added. Try again in a moment."],
   ] as const) {
     const { source } = fakeSource({ place: { error } });
     let closed = 0;
