@@ -675,6 +675,37 @@ test("a frame that reaches a local server while that server's worker is being cl
   assert.deepEqual(await service.list(), [], "and ws-2's end clears it");
 });
 
+test("past the list's cap, a live workspace's origins keep their workers: only unowned ones are evicted", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-sw-cap-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "origins.json");
+  const cleared: string[] = [];
+  const service = createAppServiceWorkerOrigins({ file, session: { clearStorageData: async ({ origin }) => void cleared.push(origin) } });
+  const SECOND = "http://127.0.0.1:5174";
+  const workspaceOf: Record<string, string> = { [ORIGIN]: "ws-1", [SECOND]: "ws-2" };
+  const s = setup({
+    serviceWorkers: service,
+    isAppOrigin: (origin) => origin in workspaceOf,
+    appForOrigin: (origin) => (workspaceOf[origin] ? { workspaceId: workspaceOf[origin]!, appRoot: "." } : undefined),
+  });
+  await service.list();
+  // An earlier run's origin whose startup clear didn't take; nobody owns it now.
+  await service.remember("http://127.0.0.1:9000");
+  s.admit(7, "f1", ORIGIN); // ws-1's app: soon the oldest owned origin
+  const two = s.admit(8, "f2", SECOND);
+  // ws-2's page goes through 70 local servers (G5).
+  for (let port = 6000; port < 6070; port++) s.request({ url: `http://127.0.0.1:${port}/`, frame: two, webContentsId: 1, resourceType: "subFrame" });
+  await service.list();
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  await service.list();
+  assert.deepEqual(cleared, ["http://127.0.0.1:9000"], "only the unowned origin is evicted; ws-1's and ws-2's live origins keep their workers");
+  const listed = await service.list();
+  assert.equal(listed.includes(ORIGIN), true);
+  assert.equal(listed.length, 72, "every live origin stays listed past the cap");
+  await s.network!.forgetWorkspace("ws-2");
+  assert.deepEqual(await service.list(), [ORIGIN], "ws-2's end clears its own");
+});
+
 test("disposing removes every subscriber, so the session has no listener left", () => {
   const s = setup();
   s.network!.dispose();

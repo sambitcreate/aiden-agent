@@ -162,6 +162,8 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
   });
   // Admitted origins per workspace, in memory only; the device-local list holds origins alone.
   const workspaceOrigins = new Map<string, Set<string>>();
+  /** Whether a live workspace's frames reached `origin` (S76): its worker is never cleared then. */
+  const owned = (origin: string) => [...workspaceOrigins.values()].some((set) => set.has(origin));
   removals.push(
     registry.onEvent((event: DesignAppFrameEvent) => {
       const contents = deps.mainContents();
@@ -196,7 +198,7 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
         if (cleared) reloadFrame(reload);
       }, () => undefined);
     }
-    void deps.serviceWorkers?.remember(origin).catch(() => undefined);
+    void deps.serviceWorkers?.remember(origin, owned).catch(() => undefined);
   };
   /** Reloads a registered app frame that is still in the main window. */
   const reloadFrame = (frameTreeNodeId: number) => {
@@ -453,7 +455,6 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
       // last workspace that reached it ends, or at the next start. Ownership
       // is asked live, inside the serialized clear, so a workspace that reaches
       // the origin while this clear waits keeps it too.
-      const owned = (origin: string) => [...workspaceOrigins.values()].some((set) => set.has(origin));
       const ending = [...(origins ?? [])].filter((origin) => !owned(origin));
       if (ending.length === 0 || !deps.serviceWorkers) return;
       await deps.serviceWorkers.clear(ending, owned).catch(() => undefined);

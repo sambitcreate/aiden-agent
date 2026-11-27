@@ -67,6 +67,54 @@ test(`past ${APP_SW_ORIGINS_MAX} origins, the oldest are cleared before they are
   assert.deepEqual(await s.origins.list(), ["http://127.0.0.1:5001"]);
 });
 
+test(`past ${APP_SW_ORIGINS_MAX} origins, one still owned is never evicted: the oldest unowned goes, and with every origin owned the list grows`, async (t) => {
+  const s = await setup(t);
+  const at = (port: number) => `http://127.0.0.1:${port}`;
+  const owned = new Set([at(5000)]);
+  const keep = (origin: string) => owned.has(origin);
+  for (let port = 5000; port < 5000 + APP_SW_ORIGINS_MAX; port++) await s.origins.remember(at(port), keep);
+  await s.origins.remember(at(5000 + APP_SW_ORIGINS_MAX), keep);
+  assert.deepEqual(s.cleared, [at(5001)], "the oldest origin is still owned, so the next oldest is evicted");
+  const list = await s.origins.list();
+  assert.equal(list.includes(at(5000)), true);
+  assert.equal(list.length, APP_SW_ORIGINS_MAX);
+
+  for (const origin of list) owned.add(origin);
+  owned.add(at(6000));
+  await s.origins.remember(at(6000), keep);
+  assert.deepEqual(s.cleared, [at(5001)], "with every origin owned, nothing is evicted");
+  assert.equal((await s.origins.list()).length, APP_SW_ORIGINS_MAX + 1, "the bound is soft");
+});
+
+test("an eviction is a clear like any other: whenCleared covers it while it runs", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "aiden-sw-evict-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => (release = resolve));
+  let started!: () => void;
+  const clearing = new Promise<void>((resolve) => (started = resolve));
+  const origins = createAppServiceWorkerOrigins({
+    file: path.join(dir, "origins.json"),
+    session: {
+      clearStorageData: async () => {
+        started();
+        await hold;
+      },
+    },
+  });
+  const at = (port: number) => `http://127.0.0.1:${port}`;
+  for (let port = 5000; port < 5000 + APP_SW_ORIGINS_MAX; port++) await origins.remember(at(port));
+  const adding = origins.remember(at(5000 + APP_SW_ORIGINS_MAX));
+  await clearing;
+  const evicted = origins.whenCleared(at(5000));
+  assert.notEqual(evicted, null, "the evicted origin's clear is pending");
+  assert.equal(origins.whenCleared(at(5001)), null, "the others aren't being cleared");
+  release();
+  assert.equal(await evicted, true);
+  await adding;
+  assert.equal((await origins.list()).includes(at(5000)), false);
+});
+
 test("clear clears each origin's service workers and empties the list; a subset clears only those", async (t) => {
   const s = await setup(t);
   await s.origins.remember("http://127.0.0.1:5173");
