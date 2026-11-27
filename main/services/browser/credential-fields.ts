@@ -12,6 +12,12 @@
 // password input into plain text, value and all. Each tab remembers the
 // fields it has seen as sensitive (`SensitiveFieldMemory`), and every scan
 // treats them as sensitive for the rest of their life.
+//
+// Browser-pure invariant: `grab-runtime/inspect-dom.ts` bundles
+// `isCredentialAutocomplete` into the page-injected browser IIFE via
+// `scripts/build-browser-grab.mjs` (`platform: "browser"`). Never import Node
+// or Electron modules here, and keep module-level `Set` constants annotated
+// `/*#__PURE__*/` so esbuild can tree-shake unused CDP helpers out of the page.
 
 /** One node of a `DOM.getDocument` result: only the fields the walker reads. */
 export interface CdpDomNode {
@@ -62,14 +68,14 @@ export interface SensitiveFieldBoxes {
 
 const ELEMENT_NODE = 1;
 /** Elements that host another document or a plugin. */
-const FRAME_ELEMENTS: ReadonlySet<string> = new Set(["iframe", "frame", "fencedframe", "object", "embed", "portal"]);
-const CREDENTIAL_TOKENS: ReadonlySet<string> = new Set(["current-password", "new-password", "one-time-code"]);
-const NOTHING_REMEMBERED: ReadonlySet<number> = new Set();
+const FRAME_ELEMENTS: ReadonlySet<string> = /*#__PURE__*/ new Set(["iframe", "frame", "fencedframe", "object", "embed", "portal"]);
+const CREDENTIAL_TOKENS: ReadonlySet<string> = /*#__PURE__*/ new Set(["current-password", "new-password", "one-time-code"]);
+const NOTHING_REMEMBERED: ReadonlySet<number> = /*#__PURE__*/ new Set();
 /** Fields remembered per renderer process, and processes per tab: the most recent are kept. */
 const REMEMBERED_FIELDS = 512;
 const REMEMBERED_PROCESSES = 4;
 /** Autocomplete tokens that only scope the field token after them (WHATWG autofill detail tokens). */
-const SCOPE_TOKENS: ReadonlySet<string> = new Set(["shipping", "billing", "home", "work", "mobile", "fax", "pager", "webauthn"]);
+const SCOPE_TOKENS: ReadonlySet<string> = /*#__PURE__*/ new Set(["shipping", "billing", "home", "work", "mobile", "fax", "pager", "webauthn"]);
 /** A pathological DOM is still walked, but not without bound. */
 const MAX_NODES = 200_000;
 
@@ -89,13 +95,18 @@ export function autocompleteFieldTokens(value: string | undefined): string[] {
     .filter((token) => token.length > 0 && !token.startsWith("section-") && !SCOPE_TOKENS.has(token));
 }
 
+/** Whether an `autocomplete` attribute names a password, one-time code or payment card. */
+export function isCredentialAutocomplete(value: string | undefined): boolean {
+  return autocompleteFieldTokens(value).some(
+    (token) => CREDENTIAL_TOKENS.has(token) || token.startsWith("cc-"),
+  );
+}
+
 /** Whether an element holds a password, a one-time code or card details. */
 export function isSensitiveField(element: { localName?: string; nodeName?: string; attributes?: string[] }): boolean {
   const name = (element.localName ?? element.nodeName ?? "").toLowerCase();
   if (name === "input" && (attribute(element, "type") ?? "").trim().toLowerCase() === "password") return true;
-  return autocompleteFieldTokens(attribute(element, "autocomplete")).some(
-    (token) => CREDENTIAL_TOKENS.has(token) || token.startsWith("cc-"),
-  );
+  return isCredentialAutocomplete(attribute(element, "autocomplete"));
 }
 
 /**
