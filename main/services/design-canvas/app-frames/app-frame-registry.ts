@@ -52,7 +52,7 @@ export class AppFrameRegistry {
   /** When each export window last started a request, for its settle (D18). */
   private readonly exportActivity = new Map<number, number>();
   private readonly listeners = new Set<(event: DesignAppFrameEvent) => void>();
-  private readonly admitListeners = new Set<(origin: string) => void>();
+  private readonly admitListeners = new Set<(origin: string, frameTreeNodeId: number) => void>();
   private readonly pendingBlocked = new Map<number, { count: number; hosts: string[] }>();
   private readonly totals = new Map<number, { count: number; hosts: string[] }>();
   private readonly cap: number;
@@ -149,7 +149,7 @@ export class AppFrameRegistry {
     this.members.set(id, { frameId: parsed.frameId, mountToken: parsed.mountToken, origin: record.expectedOrigin });
     for (const listener of this.admitListeners) {
       try {
-        listener(record.expectedOrigin);
+        listener(record.expectedOrigin, id);
       } catch {
         // A listener's failure never undoes an admission.
       }
@@ -295,7 +295,7 @@ export class AppFrameRegistry {
   }
 
   /** Called with the expected origin after each admission (S76). */
-  onAdmit(listener: (origin: string) => void): () => void {
+  onAdmit(listener: (origin: string, frameTreeNodeId: number) => void): () => void {
     this.admitListeners.add(listener);
     return () => this.admitListeners.delete(listener);
   }

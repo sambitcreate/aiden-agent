@@ -345,6 +345,12 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     enabled(): boolean;
     /** The frame registry, or null before the design subscribers are installed. */
     registry(): Pick<AppFrameRegistry, "expectPlacement"> | null;
+    /**
+     * Resolves once no service-worker clear of `origin` is queued or running
+     * (S76): a frame is told its origin only after, so its page never loads
+     * mid-clear. Left out, there's nothing to wait for.
+     */
+    clearSettled?(origin: string): Promise<void>;
     /** Draws a live app frame on the default session (app-export.ts); left out, Download answers unavailable. */
     renderApp?(request: DesignAppRenderRequest): Promise<Uint8Array>;
     apps: {
@@ -617,6 +623,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (!frame || frame.kind !== "app" || typeof frame.appRoot !== "string") return { error: "unavailable" };
     const origin = await runningAppOrigin(live, workspaceId, frame.appRoot);
     if (!origin) return { error: "app-not-running" };
+    // A page that loaded while its origin's workers were being cleared could lose its own (S76).
+    await live.clearSettled?.(origin).catch(() => undefined);
     // Design mode may have turned off, or the chat moved, while we awaited.
     const current = await deps.getChat(chat.id);
     if (!canFrame(current) || designCanvasWorkspaceOf(current) !== workspaceId) return { error: "unavailable" };

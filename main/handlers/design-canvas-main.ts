@@ -70,6 +70,9 @@ export function registerDesignCanvasIpc(): void {
     appFrames: {
       enabled: () => designLiveEnabled(),
       registry: () => installedAppNetwork()?.registry ?? null,
+      clearSettled: async (origin) => {
+        await installedAppNetwork()?.clearSettled(origin);
+      },
       // Download draws the running app on the default session, as an export window (D18).
       renderApp: (request) => renderAppFrame(request, () => installedAppNetwork()?.registry ?? null),
       apps: designAppServers,

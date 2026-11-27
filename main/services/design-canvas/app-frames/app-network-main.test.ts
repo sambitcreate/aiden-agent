@@ -75,7 +75,7 @@ function fakePermissions() {
   return { target: target as unknown as PermissionTarget, emitter, state };
 }
 
-type Frame = { frameTreeNodeId: number; parent: Frame | null; url: string; origin: string; name: string; framesInSubtree?: Frame[] };
+type Frame = { frameTreeNodeId: number; parent: Frame | null; url: string; origin: string; name: string; framesInSubtree?: Frame[]; reloads: number; reload(): boolean };
 
 function frame(id: number, parent: Frame | null, url: string, name = ""): Frame {
   let origin = "null";
@@ -85,7 +85,18 @@ function frame(id: number, parent: Frame | null, url: string, name = ""): Frame 
     // about:blank and friends stay opaque.
   }
   if (url.startsWith("file:")) origin = "file://";
-  return { frameTreeNodeId: id, parent, url, origin, name };
+  return {
+    frameTreeNodeId: id,
+    parent,
+    url,
+    origin,
+    name,
+    reloads: 0,
+    reload() {
+      this.reloads += 1;
+      return true;
+    },
+  };
 }
 
 function mainWindow(id: number) {
@@ -119,6 +130,7 @@ function fakeServiceWorkers() {
       calls.push(origins ? `clear ${origins.join(",")}` : "clear all");
     },
     list: async () => [],
+    whenCleared: () => null,
   };
   return { service, calls };
 }
@@ -597,10 +609,70 @@ test("a workspace that reaches a local server while another workspace's end is s
   await ending;
   assert.deepEqual(cleared, [ORIGIN], "the server ws-2 now uses keeps its worker");
   assert.ok((await service.list()).includes(SHARED), "and stays listed");
+  assert.equal(two.reloads, 0, "nothing was cleared under ws-2's page, so it isn't reloaded");
 
   await s.network!.forgetWorkspace("ws-2");
   assert.deepEqual(new Set(cleared), new Set([ORIGIN, SECOND, SHARED]), "ws-2's end still clears it");
   assert.deepEqual(await service.list(), []);
+});
+
+test("a frame that reaches a local server while that server's worker is being cleared is reloaded once the clear is done", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-sw-midclear-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const SECOND = "http://127.0.0.1:5174";
+  const SHARED = "http://127.0.0.1:4321";
+  // The session's workers, by origin: a clear removes one; a page load registers it again.
+  const workers = new Set<string>();
+  let during: (() => void) | null = null;
+  const service = createAppServiceWorkerOrigins({
+    file: path.join(dir, "origins.json"),
+    session: {
+      clearStorageData: async ({ origin }) => {
+        const run = during;
+        during = null;
+        run?.();
+        await new Promise((resolve) => setImmediate(resolve));
+        workers.delete(origin);
+      },
+    },
+  });
+  const workspaceOf: Record<string, string> = { [ORIGIN]: "ws-1", [SECOND]: "ws-2" };
+  const s = setup({
+    serviceWorkers: service,
+    isAppOrigin: (origin) => origin in workspaceOf,
+    appForOrigin: (origin) => (workspaceOf[origin] ? { workspaceId: workspaceOf[origin]!, appRoot: "." } : undefined),
+  });
+  const one = s.admit(7, "f1", ORIGIN);
+  const two = s.admit(8, "f2", SECOND);
+  // ws-1's page goes to the sign-in server, which registers a worker.
+  s.request({ url: `${SHARED}/login`, frame: one, webContentsId: 1, resourceType: "subFrame" });
+  workers.add(SHARED);
+  await service.list();
+
+  // ws-1 ends. ws-1's own origin is cleared first; while the sign-in server's
+  // clear is running, ws-2's page goes there too.
+  let reached = false;
+  const reach = () => {
+    s.request({ url: `${SHARED}/login`, frame: two, webContentsId: 1, resourceType: "subFrame" });
+    workers.add(SHARED);
+    reached = true;
+  };
+  let seen = 0;
+  during = () => {
+    // The first clear is ws-1's own origin; arm the reach for the next one.
+    seen += 1;
+    during = () => reach();
+  };
+  await s.network!.forgetWorkspace("ws-1");
+  await new Promise((resolve) => setImmediate(resolve)); // the reload follows the clear
+  assert.equal(seen, 1);
+  assert.equal(reached, true, "ws-2 reached the server while its clear ran");
+  assert.equal(workers.has(SHARED), false, "the clear that was already running took the worker");
+  assert.equal(two.reloads, 1, "so ws-2's frame is reloaded, and its page registers the worker again");
+  assert.equal(one.reloads, 0, "the ending workspace's frame isn't");
+  assert.ok((await service.list()).includes(SHARED), "the server is listed again, now ws-2's");
+  await s.network!.forgetWorkspace("ws-2");
+  assert.deepEqual(await service.list(), [], "and ws-2's end clears it");
 });
 
 test("disposing removes every subscriber, so the session has no listener left", () => {
