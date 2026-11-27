@@ -378,6 +378,7 @@ import {
 } from "../shared/design-canvas/app-frame-events";
 import type { DesignChatView } from "../shared/design-canvas/view";
 import type { AppRouteList } from "../shared/design-canvas/app-routes";
+import type { AppDevice } from "../shared/design-canvas/app-devices";
 import { invoke, onNotification } from "./ipc-bridge";
 import {
   APPROVAL_RULE_CHANNELS,
@@ -2891,6 +2892,16 @@ export const designCanvasApi = {
       | { already: string; pageId: string }
       | { error: "unavailable" | "bad-route" | "unknown-root" | "full" }
     >("designCanvas:placeAppRoute", chatId, request),
+  /**
+   * 3c (S93): the person's Add view at width: the app frame's page again, at a
+   * device's size or a typed one, beside its variant set. Placed and focused by main.
+   */
+  addDesignAppView: (chatId: string, request: { frameId: string } & ({ device: AppDevice } | { width: number; height: number })) =>
+    invoke<{ placed: string; pageId: string } | { error: "unavailable" | "not-found" | "locked" | "full" | "bad-size" }>(
+      "designCanvas:addAppView",
+      chatId,
+      request,
+    ),
   /**
    * `aidenTurn` names the reply that made the change, when Aiden made it;
    * `step` marks the person's own change made through main (Send to canvas).

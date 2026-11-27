@@ -66,7 +66,9 @@ import {
   type DesignAppFrameMountResult,
 } from "../../renderer/shared/design-canvas/app-frame-events.js";
 import type { DesignAppsSnapshot } from "../../renderer/shared/design-app.js";
-import { APP_DEFAULT_VIEWPORT, appFrameBox, fitAppScale, isAppRoot } from "../../renderer/shared/design-canvas/app-frame.js";
+import { APP_DEFAULT_SCALE, APP_DEFAULT_VIEWPORT, appFrameBox, fitAppScale, isAppRoot, isAppViewportSide } from "../../renderer/shared/design-canvas/app-frame.js";
+import { APP_DEVICES, isAppDevice } from "../../renderer/shared/design-canvas/app-devices.js";
+import { placeAppVariant, variantRootOf } from "../../renderer/shared/design-canvas/app-variants.js";
 import { isConcreteRoute, type AppRouteList } from "../../renderer/shared/design-canvas/app-routes.js";
 import type { DesignAppRoutesResult } from "../services/design-canvas/app-server/app-server-main.js";
 import type { AppFrameRegistry } from "../services/design-canvas/app-frames/app-frame-registry.js";
@@ -102,6 +104,11 @@ export type DesignCanvasPlaceAppRouteResult =
   | { placed: string; pageId: string }
   | { already: string; pageId: string }
   | { error: "unavailable" | "bad-route" | "unknown-root" | "full" };
+
+/** `designCanvas:addAppView` reply (3c, S93): the new view of a page, beside its set. */
+export type DesignCanvasAddAppViewResult =
+  | { placed: string; pageId: string }
+  | { error: "unavailable" | "not-found" | "locked" | "full" | "bad-size" };
 
 /** `designCanvas:grant` reply: an `aiden-design://<grant>/` host, or no access. */
 export type DesignCanvasGrantResult = { grant: string } | { error: "unavailable" };
@@ -669,14 +676,17 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     return [...apps].map(([appRoot, label]) => ({ appRoot, label }));
   };
 
-  /** A live-flag, design-mode, attended chat and its workspace, or null. */
-  const pickerChat = async (chatId: unknown): Promise<{ chat: DesignCanvasChat; workspaceId: string; live: NonNullable<typeof deps.appFrames> } | null> => {
+  /** A live-flag, design-mode, attended chat and its workspace, or null. A Bot or routine chat is refused outright. */
+  const liveChat = async (chatId: unknown): Promise<{ chat: DesignCanvasChat; workspaceId: string; live: NonNullable<typeof deps.appFrames> } | null> => {
     const live = deps.appFrames;
-    if (!live || !live.enabled() || !live.apps.routes) return null;
+    if (!live || !live.enabled()) return null;
     const chat = await requireChat(chatId);
     if (!canFrame(chat)) return null;
     return { chat, workspaceId: designCanvasWorkspaceOf(chat), live };
   };
+
+  /** `liveChat`, for Add ▸ Page from app…, which also needs route discovery. */
+  const pickerChat = async (chatId: unknown) => (deps.appFrames?.apps.routes ? liveChat(chatId) : null);
 
   /** Whether the chat is still framing in `workspaceId`: design mode on and not moved while main awaited. */
   const stillFraming = async (chatId: string, workspaceId: string): Promise<boolean> => {
@@ -797,6 +807,89 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       } catch {
         // Reporting never changes the placement.
       }
+    }
+    return result;
+  });
+
+  /** An Add view at width request's size: a device, or a whole width and height in range, never both. */
+  const viewSizeOf = (request: unknown): { frameId: string; viewport: { width: number; height: number }; label: string } | null => {
+    if (typeof request !== "object" || request === null || Array.isArray(request)) return null;
+    const { frameId, device, width, height } = request as { frameId?: unknown; device?: unknown; width?: unknown; height?: unknown };
+    if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) return null;
+    if (device !== undefined) {
+      if (!isAppDevice(device) || width !== undefined || height !== undefined) return null;
+      const { label, width: w, height: h } = APP_DEVICES[device];
+      return { frameId, viewport: { width: w, height: h }, label };
+    }
+    if (!isAppViewportSide(width) || !isAppViewportSide(height)) return null;
+    return { frameId, viewport: { width, height }, label: `${width} px` };
+  };
+
+  deps.handle("designCanvas:addAppView", async (event, chatId, request): Promise<DesignCanvasAddAppViewResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    const asked = await liveChat(chatId);
+    if (!asked) return { error: "unavailable" };
+    const size = viewSizeOf(request);
+    if (!size) return { error: "bad-size" };
+    const { chat, workspaceId, live } = asked;
+    const newId = deps.newId ?? randomUUID;
+    let outcome: DesignCanvasAddAppViewResult = { error: "not-found" };
+    try {
+      const saved = await deps.store.update(
+        chat.id,
+        (doc) => {
+          const frame = doc.frames.find((entry) => entry.id === size.frameId);
+          if (!frame || frame.kind !== "app") {
+            outcome = { error: "not-found" };
+            throw UNCHANGED;
+          }
+          const original = variantRootOf(doc, frame);
+          const scale = fitAppScale(size.viewport, original.scale ?? APP_DEFAULT_SCALE, DESIGN_CANVAS_LIMITS.maxSize);
+          const placed = placeAppVariant(doc, original, {
+            id: newId(),
+            groupId: newId(),
+            title: original.title,
+            route: original.route ?? "/",
+            viewport: size.viewport,
+            scale,
+            label: size.label,
+            createdBy: "person",
+          });
+          if ("error" in placed) {
+            outcome = { error: placed.error === "locked" || placed.error === "locked-group" ? "locked" : "full" };
+            throw UNCHANGED;
+          }
+          outcome = { placed: placed.frameId, pageId: original.pageId };
+          return placed.doc;
+        },
+        {
+          workspaceId,
+          beforeWrite: async () => {
+            if (!(await stillFraming(chat.id, workspaceId))) {
+              outcome = { error: "unavailable" };
+              throw UNCHANGED;
+            }
+          },
+        },
+      );
+      // The person's own undo step.
+      deps.broadcast({ workspaceId, chatId: chat.id, revision: saved.doc.revision, step: `add-app-view:${saved.doc.revision}` });
+    } catch (error) {
+      if (error !== UNCHANGED) throw error;
+    }
+    const result = outcome as DesignCanvasAddAppViewResult;
+    if (!("placed" in result)) return result;
+    if (await stillFraming(chat.id, workspaceId)) {
+      const pages = designTurnPages({ views: deps.views, chatId: chat.id, message: { selection: [], pageId: result.pageId } });
+      const focusId = await pages.show(workspaceId, result.pageId, () => stillFraming(chat.id, workspaceId));
+      if (focusId !== undefined && (await stillFraming(chat.id, workspaceId))) {
+        deps.sendFocus?.(event, { chatId: chat.id, pageId: result.pageId, frameIds: [result.placed], focusId, own: true });
+      }
+    }
+    try {
+      live.onAppFrameAdded?.(size.viewport.width);
+    } catch {
+      // Reporting never changes the placement.
     }
     return result;
   });

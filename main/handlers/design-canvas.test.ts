@@ -8,6 +8,7 @@ import {
   DESIGN_CANVAS_LIMITS,
   emptyDesignCanvas,
   type DesignCanvas,
+  type DesignFrame,
 } from "../../renderer/shared/design-canvas/schema.js";
 import { AppFrameRegistry } from "../services/design-canvas/app-frames/app-frame-registry.js";
 import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
@@ -1619,6 +1620,8 @@ async function pickerFixture(
     chats?: Record<string, DesignCanvasChat>;
     /** Runs while main reads the apps snapshot, as a person acting meanwhile. */
     onSnapshot?: () => void;
+    /** Leaves route discovery out, as a build without it. */
+    noRoutes?: boolean;
   } = {},
 ) {
   const reported: number[] = [];
@@ -1640,7 +1643,7 @@ async function pickerFixture(
           };
         },
         appForOrigin: () => undefined,
-        routes: async (_workspaceId, appRoot) => {
+        ...(options.noRoutes ? {} : { routes: async (_workspaceId: string, appRoot?: string) => {
           routeCalls.push(appRoot);
           return {
             appRoot: appRoot ?? ".",
@@ -1651,8 +1654,8 @@ async function pickerFixture(
               { route: "/", source: "discovered" },
               { route: "/pricing", source: "discovered" },
             ],
-          };
-        },
+          } as const;
+        } }),
       },
       onAppFrameAdded: (width) => reported.push(width),
     },
@@ -1808,4 +1811,153 @@ test("3b: a chat that leaves or moves while main shows the placed frame's page k
 test("3b: placeAppRoute in a workspace whose apps are unavailable answers unavailable", async (t) => {
   const { invoke } = await pickerFixture(t, { target: "unavailable" });
   assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" }), { error: "unavailable" });
+});
+
+// ── 3c (S93): Add view at width ──
+
+const seededApp = (overrides: Partial<DesignFrame> = {}): DesignFrame => ({
+  id: "app-1",
+  kind: "app",
+  title: "/pricing",
+  pageId: "page-1",
+  x: 100,
+  y: 200,
+  w: 640,
+  h: 436,
+  createdBy: "aiden",
+  appRoot: ".",
+  route: "/pricing",
+  viewport: { width: 1280, height: 800 },
+  scale: 0.5,
+  ...overrides,
+});
+
+async function seedFrames(store: { update: (chatId: string, change: (doc: DesignCanvas) => DesignCanvas) => Promise<unknown> }, ...frames: DesignFrame[]) {
+  await store.update("chat-1", (doc) => ({ ...doc, frames: [...doc.frames, ...frames] }));
+}
+
+test("3c: addAppView places the same route at the device width beside its set, as the person's undo step", async (t) => {
+  const { invoke, store, broadcasts, focusSent, reported } = await pickerFixture(t);
+  await seedFrames(store, seededApp());
+  const answer = (await invoke("designCanvas:addAppView", "chat-1", { frameId: "app-1", device: "phone" })) as { placed: string; pageId: string };
+  assert.equal(answer.pageId, "page-1");
+  const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const view = doc.frames.find((frame) => frame.id === answer.placed)!;
+  assert.deepEqual(
+    { viewport: view.viewport, scale: view.scale, label: view.label, variantOf: view.variantOf, createdBy: view.createdBy, route: view.route, appRoot: view.appRoot },
+    { viewport: { width: 390, height: 844 }, scale: 0.5, label: "iPhone", variantOf: "app-1", createdBy: "person", route: "/pricing", appRoot: "." },
+  );
+  assert.ok(view.x >= 100 + 640, "right of the original");
+  assert.equal(view.y, 200, "top-aligned with it");
+  const group = doc.frames.find((frame) => frame.id === view.groupId);
+  assert.equal(group?.kind, "group", "a group is made around both");
+  assert.equal(doc.frames.find((frame) => frame.id === "app-1")?.groupId, group?.id);
+  assert.equal(broadcasts[broadcasts.length - 1]?.step, `add-app-view:${doc.revision}`);
+  const focus = focusSent[focusSent.length - 1]?.request as { frameIds: string[]; own?: boolean; pageId: string };
+  assert.deepEqual([focus.frameIds, focus.own, focus.pageId], [[answer.placed], true, "page-1"]);
+  assert.deepEqual(reported, [390], "reported once, after the commit");
+
+  // The same width again gives a second frame, further right.
+  const twice = (await invoke("designCanvas:addAppView", "chat-1", { frameId: "app-1", device: "phone" })) as { placed: string };
+  const after = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const second = after.frames.find((frame) => frame.id === twice.placed)!;
+  assert.ok(second.x >= view.x + view.w, "beside the set's right edge");
+  assert.deepEqual(reported, [390, 390]);
+});
+
+test("3c: addAppView works without route discovery", async (t) => {
+  const { invoke, store } = await pickerFixture(t, { noRoutes: true });
+  await seedFrames(store, seededApp());
+  assert.ok("placed" in ((await invoke("designCanvas:addAppView", "chat-1", { frameId: "app-1", device: "tablet" })) as object));
+});
+
+test("3c: a custom view takes two whole numbers in range and refuses others", async (t) => {
+  const { invoke, store, reported } = await pickerFixture(t);
+  await seedFrames(store, seededApp());
+  for (const bad of [
+    { frameId: "app-1" },
+    { frameId: "app-1", width: 500 },
+    { frameId: "app-1", width: 150, height: 900 },
+    { frameId: "app-1", width: 500.5, height: 900 },
+    { frameId: "app-1", width: "500", height: 900 },
+    { frameId: "app-1", device: "watch" },
+    { frameId: "app-1", device: "phone", width: 500, height: 900 },
+    "app-1",
+  ]) {
+    assert.deepEqual(await invoke("designCanvas:addAppView", "chat-1", bad), { error: "bad-size" }, JSON.stringify(bad));
+  }
+  assert.deepEqual(reported, []);
+  const answer = (await invoke("designCanvas:addAppView", "chat-1", { frameId: "app-1", width: 500, height: 900 })) as { placed: string };
+  const view = ((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames.find((frame) => frame.id === answer.placed)!;
+  assert.deepEqual([view.viewport, view.label], [{ width: 500, height: 900 }, "500 px"]);
+});
+
+test("3c: a view of a variant joins the root's set and group", async (t) => {
+  const { invoke, store } = await pickerFixture(t);
+  const group: DesignFrame = { id: "g", kind: "group", title: "/pricing", pageId: "page-1", x: 60, y: 160, w: 1200, h: 520, createdBy: "aiden" };
+  await seedFrames(store, group, seededApp({ groupId: "g" }), seededApp({ id: "app-2", x: 780, w: 195, h: 458, viewport: { width: 390, height: 844 }, variantOf: "app-1", groupId: "g" }));
+  const answer = (await invoke("designCanvas:addAppView", "chat-1", { frameId: "app-2", device: "desktop" })) as { placed: string };
+  const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const view = doc.frames.find((frame) => frame.id === answer.placed)!;
+  assert.deepEqual([view.variantOf, view.groupId, view.y], ["app-1", "g", 200]);
+  assert.ok(view.x >= 780 + 195, "right of the whole set");
+  const box = doc.frames.find((frame) => frame.id === "g")!;
+  assert.ok(box.x + box.w >= view.x + view.w, "the group grew to hold it");
+  assert.equal(doc.frames.filter((frame) => frame.kind === "group").length, 1, "no second group");
+});
+
+test("3c: a locked original or group answers locked, a gone or non-app frame not-found, a full page full", async (t) => {
+  const { invoke, store, broadcasts, reported } = await pickerFixture(t);
+  const note: DesignFrame = { id: "n", kind: "note", title: "n", text: "n", x: 0, y: 0, w: 10, h: 10, pageId: "page-1", createdBy: "person" };
+  const lockedGroup: DesignFrame = { id: "g", kind: "group", title: "g", pageId: "page-1", x: 0, y: 0, w: 2000, h: 2000, createdBy: "person", locked: true };
+  await seedFrames(store, note, seededApp({ locked: true }), lockedGroup, seededApp({ id: "app-3", groupId: "g" }));
+  assert.deepEqual(await invoke("designCanvas:addAppView", "chat-1", { frameId: "app-1", device: "phone" }), { error: "locked" });
+  assert.deepEqual(await invoke("designCanvas:addAppView", "chat-1", { frameId: "app-3", device: "phone" }), { error: "locked" });
+  assert.deepEqual(await invoke("designCanvas:addAppView", "chat-1", { frameId: "gone", device: "phone" }), { error: "not-found" });
+  assert.deepEqual(await invoke("designCanvas:addAppView", "chat-1", { frameId: "n", device: "phone" }), { error: "not-found" });
+
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      seededApp({ id: "app-4" }),
+      ...Array.from({ length: DESIGN_CANVAS_LIMITS.framesPerPage - 1 }, (_, index) => ({
+        id: `f${index}`, kind: "note" as const, title: "n", text: "n", x: index * 10, y: 0, w: 10, h: 10, pageId: "page-1", createdBy: "person" as const,
+      })),
+    ],
+  }));
+  const before = ((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision;
+  assert.deepEqual(await invoke("designCanvas:addAppView", "chat-1", { frameId: "app-4", device: "phone" }), { error: "full" });
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision, before, "nothing was written");
+  assert.deepEqual([broadcasts.length, reported.length], [0, 0]);
+});
+
+test("3c: addAppView with the live flag off, outside design mode or for a Bot chat is unavailable", async (t) => {
+  const off = await pickerFixture(t, { live: false });
+  await seedFrames(off.store, seededApp());
+  assert.deepEqual(await off.invoke("designCanvas:addAppView", "chat-1", { frameId: "app-1", device: "phone" }), { error: "unavailable" });
+
+  const chats: Record<string, DesignCanvasChat> = {
+    "chat-1": { id: "chat-1", workspaceId: "workspace-1" },
+    "bot-chat": { id: "bot-chat", workspaceId: "workspace-1", designMode: true, botId: "bot-1" },
+  };
+  const outside = await pickerFixture(t, { chats });
+  assert.deepEqual(await outside.invoke("designCanvas:addAppView", "chat-1", { frameId: "app-1", device: "phone" }), { error: "unavailable" });
+  await assert.rejects(outside.invoke("designCanvas:addAppView", "bot-chat", { frameId: "app-1", device: "phone" }), /not available/u);
+});
+
+test("3c: a chat that leaves design mode while the view is placed writes nothing", async (t) => {
+  const chats: Record<string, DesignCanvasChat> = { "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true } };
+  const { invoke, store, broadcasts, reported } = await pickerFixture(t, { chats });
+  await seedFrames(store, seededApp());
+  const internals = store as unknown as { update: (...args: unknown[]) => Promise<unknown> };
+  const update = internals.update.bind(store);
+  internals.update = (chatId, change, options) => {
+    chats["chat-1"] = { id: "chat-1", workspaceId: "workspace-1" };
+    return update(chatId, change, options);
+  };
+  assert.deepEqual(await invoke("designCanvas:addAppView", "chat-1", { frameId: "app-1", device: "phone" }), { error: "unavailable" });
+  internals.update = update;
+  const doc = (await store.get("chat-1", { workspaceId: "workspace-1" })).doc;
+  assert.deepEqual(appFramesIn(doc).map((frame) => frame.id), ["app-1"]);
+  assert.deepEqual([broadcasts.length, reported.length], [0, 0]);
 });

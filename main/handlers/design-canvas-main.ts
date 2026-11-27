@@ -78,7 +78,7 @@ export function registerDesignCanvasIpc(): void {
       // Download draws the running app on the default session, as an export window (D18).
       renderApp: (request) => renderAppFrame(request, () => installedAppNetwork()?.registry ?? null),
       apps: designAppServers,
-      // 3b (S88, call site 4): the person's Add ▸ Page from app….
+      // 3b (S88, call site 4): the person's Add ▸ Page from app…; 3c (S93, call site 5): their Add view at width.
       onAppFrameAdded: (viewportWidth) =>
         reportAnalyticsEvent("design_app_frame_added", { source: "person", device_bucket: deviceBucket(viewportWidth) }),
     },
