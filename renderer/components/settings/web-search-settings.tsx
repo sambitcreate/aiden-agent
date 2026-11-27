@@ -256,6 +256,67 @@ function LinkIcon() {
   return <ExternalLink aria-hidden="true" className="size-3.5" />;
 }
 
+function ProviderPolicyLinks({ provider }: { provider: WebSearchProvider }) {
+  return (
+    <>
+      <a
+        href={provider.privacyUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
+      >
+        Privacy <LinkIcon />
+      </a>
+      <a
+        href={provider.termsUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
+      >
+        Terms <LinkIcon />
+      </a>
+    </>
+  );
+}
+
+function ProviderSubpage({
+  backLabel,
+  onBack,
+  title,
+  description,
+  headingRef,
+  children,
+}: {
+  backLabel: string;
+  onBack: () => void;
+  title: string;
+  description: string;
+  headingRef: React.RefObject<HTMLHeadingElement | null>;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-5 pb-8">
+      <Button variant="transparent" size="small" className="self-start" onClick={onBack}>
+        <ChevronLeft className="size-4" />
+        {backLabel}
+      </Button>
+      <header className="settings-page-heading px-1">
+        <h1
+          ref={headingRef}
+          tabIndex={-1}
+          className="text-heading1 font-semibold text-primary outline-none"
+        >
+          {title}
+        </h1>
+        <Text as="p" variant="regular" color="secondary" className="mt-1 max-w-xl">
+          {description}
+        </Text>
+      </header>
+      {children}
+    </div>
+  );
+}
+
 function RadioChoiceCard({
   id,
   value,
@@ -454,22 +515,7 @@ function ProviderCard({
       </dl>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-small">
-        <a
-          href={provider.privacyUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
-        >
-          Privacy <LinkIcon />
-        </a>
-        <a
-          href={provider.termsUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
-        >
-          Terms <LinkIcon />
-        </a>
+        <ProviderPolicyLinks provider={provider} />
       </div>
 
       <div className="mt-auto flex flex-wrap items-center justify-end gap-2 border-t border-separator pt-3">
@@ -831,22 +877,7 @@ function ProviderSetupDialog({
               <ShieldCheck aria-hidden="true" className="size-3.5 text-tertiary" />
               Queries go to {provider.label}
             </span>
-            <a
-              href={provider.privacyUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
-            >
-              Privacy <LinkIcon />
-            </a>
-            <a
-              href={provider.termsUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
-            >
-              Terms <LinkIcon />
-            </a>
+            <ProviderPolicyLinks provider={provider} />
           </div>
         </section>
 
@@ -1455,32 +1486,29 @@ export function WebSearchSettings() {
     (provider) => !activeRoute.some((entry) => entry.providerId === provider.id),
   );
 
+  const setupDialog = editing ? (
+    <ProviderSetupDialog
+      provider={editing}
+      snapshot={snapshot}
+      open={editing !== null}
+      onOpenChange={(open) => {
+        if (!open) setEditingProvider(null);
+      }}
+      onSnapshot={applySnapshot}
+      returnFocus={() => setupTriggerRef.current}
+    />
+  ) : null;
+
   if (view === "providers") {
     if (browserProvider) {
       return (
-        <div className="flex flex-col gap-5 pb-8">
-          <Button
-            variant="transparent"
-            size="small"
-            className="self-start"
-            onClick={closeProviderDetail}
-          >
-            <ChevronLeft className="size-4" />
-            All providers
-          </Button>
-          <header className="settings-page-heading px-1">
-            <h1
-              ref={providerDetailHeadingRef}
-              tabIndex={-1}
-              className="text-heading1 font-semibold text-primary outline-none"
-            >
-              {browserProvider.label}
-            </h1>
-            <Text as="p" variant="regular" color="secondary" className="mt-1 max-w-xl">
-              Review connection, cost, and privacy details. Configuration never sends a search or
-              changes the active route by itself.
-            </Text>
-          </header>
+        <ProviderSubpage
+          backLabel="All providers"
+          onBack={closeProviderDetail}
+          title={browserProvider.label}
+          description="Review connection, cost, and privacy details. Configuration never sends a search or changes the active route by itself."
+          headingRef={providerDetailHeadingRef}
+        >
           <ProviderCard
             provider={browserProvider}
             route={activeRoute}
@@ -1497,46 +1525,19 @@ export function WebSearchSettings() {
               enable Web Search, or select this provider.
             </Text>
           </Callout>
-          {editing ? (
-            <ProviderSetupDialog
-              provider={editing}
-              snapshot={snapshot}
-              open={editing !== null}
-              onOpenChange={(open) => {
-                if (!open) setEditingProvider(null);
-              }}
-              onSnapshot={applySnapshot}
-              returnFocus={() => setupTriggerRef.current}
-            />
-          ) : null}
-        </div>
+          {setupDialog}
+        </ProviderSubpage>
       );
     }
 
     return (
-      <div className="flex flex-col gap-5 pb-8">
-        <Button
-          variant="transparent"
-          size="small"
-          className="self-start"
-          onClick={closeProviderBrowser}
-        >
-          <ChevronLeft className="size-4" />
-          Back to Web Search
-        </Button>
-        <header className="settings-page-heading px-1">
-          <h1
-            ref={browserHeadingRef}
-            tabIndex={-1}
-            className="text-heading1 font-semibold text-primary outline-none"
-          >
-            Browse providers
-          </h1>
-          <Text as="p" variant="regular" color="secondary" className="mt-1 max-w-xl">
-            Compare reviewed search services, then open one to configure it. Saving credentials
-            never selects a provider or makes a network request.
-          </Text>
-        </header>
+      <ProviderSubpage
+        backLabel="Back to Web Search"
+        onBack={closeProviderBrowser}
+        title="Browse providers"
+        description="Compare reviewed search services, then open one to configure it. Saving credentials never selects a provider or makes a network request."
+        headingRef={browserHeadingRef}
+      >
 
         <section
           aria-label="Current Web Search route"
@@ -1650,27 +1651,27 @@ export function WebSearchSettings() {
               </Button>
             ) : null}
             {filteredProviders.length === 0 ? (
-              <EmptyState
-                placement="inline"
-                title="No shipped providers match"
-                description="Clear the search and filters to browse every reviewed provider."
-              />
-            ) : null}
-            {filteredProviders.length === 0 ? (
-              <Button
-                variant="transparent"
-                className="self-center"
-                onClick={() => {
-                  setSearch("");
-                  setFilter("all");
-                }}
-              >
-                Clear search and filters
-              </Button>
+              <>
+                <EmptyState
+                  placement="inline"
+                  title="No shipped providers match"
+                  description="Clear the search and filters to browse every reviewed provider."
+                />
+                <Button
+                  variant="transparent"
+                  className="self-center"
+                  onClick={() => {
+                    setSearch("");
+                    setFilter("all");
+                  }}
+                >
+                  Clear search and filters
+                </Button>
+              </>
             ) : null}
           </div>
         </section>
-      </div>
+      </ProviderSubpage>
     );
   }
 
@@ -2069,18 +2070,7 @@ export function WebSearchSettings() {
         </div>
       </section>
 
-      {editing ? (
-        <ProviderSetupDialog
-          provider={editing}
-          snapshot={snapshot}
-          open={editing !== null}
-          onOpenChange={(open) => {
-            if (!open) setEditingProvider(null);
-          }}
-          onSnapshot={applySnapshot}
-          returnFocus={() => setupTriggerRef.current}
-        />
-      ) : null}
+      {setupDialog}
     </div>
   );
 }
