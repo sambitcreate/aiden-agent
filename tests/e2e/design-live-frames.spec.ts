@@ -118,7 +118,7 @@ live("two routes run live, take keys only when entered, and keep the app's own r
 
   // A redirect within the app lands inside the frame.
   await enter(page, "Home");
-  await press(inside(page, "Home").locator("#to-login"));
+  await activate(inside(page, "Home").locator("#to-login"));
   await expect(inside(page, "Home").getByRole("heading", { name: "Sign in" })).toBeVisible({ timeout: 10_000 });
   // The bridge reaches every page the frame loads: Esc on the new page still leaves.
   await page.keyboard.press("Escape");
@@ -174,6 +174,19 @@ live("two routes run live, take keys only when entered, and keep the app's own r
   await shoot(offPage, testInfo, "design-live-off");
 });
 
+/**
+ * Activates a control that takes the frame to another page (a link, or a
+ * button that sets `location`): clicked in the page, so no key event is in
+ * flight when the frame's document is replaced. A CDP key event waits for the
+ * renderer's ack, and a key whose document goes away mid-press (a refused
+ * mailto: or redirect puts the frame back on its page) can wait for it until
+ * the test times out (#966 CI run 46059273553). `press` stays for controls
+ * that keep the page.
+ */
+async function activate(control: Locator): Promise<void> {
+  await control.evaluate((element) => (element as HTMLElement).click());
+}
+
 // S1 and D1. The main window's CSP frame-src refuses a redirect (or a mailto:)
 // out of an app frame before will-redirect or will-frame-navigate runs. Main
 // answers the failed load: counted, Open in browser for a web address, and the
@@ -186,7 +199,7 @@ live("S1: a redirect out of the app leaves the frame where it was, with Open in 
   await expect(inside(page, "Home").locator("#home-title")).toHaveText("Fixture home", { timeout: 30_000 });
   await recordOpenExternal(app);
   await enter(page, "Home");
-  await press(inside(page, "Home").locator("#to-out"));
+  await activate(inside(page, "Home").locator("#to-out"));
   await expect(page.getByText("example.com is outside the app")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByRole("button", { name: "Open in browser" })).toBeVisible();
   await expect(inside(page, "Home").locator("#home-title")).toHaveText("Fixture home", { timeout: 10_000 });
@@ -198,7 +211,7 @@ live("S1: a redirect out of the app leaves the frame where it was, with Open in 
   await shoot(page, testInfo, "design-live-open-in-browser");
   // Open in browser opens the browser panel, only when pressed; nothing went to the system.
   // (A fresh refusal, so the toast hasn't timed out during the screenshots.)
-  await press(inside(page, "Home").locator("#to-out"));
+  await activate(inside(page, "Home").locator("#to-out"));
   await page.getByRole("button", { name: "Open in browser" }).click();
   await expect(page.getByRole("textbox", { name: "Search or enter URL" })).toHaveValue(/example\.com/u, { timeout: 15_000 });
   expect(await openedExternally(app)).toEqual([]);
@@ -317,7 +330,7 @@ live("a probe in an app frame reaches nothing outside localhost: each try fails 
 
     // D1: a mailto: link opens nothing outside Aiden.
     await enter(page, "Probe");
-    await press(inside(page, "Probe").locator("#mailto"));
+    await activate(inside(page, "Probe").locator("#mailto"));
     await page.waitForTimeout(1_000);
     expect(await opened()).toEqual([]);
     // The frame is put back on its page (S1, D1).
