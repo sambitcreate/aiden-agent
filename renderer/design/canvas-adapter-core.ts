@@ -16,7 +16,9 @@ import {
 } from "../shared/design-canvas/connectors";
 import { commentsWithoutFrames } from "../shared/design-canvas/comments";
 import { clampCoord, clampSize, copyFrames } from "../shared/design-canvas/placement";
+import { APP_DEFAULT_VIEWPORT, appFrameBox, appResizeScale } from "../shared/design-canvas/app-frame";
 import {
+  DESIGN_CANVAS_LIMITS,
   isDesignContainer,
   isDesignLine,
   type DesignCanvas,
@@ -103,6 +105,8 @@ export function applyNodeChanges(
   changes: NodeChange<DesignNode>[],
 ): DesignCanvas {
   const boxes = new Map<string, Pick<DesignFrame, "x" | "y" | "w" | "h">>();
+  /** A live app frame's new scale after a resize: its aspect stays (D15). */
+  const scales = new Map<string, number>();
   const moved = new Set<string>();
   const removed = new Set<string>();
   const original = new Map(doc.frames.map((frame) => [frame.id, frame]));
@@ -132,7 +136,18 @@ export function applyNodeChanges(
       // A connector's box is where its ends are; it is not resized.
       if (original.get(change.id)!.kind === "connector") continue;
       const box = boxOf(change.id);
-      const kind = original.get(change.id)!.kind;
+      const frame = original.get(change.id)!;
+      const kind = frame.kind;
+      if (kind === "app") {
+        // The width decides the scale unless only the height moved; the box follows the viewport.
+        const width = change.dimensions.width !== box.w || change.dimensions.height === box.h ? change.dimensions.width : undefined;
+        const scale = appResizeScale(frame.viewport, width, change.dimensions.height, DESIGN_CANVAS_LIMITS.maxSize);
+        const shown = appFrameBox(frame.viewport ?? APP_DEFAULT_VIEWPORT, scale);
+        scales.set(change.id, scale);
+        box.w = shown.w;
+        box.h = shown.h;
+        continue;
+      }
       box.w = clampSize(change.dimensions.width, kind);
       box.h = clampSize(change.dimensions.height, kind);
     }
@@ -166,6 +181,8 @@ export function applyNodeChanges(
       next = translateConnector(frame, box.x - drawn.x, box.y - drawn.y);
     } else if (box && (box.x !== frame.x || box.y !== frame.y || box.w !== frame.w || box.h !== frame.h)) {
       next = { ...frame, ...box };
+      const scale = scales.get(frame.id);
+      if (scale !== undefined) next.scale = scale;
     }
     if (next.groupId && removed.has(next.groupId)) {
       const { groupId: _groupId, ...rest } = next;

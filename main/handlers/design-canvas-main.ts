@@ -23,6 +23,8 @@ import { exportStoredHtmlArtifact, wrapStoredHtmlArtifact } from "../services/gu
 import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designLiveEnabled, designModeEnabled } from "../services/studio/feature-flags.js";
+import { installedAppNetwork } from "../services/design-canvas/app-frames/app-network-main.js";
+import { renderAppFrame } from "../services/design-canvas/app-frames/app-export.js";
 import { registerDesignCanvasHandlers } from "./design-canvas.js";
 import { createDesignModeCardEnter, registerDesignAppHandlers } from "./design-app.js";
 
@@ -65,6 +67,16 @@ export function registerDesignCanvasIpc(): void {
   registerDesignCanvasHandlers<Electron.IpcMainInvokeEvent>({
     enabled: () => designModeEnabled(),
     designMd: { enabled: () => designLiveEnabled(), reader: designMdReader, appRoots: designAppRoots },
+    appFrames: {
+      enabled: () => designLiveEnabled(),
+      registry: () => installedAppNetwork()?.registry ?? null,
+      clearSettled: async (origin) => {
+        await installedAppNetwork()?.clearSettled(origin);
+      },
+      // Download draws the running app on the default session, as an export window (D18).
+      renderApp: (request) => renderAppFrame(request, () => installedAppNetwork()?.registry ?? null),
+      apps: designAppServers,
+    },
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     store: designCanvasStore,
     broadcast: broadcastDesignCanvasUpdate,

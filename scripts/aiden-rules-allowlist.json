@@ -100,5 +100,12 @@
   {"rule":"no-source-grep-test","file":"scripts/diagnostic-policy.test.mjs","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"scripts/gemini-live-google-acceptance.test.mjs","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"scripts/pullfrog-locked-runtime.test.mjs","reason":"legacy; replace with behavioral test"},
-  {"rule":"no-source-grep-test","file":"scripts/subagent-file-mutator.test.mjs","reason":"False positive: reads a .ts file the test wrote into a temp root."}
+  {"rule":"no-source-grep-test","file":"scripts/subagent-file-mutator.test.mjs","reason":"False positive: reads a .ts file the test wrote into a temp root."},
+  {"rule":"default-session-owner","file":"main/services/gemini-live/display-capture-acceptance.ts","reason":"Its own isolated acceptance launch mode (bootstrap.ts runs it instead of index.ts), so the dispatchers are never claimed there."},
+{"rule":"loopback-listen-registered","file":"main/services/bot-computers/rfb-fake-server.ts","reason":"Test-only fake VNC server for the Bot computer viewer tests; never started by the app."},
+{"rule":"loopback-listen-registered","file":"main/services/design-canvas/app-server/app-ports.ts","reason":"Design mode 2b's free-port probe: it listens on port 0 and closes at once, before the dev server takes the port."},
+{"rule":"loopback-listen-registered","file":"main/services/gemini-live/display-capture-acceptance.ts","reason":"Its own acceptance launch mode, which never starts design mode or live app frames."},
+{"rule":"loopback-listen-registered","file":"main/services/mcp-oauth-test-server.ts","reason":"Test-only OAuth provider for the MCP sign-in tests and E2E; never started by the app."},
+{"rule":"loopback-listen-registered","file":"main/services/openrouter-recording-test-support.ts","reason":"Test-only recording server for OpenRouter tests; never started by the app."},
+{"rule":"loopback-listen-registered","file":"main/services/peer-pairing-test-host.ts","reason":"Test-only pairing host for the Aiden Remote tests; never started by the app."}
 ]

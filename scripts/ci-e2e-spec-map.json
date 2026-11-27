@@ -280,6 +280,19 @@
       "renderer/components/design",
       "main/services/design-canvas/"
     ],
+    "design-live-frames.spec.ts": [
+      "renderer/design/nodes/app-node",
+      "renderer/design/app-frame-focus-guard",
+      "renderer/shared/design-canvas/app-",
+      "main/services/design-canvas/app-frames/",
+      "main/services/default-session-",
+      "main/windows/main-window-navigation",
+      "main/windows/main-window-console",
+      "main/services/loopback-ports.ts",
+      "main-window.html",
+      "tests/fixtures/design-live-app/",
+      "tests/e2e/design-live-observer.ts"
+    ],
     "design-mode.spec.ts": [
       "renderer/components/design-mode-banner",
       "renderer/components/design",

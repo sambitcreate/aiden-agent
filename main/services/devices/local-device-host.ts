@@ -11,6 +11,7 @@ import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promis
 import { createServer } from "node:net";
 import path from "node:path";
 import { LOCAL_DEVICE_HOST_ID, type DevicePlatform } from "../../../renderer/shared/devices.js";
+import { aidenLoopbackPorts } from "../loopback-ports.js";
 import {
   DeviceHostError,
   DeviceHostUnavailableError,
@@ -332,12 +333,32 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
   let hub: HubProcess | null = null;
   let pendingHub: { child: HostChildProcess; controller: AbortController } | null = null;
   const terminatedHubChildren = new WeakSet<HostChildProcess>();
+  // Aiden's own ports (design mode v2 D5): the hub's reserved port is held
+  // from before spawn until that child exits or is killed.
+  const hubPortReleases = new WeakMap<HostChildProcess, () => void>();
+  const releaseHubPort = (child: HostChildProcess) => {
+    hubPortReleases.get(child)?.();
+    hubPortReleases.delete(child);
+  };
   const terminateHubChild = (child: HostChildProcess) => {
+    releaseHubPort(child);
     if (terminatedHubChildren.has(child)) return;
     terminatedHubChildren.add(child);
     child.kill("SIGTERM");
   };
   let agentDevice: AgentDeviceEndpoint | null = null;
+  // The agent daemon's HTTP port, new or reused, is held while Aiden uses it.
+  let releaseAgentPort: (() => void) | null = null;
+  const holdAgentPort = (port: number) => {
+    releaseAgentPort?.();
+    aidenLoopbackPorts.add(port);
+    let released = false;
+    releaseAgentPort = () => {
+      if (released) return;
+      released = true;
+      aidenLoopbackPorts.delete(port);
+    };
+  };
   let stopped = false;
   let generation = 0;
   let stopPromise: Promise<void> = Promise.resolve();
@@ -426,11 +447,25 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     const port = await deps.reservePort();
     assertCurrent(startedIn);
     const origin = `http://127.0.0.1:${port}`;
-    const child = deps.spawn(
-      nodePath!,
-      [entryPath, "--port", String(port), "--host", "127.0.0.1", "--hide-sidebar", "--hide-boot-device"],
-      nodeEnv(),
-    );
+    aidenLoopbackPorts.add(port);
+    let child: HostChildProcess;
+    try {
+      child = deps.spawn(
+        nodePath!,
+        [entryPath, "--port", String(port), "--host", "127.0.0.1", "--hide-sidebar", "--hide-boot-device"],
+        nodeEnv(),
+      );
+    } catch (error) {
+      aidenLoopbackPorts.delete(port);
+      throw error;
+    }
+    let portReleased = false;
+    hubPortReleases.set(child, () => {
+      if (portReleased) return;
+      portReleased = true;
+      aidenLoopbackPorts.delete(port);
+    });
+    child.once("exit", () => releaseHubPort(child));
     const controller = new AbortController();
     pendingHub = { child, controller };
     try {
@@ -504,6 +539,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     const daemonPath = path.join(agentStateDir, "daemon.json");
     const existing = parseDaemonFile(await readFile(daemonPath, "utf8").catch(() => ""));
     if (existing && (await daemonHealthy(existing))) {
+      holdAgentPort(existing.httpPort);
       return { baseUrl: `http://127.0.0.1:${existing.httpPort}`, token: existing.token, entryPath };
     }
     await rm(daemonPath, { force: true });
@@ -519,6 +555,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     while (deps.now() < deadline) {
       const daemon = parseDaemonFile(await readFile(daemonPath, "utf8").catch(() => ""));
       if (daemon) {
+        holdAgentPort(daemon.httpPort);
         return { baseUrl: `http://127.0.0.1:${daemon.httpPort}`, token: daemon.token, entryPath };
       }
       await deps.sleep(READY_POLL_MS);
@@ -623,6 +660,8 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
   async function stopAgent(): Promise<void> {
     const endpoint = agentDevice;
     agentDevice = null;
+    releaseAgentPort?.();
+    releaseAgentPort = null;
     let entryPath = endpoint?.entryPath;
     if (!entryPath) {
       const leftover = await readFile(path.join(agentStateDir, "daemon.json"), "utf8").catch(() => null);

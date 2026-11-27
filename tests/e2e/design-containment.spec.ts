@@ -16,6 +16,16 @@ import {
   waitForToastsToClear,
 } from "./fixtures";
 
+
+/** The default session's webRequest dispatcher, which E2E launches expose (main/index.ts). */
+type E2eWebRequestHost = {
+  __aidenE2eWebRequest?: {
+    onBeforeRequest(
+      name: string,
+      handler: (details: { url: string; frame?: { url: string } | null }) => "cancel" | undefined,
+    ): () => void;
+  };
+};
 test.use({
   workspaceSeed: true,
 });
@@ -91,11 +101,11 @@ test("a workspace page on the design canvas cannot reach the network or the app'
 
   // Every request the app's session makes from here on is recorded; any to
   // example.com is also cancelled, so a failure never reaches the internet.
-  await app.evaluate(({ session }) => {
+  await app.evaluate(() => {
     const seen: SeenRequest[] = [];
     (globalThis as { __designRequests?: SeenRequest[] }).__designRequests =
       seen;
-    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    (globalThis as E2eWebRequestHost).__aidenE2eWebRequest!.onBeforeRequest("design-containment-network", (details) => {
       let frameUrl: string | null = null;
       try {
         frameUrl = details.frame?.url ?? null;
@@ -103,9 +113,7 @@ test("a workspace page on the design canvas cannot reach the network or the app'
         frameUrl = null;
       }
       seen.push({ url: details.url, frameUrl });
-      callback({
-        cancel: /^[a-z]+:\/\/([^/]*\.)?example\.com/iu.test(details.url),
-      });
+      return /^[a-z]+:\/\/([^/]*\.)?example\.com/iu.test(details.url) ? "cancel" : undefined;
     });
   });
 
@@ -220,13 +228,13 @@ test("a workspace page on the design canvas cannot navigate its own frame away",
   ).toBeVisible();
 
   // Any request to example.com is recorded and cancelled, so nothing reaches the internet.
-  await app.evaluate(({ session }) => {
+  await app.evaluate(() => {
     const seen: string[] = [];
     (globalThis as { __wandererRequests?: string[] }).__wandererRequests = seen;
-    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    (globalThis as E2eWebRequestHost).__aidenE2eWebRequest!.onBeforeRequest("design-containment-wanderer", (details) => {
       const outside = /^[a-z]+:\/\/([^/]*\.)?example\.com/iu.test(details.url);
       if (outside) seen.push(details.url);
-      callback({ cancel: outside });
+      return outside ? "cancel" : undefined;
     });
   });
   await app.evaluate(({ dialog }, chosen) => {

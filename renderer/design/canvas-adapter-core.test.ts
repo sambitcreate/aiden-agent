@@ -82,6 +82,26 @@ test("a resize is clamped to 40-8000 px on each side", () => {
   assert.deepEqual(box(byId(small, "a")), { x: 120, y: 140, w: 40, h: 8000 });
 });
 
+test("a corner resize of a live app frame keeps its aspect: the width sets the scale, the viewport stays", () => {
+  const app = canvas(
+    frame("app", { kind: "app", appRoot: ".", route: "/pricing", viewport: { width: 1280, height: 800 }, scale: 0.5, w: 640, h: 436 }),
+  );
+  const wider = applyNodeChanges(app, [
+    { type: "dimensions", id: "app", dimensions: { width: 800, height: 450 }, resizing: true, setAttributes: true },
+  ]);
+  const resized = byId(wider, "app")!;
+  assert.equal(resized.scale, 0.625);
+  assert.deepEqual(resized.viewport, { width: 1280, height: 800 });
+  assert.deepEqual(box(resized), { x: 0, y: 0, w: 800, h: 500 + 36 }, "the box is the viewport at the new scale, plus the title row");
+
+  // Dragging only the bottom edge: the height decides.
+  const taller = applyNodeChanges(app, [
+    { type: "dimensions", id: "app", dimensions: { width: 640, height: 636 }, resizing: true, setAttributes: true },
+  ]);
+  assert.equal(byId(taller, "app")!.scale, 0.75);
+  assert.deepEqual(box(byId(taller, "app")), { x: 0, y: 0, w: 960, h: 636 });
+});
+
 test("React Flow measuring a node is not an edit", () => {
   const next = applyNodeChanges(grouped, [
     { type: "dimensions", id: "a", dimensions: { width: 333, height: 222 } },

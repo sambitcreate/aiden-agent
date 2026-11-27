@@ -502,3 +502,93 @@ test("tweaks: pages and artifacts keep the Dark switch, and only pages keep twea
   assert.deepEqual(field("note"), { dark: undefined, tweaks: undefined });
   assert.deepEqual(field("plain"), { dark: undefined, tweaks: undefined });
 });
+
+function appFrame(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return frame({
+    id: "app-1",
+    kind: "app",
+    title: "Pricing",
+    appRoot: ".",
+    route: "/pricing",
+    viewport: { width: 1280, height: 800 },
+    scale: 0.5,
+    w: 9999,
+    h: 9999,
+    text: undefined,
+    ...overrides,
+  });
+}
+
+test("app frames: every field parses, and the box is recomputed from the viewport and scale", () => {
+  const { doc } = parsed(
+    canvas({ frames: [appFrame({ colorScheme: "dark", label: "x".repeat(80), variantOf: "app-0", guide: "columns-12" })] }),
+  );
+  const app = doc.frames[0]!;
+  assert.equal(app.kind, "app");
+  assert.equal(app.appRoot, ".");
+  assert.equal(app.route, "/pricing");
+  assert.deepEqual(app.viewport, { width: 1280, height: 800 });
+  assert.equal(app.scale, 0.5);
+  assert.equal(app.w, 640, "a stored w of 9 999 is replaced");
+  assert.equal(app.h, 400 + 36);
+  assert.equal(app.colorScheme, "dark");
+  assert.equal(app.label, "x".repeat(60));
+  assert.equal(app.variantOf, "app-0");
+  assert.equal(app.guide, "columns-12");
+});
+
+test("app frames: a bad route, root, viewport or scale drops the frame", () => {
+  const bad = [
+    appFrame({ route: "pricing" }),
+    appFrame({ route: "//evil.com" }),
+    appFrame({ appRoot: "../web" }),
+    appFrame({ appRoot: undefined }),
+    appFrame({ viewport: { width: 199, height: 800 } }),
+    appFrame({ viewport: { width: 1280, height: 4001 } }),
+    appFrame({ viewport: { width: 1.5, height: 800 } }),
+    appFrame({ viewport: undefined }),
+    appFrame({ scale: 0.01 }),
+    appFrame({ scale: 3 }),
+    appFrame({ scale: "0.5" }),
+  ];
+  for (const entry of bad) {
+    const result = parseDesignCanvas(canvas({ frames: [entry] }));
+    assert.ok(result.ok);
+    assert.equal(result.doc.frames.length, 0, JSON.stringify(entry));
+    assert.equal(result.dropped, 1);
+  }
+});
+
+test("app frames: the route's fragment is dropped, and a scale keeps 4 decimals", () => {
+  const { doc } = parsed(canvas({ frames: [appFrame({ route: "/pricing?plan=team#faq", scale: 0.333333 })] }));
+  assert.equal(doc.frames[0]!.route, "/pricing?plan=team");
+  assert.equal(doc.frames[0]!.scale, 0.3333);
+});
+
+test("app frames: page-only fields are dropped", () => {
+  const { doc } = parsed(
+    canvas({
+      frames: [appFrame({ designWidth: 1280, tweaks: { "--accent": "#fff" }, dark: true, printMode: "fixed", paper: "a4", path: "a.html" })],
+    }),
+  );
+  const app = doc.frames[0]!;
+  for (const field of ["designWidth", "tweaks", "dark", "printMode", "paper", "path"] as const) {
+    assert.equal(app[field], undefined, field);
+  }
+});
+
+test("app frames: parse, serialize and parse again is a fixed point", () => {
+  for (const overrides of [
+    { scale: 0.3333, viewport: { width: 1333, height: 777 } },
+    { scale: 0.05, viewport: { width: 200, height: 200 } },
+    { scale: 2, viewport: { width: 4000, height: 4000 } },
+  ]) {
+    const first = parsed(canvas({ frames: [appFrame(overrides)] })).doc;
+    const second = parsed(JSON.parse(JSON.stringify(first)) as Record<string, unknown>).doc;
+    assert.deepEqual(second.frames, first.frames, JSON.stringify(overrides));
+    const app = first.frames[0]!;
+    assert.ok(app.w <= DESIGN_CANVAS_LIMITS.maxSize && app.h <= DESIGN_CANVAS_LIMITS.maxSize, "the box fits the canvas limit");
+  }
+  const tiny = parsed(canvas({ frames: [appFrame({ scale: 0.05, viewport: { width: 200, height: 200 } })] })).doc.frames[0]!;
+  assert.equal(tiny.w, 10, "the generic clamp doesn't move the smallest app box");
+});

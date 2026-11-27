@@ -183,6 +183,8 @@ export function useDesignComments({ chatId, doc, pageId, showPage, change, flush
         if (iframe.contentWindow && iframe.contentWindow === event.source) frameId = iframe.getAttribute("data-frame-id");
       }
       if (!frameId) return;
+      // Only a workspace page reports to the comment layer; a live app frame never does (D16).
+      if (docRef.current.frames.find((entry) => entry.id === frameId)?.kind !== "file") return;
       const message = parseDesignBridgeMessage(event.data);
       if (!message) return;
       if (message.type === "ready") {

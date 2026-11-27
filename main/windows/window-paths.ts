@@ -26,6 +26,22 @@ export function getWindowUrl(htmlFileName: string): string {
   return pathToFileURL(path.join(buildRoot, "renderer", htmlFileName)).toString();
 }
 
+/**
+ * The renderer's own origin as Chromium reports it in request initiators:
+ * `file://` for packaged builds, or the dev server's origin.
+ */
+export function rendererOrigin(): string {
+  const devServer = process.env.AIDEN_RENDERER_URL;
+  if (devServer) {
+    try {
+      return new URL(devServer).origin;
+    } catch {
+      return "file://";
+    }
+  }
+  return "file://";
+}
+
 /** A file the renderer build ships beside its pages (for example the phone visual viewer). */
 export function getRendererBuildPath(...segments: string[]): string {
   return path.join(buildRoot, "renderer", ...segments);

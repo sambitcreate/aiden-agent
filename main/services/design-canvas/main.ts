@@ -44,6 +44,7 @@ import { createDesignTitleFollow } from "./title-follow.js";
 import { DesignCanvasViews } from "./views.js";
 import { DESIGN_FILES_CHANGED_CHANNEL, DesignFileWatcher } from "./watch.js";
 import { PendingEntries, RecentWrittenPages } from "./written-pages.js";
+import { installedAppNetwork } from "./app-frames/app-network-main.js";
 
 /** One canvas file per workspace, under `userData/design-canvases/`. */
 export const designWorkspaceCanvasStore = new DesignCanvasStore({
@@ -122,7 +123,13 @@ export const designCanvasCarry = createDesignCanvasCarry({
 export const designCanvasWorkspaceCleanup = createDesignWorkspaceCleanup({
   store: designWorkspaceCanvasStore,
   views: designCanvasViews,
-  apps: { forgetWorkspace: (workspaceId) => designAppServers.forgetWorkspace(workspaceId) },
+  apps: {
+    forgetWorkspace: async (workspaceId) => {
+      await designAppServers.forgetWorkspace(workspaceId);
+      // Live app frames (S76): the workspace's app service workers go with it.
+      await installedAppNetwork()?.forgetWorkspace(workspaceId);
+    },
+  },
 });
 
 /**

@@ -35,6 +35,7 @@ import type { Duplex } from "node:stream";
 
 import { BOT_COMPUTER_VIEWER_SCROLL_TAG } from "../../../renderer/shared/bot-computers.js";
 import { DEVICE_ID_PATTERN } from "../../../renderer/shared/devices.js";
+import { registerListeningPort } from "../loopback-ports.js";
 import { keysymForHidUsage } from "./keysyms.js";
 import type { BotComputerLiveScreen } from "./rfb-screen.js";
 import type { BotComputerControl } from "./types.js";
@@ -684,6 +685,7 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
   });
   const address = server.address();
   port = typeof address === "object" && address ? address.port : 0;
+  const unregisterPort = registerListeningPort(server);
 
   function closeVm(vmName: string) {
     const target = devices.get(vmName);
@@ -708,6 +710,7 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
         unsubscribeControl();
         for (const vmName of [...devices.keys()]) closeVm(vmName);
         for (const socket of sockets) socket.destroy();
+        unregisterPort();
         server.close(() => resolve());
       }),
   };

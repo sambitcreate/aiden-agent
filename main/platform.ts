@@ -4,6 +4,7 @@ import {
   Notification,
   ShareMenu,
   app,
+  autoUpdater,
   clipboard,
   dialog,
   globalShortcut,
@@ -16,6 +17,7 @@ import {
   screen,
   shell,
   systemPreferences,
+  webFrameMain,
   type IpcMain,
   type IpcMainInvokeEvent,
 } from "electron";
@@ -225,6 +227,7 @@ export function registerNativeHandlers(): void {
 
 export {
   app,
+  autoUpdater,
   BaseWindow,
   BrowserWindow,
   Notification,
@@ -239,4 +242,5 @@ export {
   screen,
   shell,
   systemPreferences,
+  webFrameMain,
 };

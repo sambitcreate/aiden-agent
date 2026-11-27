@@ -9,8 +9,11 @@ import {
   registerNativeHandlers,
   screen,
   shell,
+  webFrameMain,
 } from "./platform.js";
-import { Menu, nativeImage, nativeTheme, type IpcMainInvokeEvent } from "electron";
+import { Menu, nativeImage, nativeTheme, session, type IpcMainInvokeEvent } from "electron";
+import { claimDefaultSessionWebRequest } from "./services/default-session-web-request.js";
+import { claimDefaultSessionPermissions } from "./services/default-session-permissions.js";
 import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
@@ -35,7 +38,15 @@ import { disposeWorkspaceGitWatchers } from "./handlers/workspaces.js";
 import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
-import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
+import { getPreloadPath, getWindowUrl, rendererOrigin } from "./windows/window-paths.js";
+import { installMainWindowNavigation } from "./windows/main-window-navigation.js";
+import type { AppFrameRegistry } from "./services/design-canvas/app-frames/app-frame-registry.js";
+import { installAppNetwork, type AppNetwork } from "./services/design-canvas/app-frames/app-network-main.js";
+import { createAppServiceWorkerOrigins } from "./services/design-canvas/app-frames/app-sw-origins.js";
+import { aidenLoopbackPorts } from "./services/loopback-ports.js";
+import { installMainWindowConsole } from "./windows/main-window-console.js";
+import { installAppBridge } from "./services/design-canvas/app-frames/app-bridge-main.js";
+import { url as inspectorUrl } from "node:inspector";
 import { mainWindowOptions } from "./windows/main-window-options.js";
 import {
   registerWindowControlHandlers,
@@ -139,8 +150,8 @@ import { registerChatAttachmentProtocol } from "./services/chat-attachment-proto
 import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
 import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
-import { createImagesEnabled, designModeEnabled, studioAssetsEnabled, studioCapabilities } from "./services/studio/feature-flags.js";
-import { createDesignFrameNavigationGuard } from "./services/design-canvas/frame-navigation.js";
+import { createImagesEnabled, designLiveEnabled, designModeEnabled, studioAssetsEnabled, studioCapabilities } from "./services/studio/feature-flags.js";
+import { applyDesignLiveSwitches } from "./services/design-canvas/app-frames/app-frame-switches.js";
 import {
   closeGuardDiscardPrompt,
   closeGuardSavingPrompt,
@@ -174,6 +185,7 @@ import {
   connectDesignAppJobs,
   designAppRecoveryDone,
   designCanvasChatCleanup,
+  designAppServers,
   designCanvasViews,
   designWorkspaceCanvasStore,
   removeDesignCanvasWorkspace,
@@ -265,6 +277,10 @@ if (process.platform === "linux") {
 // sites in the in-app browser, an accepted small cost in page-load speed.
 app.commandLine.appendSwitch("blink-settings", "dnsPrefetchingEnabled=false");
 
+// With live app frames on, a page's own focus() can't take the keys from Aiden
+// until the person clicks into it (S75, K1; the iframes' policy asks for this).
+applyDesignLiveSwitches(app.commandLine, designLiveEnabled());
+
 registerCustomSchemes({ studioAssets: studioAssetsEnabled(), designMode: designModeEnabled() });
 
 // Commands behind a flag that is off claim no shortcut, so they never block a
@@ -284,6 +300,10 @@ connectDesignAppJobs({
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
+/** Live app frames (design mode v2 Phase 3a): set by the design wiring, with the flag on only. */
+let appFrameRegistry: AppFrameRegistry | null = null;
+let appNetwork: AppNetwork | null = null;
+const appFrameOwnPorts = (): ReadonlySet<number> => appNetwork?.ownPorts() ?? aidenLoopbackPorts.snapshot();
 const mainWindowLoads = createSupersedingTaskGate();
 const rendererReadiness = createRendererReadinessGate();
 let resolveShortcutInitialization: (() => void) | null = null;
@@ -1952,36 +1972,33 @@ async function createMainWindow(
   createdWindow.webContents.on("did-finish-load", () => {
     protectedAction = null;
   });
-  let liveDiagnosticCount = 0;
-  createdWindow.webContents.on("console-message", (details) => {
-    // Only fixed local lifecycle markers; never forward arbitrary renderer console content.
-    if (liveDiagnosticCount >= 200 || !/^\[aiden-live\] (microphone-ready|input-first-packet|output-first-packet|playback-started|playback-failed|cue-connected|cue-disconnected|cue-failed)$/.test(details.message)) return;
-    liveDiagnosticCount += 1;
-    writeDiagnosticEvent({ level: "info", area: "voice", event: "legacy-log", fields: { message: details.message } });
+  // Only Gemini Live's fixed lifecycle markers, from the main frame, are
+  // forwarded; with live apps on, sandboxed-dialog notices from app frames are
+  // counted for the canvas (design mode v2 Phase 3a, D10).
+  installMainWindowConsole(createdWindow.webContents, {
+    liveMarker: (message) => writeDiagnosticEvent({ level: "info", area: "voice", event: "legacy-log", fields: { message } }),
+    designLive: designLiveEnabled(),
+    registry: () => appFrameRegistry,
   });
 
-  createdWindow.webContents.setWindowOpenHandler(({ url }) => {
-    openExternalUrl(url);
-    return { action: "deny" };
+  // Navigation rules for every main window (design mode v2 Phase 3a, D9, D11,
+  // S1): today's handlers, the loopback refusal in both flag states, and with
+  // live apps on, admission and the app guard.
+  installMainWindowNavigation(createdWindow.webContents, {
+    openExternal: openExternalUrl,
+    warn: (message) => logger.warn("design", message),
+    designLive: designLiveEnabled(),
+    registry: () => appFrameRegistry,
+    rendererOrigin: rendererOrigin(),
+    ownPorts: () => appFrameOwnPorts(),
+    frameFromId: (processId, routingId) => webFrameMain.fromId(processId, routingId) ?? null,
   });
-  createdWindow.webContents.on("will-navigate", (event, url) => {
-    const current = createdWindow.webContents.getURL();
-    if (url === current) return;
-    event.preventDefault();
-    openExternalUrl(url);
-  });
-  createdWindow.webContents.on("will-redirect", (event, url) => {
-    event.preventDefault();
-    openExternalUrl(url);
-  });
-  // A design canvas frame runs a workspace page's own scripts; it must never leave its
-  // aiden-design: host for the web or a blank page that keeps the frame's window.
-  const designFrames = createDesignFrameNavigationGuard();
-  createdWindow.webContents.on("did-navigate", () => designFrames.reset());
-  createdWindow.webContents.on("will-frame-navigate", (event) => {
-    if (designFrames.allows(event)) return;
-    event.preventDefault();
-    logger.warn("design", "Blocked a design canvas frame from leaving its workspace page");
+  // With live apps on, admitted app frames get the canvas bridge (D12).
+  installAppBridge(createdWindow.webContents, {
+    enabled: designLiveEnabled(),
+    registry: () => appFrameRegistry,
+    isAppOrigin: (origin) => designAppServers.isAppOrigin(origin),
+    fromId: (processId, routingId) => webFrameMain.fromId(processId, routingId),
   });
 
   logger.info("main", "Loading renderer", { url: mainWindowUrl });
@@ -2434,6 +2451,49 @@ if (!ownsSingleInstanceLock) {
   app
     .whenReady()
     .then(async () => {
+      // One owner each for the default session's webRequest and its permission
+      // handlers and session events (design mode v2 Phase 3a, D6, D8), claimed
+      // synchronously before any window exists. Unpackaged builds also stub the
+      // session's own setters, so nothing else can take them over.
+      const defaultWebRequest = claimDefaultSessionWebRequest(session.defaultSession.webRequest, {
+        guardSetters: !isPackagedRuntime(),
+        log: (kind, fields) =>
+          writeDiagnosticEvent({
+            level: "warn",
+            area: "electron",
+            event: "electron-degraded",
+            fields: { kind, subscriber: typeof fields.subscriber === "string" ? fields.subscriber : null },
+          }),
+      });
+      const defaultPermissions = claimDefaultSessionPermissions(session.defaultSession, { guardSetters: !isPackagedRuntime() });
+      // E2E observers subscribe through the dispatcher like any other owner,
+      // because the stubbed setters refuse them (unpackaged builds only).
+      if (!isPackagedRuntime() && process.env.AIDEN_E2E_WEB_REQUEST_OBSERVER === "1") {
+        (globalThis as { __aidenE2eWebRequest?: typeof defaultWebRequest }).__aidenE2eWebRequest = defaultWebRequest;
+      }
+      // Live app frames' subscribers on both (D3–D8), before any window. With
+      // live apps off nothing is subscribed; app service workers from earlier
+      // runs are still cleared (S76).
+      appNetwork = installAppNetwork({
+        enabled: designLiveEnabled(),
+        webRequest: defaultWebRequest,
+        permissions: defaultPermissions,
+        isAppOrigin: (origin) => designAppServers.isAppOrigin(origin),
+        appForOrigin: (origin) => designAppServers.appForOrigin(origin),
+        mainContents: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null),
+        rendererOrigin: rendererOrigin(),
+        loopbackPorts: aidenLoopbackPorts,
+        commandLine: app.commandLine,
+        inspectorUrl: () => inspectorUrl(),
+        serviceWorkers: createAppServiceWorkerOrigins({
+          file: path.join(app.getPath("userData"), "design", "app-sw-origins.json"),
+          session: session.defaultSession,
+          log: (event) => logger.warn("design", event),
+        }),
+        log: (event, fields) => logger.warn("design", event, fields),
+        recordFile: isPackagedRuntime() ? undefined : process.env.AIDEN_E2E_DESIGN_LIVE_RECORD || undefined,
+      });
+      appFrameRegistry = appNetwork?.registry ?? null;
       installElectronConnectorWatchTransport(hostPlatformCapabilities().bots);
       const runtimeProfile = currentRuntimeProfile();
       writeDiagnosticEvent({

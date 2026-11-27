@@ -1,8 +1,34 @@
-/* global console, process */
+/* global console, process, URL */
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractFile, listPackage } from "@electron/asar";
+
+// The main window frames generated UI, design files and, in design mode, the
+// loopback apps the frame guard admits. Chromium ignores `http://[::1]:*`
+// there, so it is left out (design mode v2 Phase 3a, D11, deviation 9). The
+// list is shared with the app frame guard, which must know what it allows.
+const MAIN_WINDOW_FRAME_SRC = JSON.parse(
+  await readFile(new URL("../renderer/shared/design-canvas/main-window-frame-src.json", import.meta.url), "utf8"),
+);
+const LOOPBACK_FRAME_SOURCE = /^http:\/\/(?:localhost|127\.0\.0\.1):(?:\*|\d{1,5})$/u;
+
+function frameSourceAllowed(source) {
+  return source === "'self'" || source === "'none'" || /^aiden-[a-z]+:$/u.test(source) || LOOPBACK_FRAME_SOURCE.test(source);
+}
+
+function assertFrameSrc(directives, name) {
+  const declared = directives.get("frame-src");
+  if (name === "main-window.html" || name.endsWith("/main-window.html")) {
+    if (declared && (declared.length !== MAIN_WINDOW_FRAME_SRC.length || new Set(declared).size !== declared.length || !MAIN_WINDOW_FRAME_SRC.every(source => declared.includes(source)))) {
+      throw new Error(`frame-src in ${name} must be exactly ${MAIN_WINDOW_FRAME_SRC.join(" ")}.`);
+    }
+  }
+  // Without frame-src (or child-src), default-src decides what may be framed.
+  const effective = declared ?? directives.get("child-src") ?? directives.get("default-src") ?? [];
+  const wide = effective.find(source => !frameSourceAllowed(source));
+  if (wide) throw new Error(`frame-src in ${name} allows ${wide}; pages may frame only themselves, Aiden schemes and loopback.`);
+}
 
 const REQUIRED_PAGES = ["main-window.html", "pill.html", "quick-chat.html", "bot-bubbles.html", "visual-snapshot.html"];
 
@@ -20,6 +46,7 @@ export function assertProductionRendererCsp(html, name = "renderer page") {
       throw new Error(`${directive} allows development code loading in ${name}.`);
     }
   }
+  assertFrameSrc(directives, name);
 }
 
 export function verifyPackagedRendererCsp(asar) {

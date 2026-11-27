@@ -32,6 +32,7 @@ import {
   pairingRequestMatchCode,
 } from "./aiden-remote-sealed-envelope.js";
 import { openPeerPairingRequestGrant } from "./peer-pairing.js";
+import { aidenLoopbackPorts } from "./loopback-ports.js";
 
 test("Remote discovery selects the Node Bonjour backend on Linux", () => {
   assert.equal(aidenRemoteBonjourBackend("darwin"), "dns-sd");
@@ -2589,4 +2590,19 @@ test("a Remote enable that failed on a torn operations ledger succeeds once the 
   const ledger = await openAidenRemoteOperationLedger(store);
   assert.deepEqual(ledger.snapshot().entries, repaired.entries);
   assert.equal(JSON.parse(await fs.readFile(file, "utf8")).version, 1, "the repaired ledger is written back");
+});
+
+test("both Remote listeners register their ports as Aiden's own while they listen", async () => {
+  const app = await fixture("both");
+  try {
+    await app.service.setEnabled(true);
+    const lanPort = app.persisted().lanPort;
+    assert.equal(aidenLoopbackPorts.has(lanPort), true, "the LAN listener binds beyond loopback and still registers");
+    assert.equal(aidenLoopbackPorts.has(lanPort + 1), true, "the loopback companion registers");
+    await app.service.stopAndSettle();
+    assert.equal(aidenLoopbackPorts.has(lanPort), false);
+    assert.equal(aidenLoopbackPorts.has(lanPort + 1), false);
+  } finally {
+    await app.cleanup();
+  }
 });

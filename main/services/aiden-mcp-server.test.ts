@@ -19,6 +19,7 @@ import {
 import { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 import type { AidenRemoteWorkspaceProjection } from "./aiden-remote-workspaces.js";
 import { BotMutationGate } from "./bot-mutation-gate.js";
+import { aidenLoopbackPorts } from "./loopback-ports.js";
 import type { Chat, ChatMessage } from "./types.js";
 
 type HeldRun = {
@@ -436,6 +437,18 @@ test("the MCP server is off until turned on, keeps its port, and reports a busy 
   } finally {
     await third.close();
     await new Promise<void>((resolve) => squatter.close(() => resolve()));
+  }
+});
+
+test("the MCP server's port is Aiden's own while it listens", async () => {
+  const fixture = await harness();
+  try {
+    const on = await fixture.enable();
+    assert.equal(aidenLoopbackPorts.has(on.port!), true);
+    await fixture.host.setEnabled(false);
+    assert.equal(aidenLoopbackPorts.has(on.port!), false);
+  } finally {
+    await fixture.close();
   }
 });
 

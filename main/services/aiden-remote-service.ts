@@ -9,6 +9,7 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from "n
 import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import os from "node:os";
 import { peerLanInterfaceAddresses } from "./peer-routes.js";
+import { registerListeningPort } from "./loopback-ports.js";
 import type { Duplex } from "node:stream";
 import { AIDEN_REMOTE_BASE_PATH } from "./aiden-remote-protocol.js";
 import {
@@ -322,6 +323,10 @@ function configureServer(server: HttpServer | HttpsServer): void {
   });
 }
 
+// Aiden's own ports (design mode v2 D5): each listener's port is registered
+// while it listens, LAN listeners included.
+const listeningPortRemovals = new WeakMap<NetServer, () => void>();
+
 async function listen(
   server: NetServer,
   port: number,
@@ -334,6 +339,7 @@ async function listen(
     };
     const onListening = () => {
       server.off("error", onError);
+      listeningPortRemovals.set(server, registerListeningPort(server));
       resolve();
     };
     server.once("error", onError);
@@ -344,6 +350,8 @@ async function listen(
 
 async function closeServer(server: NetServer | null): Promise<void> {
   if (!server) return;
+  listeningPortRemovals.get(server)?.();
+  listeningPortRemovals.delete(server);
   await new Promise<void>((resolve) => {
     server.close(() => resolve());
     // Stop admitting sockets before forcing existing HTTP(S) connections

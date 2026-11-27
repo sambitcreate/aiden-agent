@@ -1,4 +1,4 @@
-// A layout guide drawn over a page, artifact or artboard: equal columns with
+// A layout guide drawn over a page, artifact, artboard or app frame: equal columns with
 // 16 px gutters and margins, or an 8 px grid, in the frame's design pixels.
 // It is only drawn on the canvas and never part of an export.
 

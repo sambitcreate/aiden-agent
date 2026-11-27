@@ -10,7 +10,7 @@ import { EmptyState, toast } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { noteDesignCanvasView } from "../lib/design-mode";
-import { designCanvasApi } from "../lib/ipc";
+import { browserApi, designCanvasApi } from "../lib/ipc";
 import { addPage, deletePage, duplicatePage, movePage, renamePage } from "../shared/design-canvas/pages";
 import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
 import type { DesignExportFormat } from "../shared/design-canvas/frame-export";
@@ -28,6 +28,7 @@ import {
   type DesignNode,
   type PlaceFrameInput,
 } from "./canvas-adapter-core";
+import { APP_FRAME_ID_ATTRIBUTE } from "./app-frame-focus-guard";
 import { readDesignArtifactTheme } from "./artifact-theme";
 import { resolveDesignCanvasKey } from "./canvas-keymap-core";
 import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
@@ -106,7 +107,7 @@ export default function DesignCanvas({
       </div>
     );
   }
-  return <LoadedDesignCanvas chatId={chatId} doc={canvas.doc} canvas={canvas} view={view} />;
+  return <LoadedDesignCanvas chatId={chatId} workspaceId={workspaceId} doc={canvas.doc} canvas={canvas} view={view} />;
 }
 
 type CanvasHandle = ReturnType<typeof useDesignCanvas>;
@@ -135,6 +136,9 @@ const EXPORT_ERRORS = {
   unavailable: "This frame can't be downloaded.",
   missing: "This frame's file is gone, so it can't be downloaded.",
   failed: "The download couldn't be saved. Try again.",
+  // A live app frame's (design mode v2 Phase 3a, D18).
+  "app-not-running": "Start the app to download this frame.",
+  "live-off": "Live apps are off.",
 } as const;
 
 const PICK_ERRORS = {
@@ -150,11 +154,13 @@ const FOCUS_WAIT_MS = 3_000;
 
 function LoadedDesignCanvas({
   chatId,
+  workspaceId,
   doc,
   canvas,
   view,
 }: {
   chatId: string;
+  workspaceId: string;
   doc: CanvasDocument;
   canvas: CanvasHandle;
   view: DesignViewHandle;
@@ -823,7 +829,7 @@ function LoadedDesignCanvas({
           setAutoFocusId(frame.id);
           return true;
         }
-        if (!frame || (frame.kind !== "file" && frame.kind !== "artifact")) return false;
+        if (!frame || (frame.kind !== "file" && frame.kind !== "artifact" && frame.kind !== "app")) return false;
         if (frame.kind === "file" && missing.get(frame.id) === frameVersionOf(frame)) return false;
         setEntered(frame.id);
         return true;
@@ -948,6 +954,8 @@ function LoadedDesignCanvas({
         to === "first" ? 0 : to === "last" ? last : Math.min(last, Math.max(0, current.index + (to === "next" ? 1 : -1)));
       return index === current.index ? current : { ...current, index };
     });
+    // A frame entered on one slide isn't entered on the next (Open full window's single frame stays entered).
+    if (!presentation?.single) setEntered(null);
   }
 
   function stopPresenting() {
@@ -981,7 +989,7 @@ function LoadedDesignCanvas({
       const bounds = { ...instance.getNodesBounds([presentedId]) };
       // A page, artifact or image is shown without its title row (design-canvas.css).
       const kind = latestDoc.current.frames.find((frame) => frame.id === presentedId)?.kind;
-      if ((kind === "file" || kind === "artifact" || kind === "image") && bounds.height > DESIGN_FRAME_HEADER_PX) {
+      if ((kind === "file" || kind === "artifact" || kind === "image" || kind === "app") && bounds.height > DESIGN_FRAME_HEADER_PX) {
         bounds.y += DESIGN_FRAME_HEADER_PX;
         bounds.height -= DESIGN_FRAME_HEADER_PX;
       }
@@ -1189,6 +1197,22 @@ function LoadedDesignCanvas({
       frameVersionOf,
       autoFocusId,
       enter: setEntered,
+      leave: (id) => {
+        // Only when focus was in that frame (its page's Esc, or the page went while
+        // focused) does the next key go to the canvas; focus elsewhere stays put.
+        const active = document.activeElement;
+        const wasInFrame =
+          active === null ||
+          active === document.body ||
+          (active.tagName === "IFRAME" && active.getAttribute(APP_FRAME_ID_ATTRIBUTE) === id);
+        setEntered((current) => (current === id ? null : current));
+        if (wasInFrame) wrapper.current?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
+      },
+      openInBrowser: (url) => {
+        void browserApi.command(workspaceId, { action: "open_link", url }).catch(() => {
+          toast.error("The Aiden browser couldn't open this link.");
+        });
+      },
       markMissing: (id, version) =>
         setMissing((current) => (current.get(id) === version ? current : new Map(current).set(id, version))),
       remove: (id) => removeFrames([id]),
@@ -1215,6 +1239,7 @@ function LoadedDesignCanvas({
     }),
     [
       chatId,
+      workspaceId,
       grant,
       live,
       entered,
@@ -1294,7 +1319,11 @@ function LoadedDesignCanvas({
               view.moved({ x: next.x, y: next.y, zoom: next.zoom });
             }}
             onPaneClick={(event) => {
-              if (presentation) return;
+              if (presentation) {
+                // Clicking off the slide leaves an entered frame; Open full window's single frame stays entered.
+                if (!presentation.single) setEntered(null);
+                return;
+              }
               if (comments.onPaneClick(event)) return;
               setEntered(null);
             }}

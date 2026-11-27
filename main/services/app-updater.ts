@@ -13,7 +13,8 @@ import type {
   CancellationToken as UpdaterCancellationToken,
 } from "electron-updater";
 
-import { app, dialog, logger } from "../platform.js";
+import { app, autoUpdater as nativeAutoUpdater, dialog, logger } from "../platform.js";
+import { registerLoopbackUrlPort } from "./loopback-ports.js";
 import {
   normalizeAppUpdateVersion,
   type AppUpdateCheckResult,
@@ -222,6 +223,13 @@ export class AppUpdateService {
     if (this.controller.recordDownloadProgress(progress)) this.armDownloadStallWatchdog();
   };
   private readonly updateDownloadedHandler = ({ version }: { version: string }) => {
+    // Aiden's own ports (design mode v2 D5): on macOS electron-updater serves
+    // the download to Squirrel through a loopback proxy and has set the native
+    // feed URL to it by now.
+    if (process.platform === "darwin") {
+      this.releaseProxyPort?.();
+      this.releaseProxyPort = registerLoopbackUrlPort(() => nativeAutoUpdater.getFeedURL());
+    }
     const normalizedVersion = normalizeAppUpdateVersion(version);
     logger.info(
       "updater",
@@ -232,6 +240,7 @@ export class AppUpdateService {
   };
   private started = false;
   private disposed = false;
+  private releaseProxyPort: (() => void) | null = null;
   private packageInstall: Promise<LinuxPackageInstallOutcome> | null = null;
   private installedPackageVersion: string | null = null;
 
@@ -490,6 +499,8 @@ export class AppUpdateService {
     this.clearDownloadStallWatchdog();
     this.activeDownloadCancellation?.cancel();
     this.activeDownloadCancellation = null;
+    this.releaseProxyPort?.();
+    this.releaseProxyPort = null;
     if (this.started && loadedAutoUpdater) {
       const autoUpdater = loadedAutoUpdater;
       autoUpdater.off("download-progress", this.downloadProgressHandler);

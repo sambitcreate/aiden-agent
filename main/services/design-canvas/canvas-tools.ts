@@ -15,7 +15,16 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { declareOnDemandSummary } from "../on-demand-tools.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
-import { CANVAS_READ_FRAME_LIMIT, canvasReadCursorPage, canvasView, describeCanvas, parseCanvasReadCursor, summarizeFrame, type DesignViewState } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import {
+  CANVAS_READ_FRAME_LIMIT,
+  canvasReadCursorPage,
+  canvasView,
+  describeCanvas,
+  parseCanvasReadCursor,
+  summarizeFrame,
+  type CanvasFrameSummary,
+  type DesignViewState,
+} from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import {
   commentsWithoutFrames,
   replyToComment,
@@ -94,6 +103,18 @@ import {
   withoutGoneClaims,
   type IsChatLive,
 } from "../../../renderer/shared/design-canvas/chat-pages.js";
+import {
+  APP_DEFAULT_VIEWPORT,
+  APP_FRAME_LIMITS,
+  appFrameBox,
+  appResizeScale,
+  appRouteFrom,
+  fitAppScale,
+  isAppScale,
+  isAppViewportSide,
+  roundAppScale,
+} from "../../../renderer/shared/design-canvas/app-frame.js";
+import type { DesignAppCandidate, DesignAppStatus } from "../../../renderer/shared/design-app.js";
 import { designPageTweakNames } from "./inspect.js";
 import { claimWithRoom } from "./lazy-claim.js";
 import { resolveDesignFile } from "./resolve-core.js";
@@ -110,11 +131,16 @@ export const DESIGN_CANVAS_CALLS_PER_TURN = 60;
 export const DESIGN_BUILD_ITEMS = 100;
 const BUILD_REF_CHARS = 40;
 
-type PlacedKind = "file" | "image" | "note" | "group" | "text" | "shape" | "connector" | "frame";
+type PlacedKind = "file" | "image" | "note" | "group" | "text" | "shape" | "connector" | "frame" | "app";
 const PLACED_KINDS: readonly PlacedKind[] = ["file", "image", "note", "group", "text", "shape", "connector", "frame"];
+/** With live apps on (design mode v2 Phase 3a, D17), Aiden also places live app frames. */
+const LIVE_PLACED_KINDS: readonly PlacedKind[] = [...PLACED_KINDS, "app"];
+const APP_PLACE_SENTENCE =
+  " kind app shows a route of the workspace's running web app live (appRoot, route; viewport width and height, default 1280 × 800, at scale 0.5); design_app starts the app.";
+const APP_DEFAULT_SCALE = 0.5;
 
 /** Default boxes, matching the canvas's Add menu and drawing tools. A text box's height follows its lines; a page's follows its design width. */
-const DEFAULT_BOX: Record<Exclude<PlacedKind, "connector" | "file">, { w: number; h: number }> = {
+const DEFAULT_BOX: Record<Exclude<PlacedKind, "connector" | "file" | "app">, { w: number; h: number }> = {
   image: { w: 320, h: 240 },
   note: { w: 240, h: 160 },
   group: { w: 640, h: 400 },
@@ -293,6 +319,20 @@ export type DesignCanvasToolDeps = {
    * with the live flag on.
    */
   designMdLine?(signal?: AbortSignal): Promise<string>;
+  /**
+   * Live apps (design mode v2 Phase 3a, D17). With `designLive` and `apps`,
+   * canvas_place_frame takes kind app and canvas_update_frame colorScheme;
+   * without them, both tools are exactly as before. `apps` reads the
+   * workspace's app servers (`designAppServers.snapshot`).
+   */
+  designLive?: boolean;
+  apps?: {
+    snapshot(workspaceId: string): Promise<{
+      apps: ReadonlyArray<Pick<DesignAppStatus, "appRoot" | "phase">>;
+      candidates: ReadonlyArray<Pick<DesignAppCandidate, "appRoot">>;
+      chosen: readonly string[];
+    }>;
+  };
 };
 
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
@@ -856,7 +896,39 @@ const CANVAS_CATALOG_LINES: Readonly<Record<string, string>> = {
   canvas_duplicate: "Copy a design canvas frame or group beside it, or lay out a page's light/dark, width or tweak variants in one labelled group.",
 };
 
+/** The app roots a live frame may show: running or known servers, candidates and chosen roots, in that order. */
+function appRootsOf(snapshot: Awaited<ReturnType<NonNullable<DesignCanvasToolDeps["apps"]>["snapshot"]>>): string[] {
+  return [...new Set([...snapshot.apps.map((app) => app.appRoot), ...snapshot.candidates.map((app) => app.appRoot), ...snapshot.chosen])];
+}
+
+function appViewportSide(value: unknown, field: "width" | "height"): number {
+  if (value === undefined || value === null) return APP_DEFAULT_VIEWPORT[field];
+  if (!isAppViewportSide(value)) {
+    throw new CanvasToolError(`${field} must be a whole number from ${APP_FRAME_LIMITS.minViewport} to ${APP_FRAME_LIMITS.maxViewport}.`);
+  }
+  return value;
+}
+
+function appScale(value: unknown): number {
+  if (value === undefined || value === null) return APP_DEFAULT_SCALE;
+  if (!isAppScale(value)) throw new CanvasToolError(`scale must be from ${APP_FRAME_LIMITS.minScale} to ${APP_FRAME_LIMITS.maxScale}.`);
+  return roundAppScale(value);
+}
+
+function appRoute(value: unknown): string {
+  if (value === undefined || value === null) return "/";
+  const route = appRouteFrom(value);
+  if (route === null) {
+    throw new CanvasToolError(
+      `route must start with one / and stay on the app (no // at the start, no backslash), with no hidden characters, at most ${APP_FRAME_LIMITS.routeChars} characters.`,
+    );
+  }
+  return route;
+}
+
 export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[] {
+  const appsOn = deps.designLive === true && deps.apps !== undefined;
+  const placedKinds = appsOn ? LIVE_PLACED_KINDS : PLACED_KINDS;
   const newId = deps.newId ?? randomUUID;
   let calls = 0;
 
@@ -941,6 +1013,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
    * the page of the frames it touched, else the turn's page. `landed: null`
    * says it landed on no page (a delete). `answer` builds the value from the
    * saved document, so it sees that claim.
+   *
+   * `checkedIn` names the workspace a change was checked against before an
+   * await (an app frame's roots): a chat that has moved since is refused
+   * rather than written into the other workspace's canvas.
    */
   const edit = async <T>(
     change: (
@@ -953,6 +1029,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       landed?: null;
       answer?: (saved: DesignCanvas) => T;
     },
+    checkedIn?: string,
   ): Promise<T> => {
     let value: T | undefined;
     let answer: ((saved: DesignCanvas) => T) | undefined;
@@ -962,6 +1039,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     let touched = new Set<string>();
     await deps.pendingEntry?.();
     const { workspaceId, viewOf } = await turnFor();
+    if (checkedIn !== undefined && checkedIn !== workspaceId) {
+      throw new CanvasToolError("This chat moved to another workspace while the frame was being placed. Place it again.");
+    }
     const { doc: saved } = await deps.store.update(
       deps.chatId,
       (doc) => {
@@ -1037,6 +1117,125 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     return (chatId) => !checked.has(chatId) || live.has(chatId);
   };
 
+  /**
+   * canvas_place_frame with kind app (D17): the root must be one of the
+   * workspace's apps (it needn't be running); the same root and route on the
+   * page reuses its frame unless duplicate.
+   */
+  const placeAppFrame = async (p: Record<string, unknown>, title: string): Promise<unknown> => {
+    const workspaceId = await deps.store.workspaceIdOf(deps.chatId);
+    if (workspaceId === null) throw new Error("This chat is no longer available.");
+    const roots = appRootsOf(await deps.apps!.snapshot(workspaceId));
+    if (roots.length === 0) {
+      throw new CanvasToolError("This workspace has no web app for a live frame yet. design_app finds and starts the workspace's app.");
+    }
+    const quoted = roots.map((root) => JSON.stringify(root)).join(", ");
+    let appRoot: string;
+    if (p.appRoot === undefined || p.appRoot === null || p.appRoot === "") {
+      if (roots.length > 1) throw new CanvasToolError(`This workspace has several apps; name one with appRoot: ${quoted}.`);
+      appRoot = roots[0]!;
+    } else if (typeof p.appRoot === "string" && roots.includes(p.appRoot)) {
+      appRoot = p.appRoot;
+    } else {
+      throw new CanvasToolError(`appRoot ${JSON.stringify(String(p.appRoot)).slice(0, 80)} isn't an app in this workspace. Its apps are ${quoted}.`);
+    }
+    const route = appRoute(p.route);
+    const viewport = { width: appViewportSide(p.width, "width"), height: appViewportSide(p.height, "height") };
+    const scale = fitAppScale(viewport, appScale(p.scale), DESIGN_CANVAS_LIMITS.maxSize);
+    const box = appFrameBox(viewport, scale);
+    const x = optionalNumber(p.x, "x");
+    const y = optionalNumber(p.y, "y");
+    const duplicate = optionalBoolean(p.duplicate, "duplicate") === true;
+    const nextTo = p.nextTo === undefined || p.nextTo === null ? undefined : (p.nextTo as Record<string, unknown>);
+    if (nextTo && (typeof nextTo !== "object" || Array.isArray(nextTo))) throw new CanvasToolError("nextTo must be { frameId, side }.");
+    if (nextTo && (x !== undefined || y !== undefined)) throw new CanvasToolError("Pass nextTo or x and y, not both.");
+    const side = nextTo ? besideOf(nextTo.side, "nextTo.side") : undefined;
+    // The shared look fields: a guide applies; dark, tweaks, paper and print mode are refused (D15).
+    const style = stylePatch("app", undefined, p, undefined);
+    const id = newId();
+    return edit<Record<string, unknown>>((doc, view) => {
+      const anchor = nextTo ? besideFrame(doc, nextTo.frameId, view.pageId) : undefined;
+      const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page, view.pageId);
+      if (anchor && anchor.pageId !== pageId) throw new CanvasToolError("nextTo must name a frame on the page it goes on.");
+      const same = doc.frames.filter((entry) => entry.kind === "app" && entry.pageId === pageId && entry.appRoot === appRoot && entry.route === route);
+      const candidates = duplicate ? [] : same.filter((entry) => !entry.locked);
+      if (!duplicate && same.length > 0 && candidates.length === 0) {
+        throw new CanvasToolError(
+          `${route} of ${appRoot} is already on this page in locked frame ${same.map((entry) => `"${entry.id}"`).join(", ")}. Pass duplicate: true to show it again, or ask the person to unlock it.`,
+        );
+      }
+      const adopted = candidates.find((entry) => entry.createdBy === "aiden") ?? candidates[0];
+      if (adopted) {
+        // Reused in place: a new title, and only the viewport sides and scale
+        // that were passed; the rest stay the frame's own.
+        const given = (value: unknown) => value !== undefined && value !== null;
+        let resize: Partial<DesignFrame> = {};
+        if (given(p.width) || given(p.height) || given(p.scale)) {
+          const own = adopted.viewport ?? APP_DEFAULT_VIEWPORT;
+          const merged = { width: given(p.width) ? viewport.width : own.width, height: given(p.height) ? viewport.height : own.height };
+          const mergedScale = fitAppScale(merged, given(p.scale) ? appScale(p.scale) : (adopted.scale ?? APP_DEFAULT_SCALE), DESIGN_CANVAS_LIMITS.maxSize);
+          resize = { viewport: merged, scale: mergedScale, ...appFrameBox(merged, mergedScale) };
+        }
+        const frames = doc.frames.map((entry) => (entry.id === adopted.id ? applyStyle({ ...entry, title, ...resize }, style) : entry));
+        const next = refitGroups(syncConnectors({ ...doc, frames }), [adopted.groupId]);
+        const frame = next.frames.find((entry) => entry.id === adopted.id)!;
+        return {
+          doc: next,
+          value: {
+            status: "placed",
+            placed: "reused",
+            note: `${route} of ${appRoot} was already on this page, so its frame "${adopted.id}" was reused. Pass duplicate: true for a second frame.`,
+            units: "canvas",
+            frame: summarizeFrame(frame),
+          },
+        };
+      }
+      const namedGroup = p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
+      const groupId = groupOf(doc, namedGroup, pageId);
+      const at = anchor
+        ? besideBox(anchor, box, side!, blockersOn(doc, pageId, new Set([anchor.id, groupId])))
+        : x !== undefined && y !== undefined
+          ? { x, y }
+          : undefined;
+      const input: PlaceFrameInput = {
+        kind: "app",
+        title,
+        pageId,
+        ...box,
+        createdBy: "aiden",
+        appRoot,
+        route,
+        viewport,
+        scale,
+        ...(at ?? {}),
+        ...(groupId ? { groupId } : {}),
+        ...style.set,
+      };
+      const placed = placeFrame(doc, input, canvasView(doc, view, undefined, pageId), () => id);
+      if ("error" in placed) {
+        throw new CanvasToolError(
+          `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
+        );
+      }
+      const placedDoc = refitGroups(placed.doc, [groupId]);
+      const frame = placedDoc.frames.find((entry) => entry.id === id)!;
+      return {
+        doc: placedDoc,
+        value: { status: "placed", placed: same.length > 0 ? "copy" : "new", units: "canvas", frame: summarizeFrame(frame) },
+      };
+    }, workspaceId);
+  };
+
+  /** canvas_read's app frames, each with whether its app runs now. */
+  const withAppLiveness = async <T extends { inView: CanvasFrameSummary[]; outsideFrames: CanvasFrameSummary[] }>(answer: T, workspaceId: string): Promise<T> => {
+    if (!appsOn || ![...answer.inView, ...answer.outsideFrames].some((frame) => frame.kind === "app")) return answer;
+    const snapshot = await deps.apps!.snapshot(workspaceId);
+    const running = new Set(snapshot.apps.filter((app) => app.phase === "running").map((app) => app.appRoot));
+    const mark = (frame: CanvasFrameSummary): CanvasFrameSummary =>
+      frame.kind === "app" ? { ...frame, live: frame.appRoot !== undefined && running.has(frame.appRoot) } : frame;
+    return { ...answer, inView: answer.inView.map(mark), outsideFrames: answer.outsideFrames.map(mark) };
+  };
+
   /** The canvas as this chat may see it: the comments its own messages sent, none of another chat's. */
   const ownComments = (doc: DesignCanvas): DesignCanvas => ({
     ...doc,
@@ -1061,7 +1260,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             if (p.offset !== undefined) {
               throw new CanvasToolError("canvas_read no longer takes offset. To read the frames after an answer, pass its nextCursor as cursor.");
             }
-            const { doc: shared, view } = await read();
+            const { doc: shared, view, workspaceId } = await read();
             const doc = ownComments(shared);
             const cursor = p.cursor === undefined ? undefined : typeof p.cursor === "string" ? parseCanvasReadCursor(p.cursor) : null;
             if (cursor === null) {
@@ -1074,12 +1273,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if ("error" in read) throw new CanvasToolError(read.error);
               pageId = read.pageId;
             }
-            const described = describeCanvas(doc, {
-              pageId,
-              chatView: view,
-              ...(cursor ? { cursor } : {}),
-              ...(deps.viewState ? { viewState: deps.viewState } : {}),
-            });
+            const described = await withAppLiveness(
+              describeCanvas(doc, {
+                pageId,
+                chatView: view,
+                ...(cursor ? { cursor } : {}),
+                ...(deps.viewState ? { viewState: deps.viewState } : {}),
+              }),
+              workspaceId,
+            );
             const designMd = deps.designMdLine ? await deps.designMdLine(signal) : "";
             const answer = designMd ? { ...described, designMd } : described;
             const listed = new Set([...described.inView, ...described.outsideFrames].map((frame) => frame.id));
@@ -1109,10 +1311,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_place_frame",
         label: "Place on design canvas",
         description:
-          "Put a frame on the design canvas: a workspace HTML page (kind file, path workspace-relative; write the file first), an image, a note, a group, text, a shape (rect or oval, label in text), a frame (an empty artboard) or a connector (an arrow or line between frames or points; an end on a frame follows it). Notes and text take **bold**, *italic*, <u>underline</u>, [links](https://…) and \"- \" or \"1. \" lists; size and color apply to the whole item, fill colours a note, shape or artboard. A page's frame is sized for its designWidth (390, 768, 1280, 1440) unless you pass w and h. It goes on the page on screen unless you name another. A page already on this canvas page reuses its frame, kept in its group unless you name another (placed: reused; refused if shown only in locked frames); duplicate: true adds another (placed: copy). nextTo puts it beside a frame, in that frame's group; with no x, y or nextTo it goes right of the last frame in its group or in view, wrapping inside an artboard. Groups fit their frames (one the person drew only grows).",
+          `Put a frame on the design canvas: a workspace HTML page (kind file, path workspace-relative; write the file first), an image, a note, a group, text, a shape (rect or oval, label in text), a frame (an empty artboard) or a connector (an arrow or line between frames or points; an end on a frame follows it). Notes and text take **bold**, *italic*, <u>underline</u>, [links](https://…) and "- " or "1. " lists; size and color apply to the whole item, fill colours a note, shape or artboard. A page's frame is sized for its designWidth (390, 768, 1280, 1440) unless you pass w and h. It goes on the page on screen unless you name another. A page already on this canvas page reuses its frame, kept in its group unless you name another (placed: reused; refused if shown only in locked frames); duplicate: true adds another (placed: copy). nextTo puts it beside a frame, in that frame's group; with no x, y or nextTo it goes right of the last frame in its group or in view, wrapping inside an artboard. Groups fit their frames (one the person drew only grows).${appsOn ? APP_PLACE_SENTENCE : ""}`,
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
-          kind: enumOf(PLACED_KINDS),
+          kind: enumOf(placedKinds),
           title: Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars }),
           path: Type.Optional(Type.String({ maxLength: 1024 })),
           text: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.noteChars })),
@@ -1131,23 +1333,33 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           designWidth: Type.Optional(Type.Union(DESIGN_WIDTHS.map((width) => Type.Literal(width)))),
           duplicate: Type.Optional(Type.Boolean({ description: "file: add a frame even when the page is on the canvas." })),
           nextTo: Type.Optional(Type.Object({ frameId: Type.String({ description: FRAME_REF }), side: Type.Optional(BesideSchema) })),
+          ...(appsOn
+            ? {
+                appRoot: Type.Optional(Type.String({ maxLength: 512, description: "app: the app's folder, \".\" for the workspace's own." })),
+                route: Type.Optional(Type.String({ maxLength: APP_FRAME_LIMITS.routeChars, description: "app: the route to show, such as /pricing." })),
+                width: Type.Optional(Type.Number({ description: "app: the viewport's width in CSS pixels." })),
+                height: Type.Optional(Type.Number({ description: "app: the viewport's height in CSS pixels." })),
+                scale: Type.Optional(Type.Number({ description: "app: how large the viewport is drawn on the canvas." })),
+              }
+            : {}),
           ...STYLE_PARAMETERS,
         }),
         execute: async (_id, raw) =>
           run(async () => {
             const p = raw as Record<string, unknown>;
             const kind = p.kind as PlacedKind;
-            if (!PLACED_KINDS.includes(kind)) {
-              throw new CanvasToolError(`kind must be one of ${PLACED_KINDS.map((entry) => `"${entry}"`).join(", ")}.`);
+            if (!placedKinds.includes(kind)) {
+              throw new CanvasToolError(`kind must be one of ${placedKinds.map((entry) => `"${entry}"`).join(", ")}.`);
             }
             const title = text(p.title, "title", DESIGN_CANVAS_LIMITS.titleChars);
+            if (kind === "app") return placeAppFrame(p, title);
             const path = kind === "file" || kind === "image" ? await checkedPath(deps.workspaceRoot, p.path, kind) : undefined;
             const x = optionalNumber(p.x, "x");
             const y = optionalNumber(p.y, "y");
             const look = drawnLook(kind, p);
             const shape = look.shape;
             const width = kind === "file" ? (designWidth(p.designWidth) ?? DESIGN_DEFAULT_FILE_WIDTH) : undefined;
-            const box = kind === "connector" ? { w: 1, h: 1 } : kind === "file" ? defaultFileBox(width) : DEFAULT_BOX[kind];
+            const box = kind === "connector" ? { w: 1, h: 1 } : kind === "file" ? defaultFileBox(width) : DEFAULT_BOX[kind as Exclude<PlacedKind, "connector" | "file" | "app">];
             const givenW = optionalNumber(p.w, "w");
             const givenH = optionalNumber(p.h, "h");
             const w = givenW ?? box.w;
@@ -1348,11 +1560,16 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           ),
           aboveFrameId: Type.Optional(Type.String({ description: "Put it just in front of this sibling." })),
           belowFrameId: Type.Optional(Type.String({ description: "Put it just behind this sibling." })),
+          ...(appsOn ? { colorScheme: Type.Optional(enumOf(["light", "dark"] as const)) } : {}),
           ...STYLE_PARAMETERS,
         }),
         execute: async (_id, raw) =>
           run(async () => {
             const p = raw as Record<string, unknown>;
+            const colorScheme = appsOn && p.colorScheme !== undefined && p.colorScheme !== null ? p.colorScheme : undefined;
+            if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dark") {
+              throw new CanvasToolError('colorScheme must be "light" or "dark".');
+            }
             const x = optionalNumber(p.x, "x");
             const y = optionalNumber(p.y, "y");
             const w = optionalNumber(p.w, "w");
@@ -1384,6 +1601,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               const worded = frame.kind === "note" || frame.kind === "text" || frame.kind === "shape";
               if (p.text !== undefined && !worded) throw new CanvasToolError("Only a note, a text item or a shape has text.");
               if (width !== undefined && frame.kind !== "file") throw new CanvasToolError("Only a file frame has a design width.");
+              if (colorScheme !== undefined && frame.kind !== "app") throw new CanvasToolError("Only a live app frame has a colorScheme.");
               if ((fill !== undefined || clearFill) && !takesFill(frame.kind)) {
                 throw new CanvasToolError("Only a shape, a note or an artboard (kind frame) has a fill.");
               }
@@ -1447,6 +1665,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 ...(hidden === true ? { hidden: true as const } : {}),
                 ...(locked === true ? { locked: true as const } : {}),
               };
+              // A live app frame keeps its aspect: a corner resize changes how its viewport is drawn (D15).
+              if (current.kind === "app" && (w !== undefined || h !== undefined)) {
+                const scale = appResizeScale(current.viewport, w, h, DESIGN_CANVAS_LIMITS.maxSize);
+                next = { ...next, scale, ...appFrameBox(current.viewport ?? APP_DEFAULT_VIEWPORT, scale) };
+              }
+              if (colorScheme !== undefined) next = { ...next, colorScheme };
               if (clearFill) delete next.fill;
               if (hidden === false) delete next.hidden;
               if (locked === false) delete next.locked;
@@ -1931,6 +2155,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             } else {
               throw new CanvasToolError("Name the page to inspect by frameId or path.");
             }
+            if (frame.kind === "app") throw new CanvasToolError("canvas_inspect can't open live app frames yet.");
             if (frame.kind !== "file" || !frame.path) throw new CanvasToolError("Only a page (a file frame) can be inspected.");
             const top = optionalNumber(p.top, "top") ?? 0;
             const picture = optionalBoolean(p.picture, "picture") !== false;

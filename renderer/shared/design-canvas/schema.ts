@@ -15,6 +15,15 @@ import {
   type DesignTweakVersion,
 } from "./tweaks.js";
 import { clippedUnicode } from "../unicode-prefix.js";
+import {
+  APP_FRAME_LIMITS,
+  appFrameBox,
+  appRouteFrom,
+  fitAppScale,
+  isAppRoot,
+  isAppScale,
+  isAppViewportSide,
+} from "./app-frame.js";
 
 export type DesignFrameKind =
   | "file"
@@ -26,7 +35,8 @@ export type DesignFrameKind =
   | "shape"
   | "connector"
   | "stroke"
-  | "frame";
+  | "frame"
+  | "app";
 export type DesignWidth = 390 | 768 | 1280 | 1440;
 
 /** The fixed colours a drawn item can use; each follows the theme (`designColorVar`). */
@@ -105,7 +115,7 @@ export type DesignFrame = {
   printMode?: DesignPrintMode;
   /** file and artifact: the PDF's paper (Letter when left out). */
   paper?: DesignPaper;
-  /** file, artifact and artboard: a layout guide drawn over it. */
+  /** file, artifact, artboard and app: a layout guide drawn over it. */
   guide?: DesignGuide;
   /** file and artifact: drawn in dark mode (`data-theme="dark"` and a dark color scheme on the page). */
   dark?: true;
@@ -113,6 +123,20 @@ export type DesignFrame = {
   tweaks?: DesignTweakValues;
   /** file: saved sets of tweak values to switch between (V1, the file as it is, is never stored). */
   tweakVersions?: DesignTweakVersion[];
+  /** app: the app's folder in the workspace (`.` for the workspace folder). */
+  appRoot?: string;
+  /** app: the route shown, from the app's own origin (main decides the origin at mount time). */
+  route?: string;
+  /** app: the size the page is laid out at, in CSS pixels. */
+  viewport?: { width: number; height: number };
+  /** app: how the viewport is drawn on the canvas; `w` and `h` follow from it (4 decimals). */
+  scale?: number;
+  /** app: the page's colour scheme (the Dark switch). */
+  colorScheme?: "light" | "dark";
+  /** app: a short label for a variant (Phase 3c writes it). */
+  label?: string;
+  /** app: the frame this one is a variant of (Phase 3c writes it). */
+  variantOf?: string;
   /** Not drawn on the canvas (it stays in the layer list). */
   hidden?: true;
   /** Cannot be moved, resized or removed until it is unlocked. */
@@ -127,9 +151,9 @@ export function isDesignPrintable(kind: DesignFrameKind): boolean {
   return kind === "file" || kind === "artifact";
 }
 
-/** Kinds a layout guide can be drawn over: pages, artifacts and artboards. */
+/** Kinds a layout guide can be drawn over: pages, artifacts, artboards and app frames. */
 export function canDesignGuide(kind: DesignFrameKind): boolean {
-  return kind === "file" || kind === "artifact" || kind === "frame";
+  return kind === "file" || kind === "artifact" || kind === "frame" || kind === "app";
 }
 
 /** Kinds other frames can sit in, with `groupId`: a group, or an empty artboard drawn with the Frame tool. */
@@ -146,6 +170,8 @@ export function isDesignLine(kind: DesignFrameKind): boolean {
 export function designMinSize(kind: DesignFrameKind): number {
   if (isDesignLine(kind)) return 1;
   if (kind === "text" || kind === "shape") return 8;
+  // The smallest app box (a 200 px viewport at scale 0.05), so the clamp never moves a recomputed one.
+  if (kind === "app") return APP_FRAME_LIMITS.minViewport * APP_FRAME_LIMITS.minScale;
   return DESIGN_CANVAS_LIMITS.minSize;
 }
 
@@ -276,6 +302,7 @@ const FRAME_KINDS: ReadonlySet<string> = new Set<DesignFrameKind>([
   "connector",
   "stroke",
   "frame",
+  "app",
 ]);
 const COLORS: ReadonlySet<string> = new Set(DESIGN_COLORS);
 const SIDES: ReadonlySet<string> = new Set<DesignSide>(["top", "right", "bottom", "left"]);
@@ -541,13 +568,14 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
   };
   const groupId = identifier(value.groupId);
   if (groupId) frame.groupId = groupId;
-  if ((DESIGN_WIDTHS as readonly unknown[]).includes(value.designWidth)) {
+  if (frame.kind !== "app" && (DESIGN_WIDTHS as readonly unknown[]).includes(value.designWidth)) {
     frame.designWidth = value.designWidth as DesignWidth;
   }
   if (frame.kind === "file" || frame.kind === "image") {
     if (!isDesignRelativePath(value.path)) return null;
     frame.path = value.path;
   }
+  if (frame.kind === "app" && !parseAppFields(frame, value)) return null;
   if (frame.kind === "artifact") {
     const mediaId = identifier(value.mediaId);
     if (!mediaId) return null;
@@ -614,6 +642,28 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     if (value.closed === true && frame.handles) frame.closed = true;
   }
   return frame;
+}
+
+/** An app frame's fields (D15). The box is recomputed from the viewport and scale, so it can't disagree. */
+function parseAppFields(frame: DesignFrame, value: Record<string, unknown>): boolean {
+  if (!isAppRoot(value.appRoot)) return false;
+  const route = appRouteFrom(value.route);
+  if (route === null) return false;
+  const viewport = value.viewport;
+  if (!isRecord(viewport) || !isAppViewportSide(viewport.width) || !isAppViewportSide(viewport.height)) return false;
+  if (!isAppScale(value.scale)) return false;
+  frame.appRoot = value.appRoot;
+  frame.route = route;
+  frame.viewport = { width: viewport.width, height: viewport.height };
+  frame.scale = fitAppScale(frame.viewport, value.scale, DESIGN_CANVAS_LIMITS.maxSize);
+  const box = appFrameBox(frame.viewport, frame.scale);
+  frame.w = box.w;
+  frame.h = box.h;
+  if (value.colorScheme === "light" || value.colorScheme === "dark") frame.colorScheme = value.colorScheme;
+  if (typeof value.label === "string" && value.label.trim()) frame.label = value.label.slice(0, APP_FRAME_LIMITS.labelChars);
+  const variantOf = identifier(value.variantOf);
+  if (variantOf) frame.variantOf = variantOf;
+  return true;
 }
 
 function isColor(value: unknown): value is DesignColor {

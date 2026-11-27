@@ -59,6 +59,13 @@ import {
   type DesignChatCanvases,
 } from "../services/design-canvas/store.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { appFrameName } from "../../renderer/shared/design-canvas/app-frame.js";
+import {
+  DESIGN_APP_FRAME_MOUNT_CHANNEL,
+  type DesignAppFrameMountResult,
+} from "../../renderer/shared/design-canvas/app-frame-events.js";
+import type { DesignAppsSnapshot } from "../../renderer/shared/design-app.js";
+import type { AppFrameRegistry } from "../services/design-canvas/app-frames/app-frame-registry.js";
 import type { ChatMeta } from "../services/types.js";
 
 export { DESIGN_CANVAS_UPDATED_CHANNEL, type DesignCanvasUpdated };
@@ -151,7 +158,21 @@ const DESIGN_SYSTEM_MAX_FINDINGS = 50;
 export type DesignCanvasExportResult =
   | { saved: true }
   | { canceled: true }
-  | { error: "unavailable" | "missing" | "failed" };
+  /** `app-not-running` and `live-off` are a live app frame's (design mode v2 Phase 3a, D18). */
+  | { error: "unavailable" | "missing" | "failed" | "app-not-running" | "live-off" };
+
+/**
+ * What a live app frame's Download draws (D18): main's own address for it
+ * (the running app's origin plus the frame's route), at its viewport.
+ */
+export type DesignAppRenderRequest = {
+  url: string;
+  origin: string;
+  width: number;
+  height: number;
+  format: "png" | "pdf";
+  colorScheme?: "light" | "dark";
+};
 
 /** `designCanvas:source` reply: a page's or artifact's code, for the side panel's Code tab. */
 export type DesignCanvasSourceResult =
@@ -315,6 +336,28 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     enabled(): boolean;
     reader: Pick<DesignMdReader, "read">;
     appRoots: DesignAppRoots;
+  };
+  /**
+   * Live app frames (design mode v2 Phase 3a, D2, D16), behind the live flag.
+   * Left out, or off, `designCanvas:appFrameMount` answers `live-off`.
+   */
+  appFrames?: {
+    enabled(): boolean;
+    /** The frame registry, or null before the design subscribers are installed. */
+    registry(): Pick<AppFrameRegistry, "expectPlacement"> | null;
+    /**
+     * Resolves once no service-worker clear of `origin` is queued or running
+     * (S76): a frame is told its origin only after, so its page never loads
+     * mid-clear. Left out, there's nothing to wait for.
+     */
+    clearSettled?(origin: string): Promise<void>;
+    /** Draws a live app frame on the default session (app-export.ts); left out, Download answers unavailable. */
+    renderApp?(request: DesignAppRenderRequest): Promise<Uint8Array>;
+    apps: {
+      snapshot(workspaceId: string): Promise<DesignAppsSnapshot>;
+      /** 2b/2c's exact-address lookup; undefined while a holder is lost. */
+      appForOrigin(origin: string): { workspaceId: string; appRoot: string } | undefined;
+    };
   };
 }): void {
   if (!deps.enabled()) return;
@@ -532,9 +575,65 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     return { grant };
   });
 
+  /**
+   * The origin of the app a live frame shows, when that app root is running
+   * in the chat's own workspace and main can tie the origin back to it; null
+   * otherwise (stopped, elsewhere, or a lost holder).
+   */
+  const runningAppOrigin = async (
+    live: NonNullable<typeof deps.appFrames>,
+    workspaceId: string,
+    appRoot: string,
+  ): Promise<string | null> => {
+    const snapshot = await live.apps.snapshot(workspaceId);
+    const running = snapshot.apps.find(
+      (app) => app.workspaceId === workspaceId && app.appRoot === appRoot && app.phase === "running" && typeof app.origin === "string",
+    );
+    const origin = running?.origin;
+    if (!origin || !LOOPBACK_APP_ORIGIN.test(origin)) return null;
+    const owner = live.apps.appForOrigin(origin);
+    return owner && owner.workspaceId === workspaceId && owner.appRoot === appRoot ? origin : null;
+  };
+
   // The app's DESIGN.md for a workspace chat, read only (S41, R9). Like
   // designCanvas:get it doesn't need design mode on; it never writes, and it
   // reads with report: false, so it sends no event.
+  // Main decides the origin an app frame shows (D2, D16): the renderer names
+  // the frame and a fresh token, never a URL. A running app in the chat's own
+  // workspace, tied to its origin by 2b/2c's exact address check, gets a
+  // one-use placement record the registry admits on the first navigation.
+  const LOOPBACK_APP_ORIGIN = /^http:\/\/(?:127\.0\.0\.1|\[::1\]):\d{1,5}$/u;
+  deps.handle(DESIGN_APP_FRAME_MOUNT_CHANNEL, async (_event, chatId, request): Promise<DesignAppFrameMountResult> => {
+    const live = deps.appFrames;
+    if (!live || !live.enabled()) return { error: "live-off" };
+    const chat = await requireChat(chatId);
+    // Like a workspace file's grant, a live app needs design mode on (D2).
+    if (!canFrame(chat)) return { error: "unavailable" };
+    if (typeof request !== "object" || request === null) return { error: "unavailable" };
+    const { frameId, mountToken } = request as { frameId?: unknown; mountToken?: unknown };
+    if (typeof frameId !== "string" || typeof mountToken !== "string") return { error: "unavailable" };
+    try {
+      appFrameName(frameId, mountToken);
+    } catch {
+      return { error: "unavailable" };
+    }
+    const workspaceId = designCanvasWorkspaceOf(chat);
+    const { doc } = await deps.store.get(chat.id, { workspaceId });
+    const frame = doc.frames.find((entry) => entry.id === frameId);
+    if (!frame || frame.kind !== "app" || typeof frame.appRoot !== "string") return { error: "unavailable" };
+    const origin = await runningAppOrigin(live, workspaceId, frame.appRoot);
+    if (!origin) return { error: "app-not-running" };
+    // A page that loaded while its origin's workers were being cleared could lose its own (S76).
+    await live.clearSettled?.(origin).catch(() => undefined);
+    // Design mode may have turned off, or the chat moved, while we awaited.
+    const current = await deps.getChat(chat.id);
+    if (!canFrame(current) || designCanvasWorkspaceOf(current) !== workspaceId) return { error: "unavailable" };
+    const registry = live.registry();
+    if (!registry) return { error: "unavailable" };
+    if (registry.expectPlacement({ frameId, mountToken, expectedOrigin: origin }) !== "ok") return { error: "too-many-frames" };
+    return { origin };
+  });
+
   deps.handle("designCanvas:designSystem", async (_event, request): Promise<DesignCanvasDesignSystemResult> => {
     if (!deps.enabled()) throw new Error(UNAVAILABLE);
     if (typeof request !== "object" || request === null || Array.isArray(request)) {
@@ -630,6 +729,41 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const { doc } = await deps.store.get(chat.id, { workspaceId: designCanvasWorkspaceOf(chat) });
       const frame = doc.frames.find((entry) => entry.id === frameId);
       if (!frame || !designExportFormats(frame).includes(kind)) return { error: "unavailable" };
+
+      // A live app frame is drawn from its running app, on the default session
+      // (D18). Everything is checked before the Save dialog opens, and the
+      // address is main's own: the renderer never names a URL.
+      if (frame.kind === "app") {
+        const live = deps.appFrames;
+        if (!live || !live.enabled()) return { error: "live-off" };
+        if (!live.renderApp || (kind !== "png" && kind !== "pdf") || typeof frame.appRoot !== "string" || !frame.viewport) {
+          return { error: "unavailable" };
+        }
+        const origin = await runningAppOrigin(live, designCanvasWorkspaceOf(chat), frame.appRoot);
+        if (!origin) return { error: "app-not-running" };
+        const destination = await deps.saveFile(event, { defaultPath: designExportFileName(frame, kind), filters: [EXPORT_FILTERS[kind]] });
+        if (destination === null) return { canceled: true };
+        // The dialog can stay open a long time: the app may have stopped, or
+        // another server taken its port. Only the same app, still running here, is drawn.
+        const current = await deps.getChat(chat.id);
+        if (!current || !attended(current) || !live.enabled()) return { error: "unavailable" };
+        const stillRunning = await runningAppOrigin(live, designCanvasWorkspaceOf(current), frame.appRoot);
+        if (stillRunning !== origin) return { error: "app-not-running" };
+        try {
+          const bytes = await live.renderApp({
+            url: `${origin}${frame.route ?? "/"}`,
+            origin,
+            width: frame.viewport.width,
+            height: frame.viewport.height,
+            format: kind,
+            ...(frame.colorScheme ? { colorScheme: frame.colorScheme } : {}),
+          });
+          await fs.writeFile(destination, bytes);
+        } catch {
+          return { error: "failed" };
+        }
+        return { saved: true };
+      }
 
       let url: string;
       let source: string | null = null;

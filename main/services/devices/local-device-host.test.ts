@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { aidenLoopbackPorts } from "../loopback-ports.js";
 import { createDeviceService } from "./device-service.js";
 import { DeviceHostUnavailableError, DeviceToolsMissingError } from "./device-host.js";
 import {
@@ -735,6 +736,79 @@ test("a healthy existing agent-device daemon is reused", async () => {
       fetch: async (url) => ({ ok: true, status: url.includes("61500/health") || url.endsWith("/readyz") ? 200 : 404 }),
     },
   );
+});
+
+test("the hub's reserved port is Aiden's own from before spawn until the hub stops", async () => {
+  await withHost(async (harness) => {
+    const registeredAtSpawn: boolean[] = [];
+    const spawn = harness.deps.spawn;
+    harness.deps.spawn = (command, args, env) => {
+      registeredAtSpawn.push(aidenLoopbackPorts.has(Number(args[args.indexOf("--port") + 1])));
+      return spawn(command, args, env);
+    };
+    const host = createLocalDeviceHost(harness.deps);
+    const ready = await host.ensureReady();
+    const port = Number(new URL(ready.hub.origin).port);
+    assert.deepEqual(registeredAtSpawn, [true]);
+    assert.equal(aidenLoopbackPorts.has(port), true);
+    await host.stop();
+    assert.equal(aidenLoopbackPorts.has(port), false);
+  });
+});
+
+test("a hub that exits gives up its port, and its replacement holds the new one", async () => {
+  await withHost(async (harness) => {
+    const host = createLocalDeviceHost(harness.deps);
+    const first = Number(new URL((await host.ensureReady()).hub.origin).port);
+    harness.children[0].exit(1);
+    assert.equal(aidenLoopbackPorts.has(first), false);
+    await waitFor(() => host.current() !== null);
+    const second = Number(new URL(host.current()!.hub.origin).port);
+    assert.notEqual(second, first);
+    assert.equal(aidenLoopbackPorts.has(second), true);
+    await host.stop();
+    assert.equal(aidenLoopbackPorts.has(second), false);
+  });
+});
+
+test("the agent daemon's HTTP port is Aiden's own while Aiden uses it", async () => {
+  await withHost(async (harness) => {
+    const host = createLocalDeviceHost(harness.deps);
+    await host.ensureAgentReady();
+    assert.equal(aidenLoopbackPorts.has(61_000), true);
+    await host.stopAgent();
+    assert.equal(aidenLoopbackPorts.has(61_000), false);
+    await host.stop();
+  });
+});
+
+test("a reused daemon's port is registered, and an unhealthy leftover's never is", async () => {
+  await withHost(
+    async (harness) => {
+      const stateDir = path.join(harness.baseDir, "agent-state");
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "daemon.json"), JSON.stringify({ httpPort: 61_501, token: "kept" }));
+      const host = createLocalDeviceHost(harness.deps);
+      await host.ensureAgentReady();
+      assert.equal(aidenLoopbackPorts.has(61_501), true);
+      await host.stop();
+      assert.equal(aidenLoopbackPorts.has(61_501), false);
+    },
+    {
+      fetch: async (url) => ({ ok: true, status: url.includes("61501/health") || url.endsWith("/readyz") ? 200 : 404 }),
+    },
+  );
+  await withHost(async (harness) => {
+    const stateDir = path.join(harness.baseDir, "agent-state");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(path.join(stateDir, "daemon.json"), JSON.stringify({ httpPort: 61_502, token: "stale" }));
+    const host = createLocalDeviceHost(harness.deps);
+    await host.ensureAgentReady();
+    assert.equal(aidenLoopbackPorts.has(61_502), false, "the unhealthy leftover is replaced, not registered");
+    assert.equal(aidenLoopbackPorts.has(61_000), true);
+    await host.stop();
+    assert.equal(aidenLoopbackPorts.has(61_000), false);
+  });
 });
 
 test("serve-sim helpers are found inside the hub install, and a missing one is null", async () => {

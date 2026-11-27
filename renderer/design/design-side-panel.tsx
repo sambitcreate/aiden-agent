@@ -4,6 +4,7 @@
 // opens with the panel button at the top right or the I key.
 
 import {
+  AppWindow,
   ArrowRight,
   Circle,
   Eye,
@@ -97,6 +98,8 @@ export function designKindName(frame: Pick<DesignFrame, "kind" | "shape" | "arro
       return "Drawing";
     case "frame":
       return "Artboard";
+    case "app":
+      return "App page";
   }
 }
 
@@ -122,6 +125,8 @@ function kindIcon(frame: DesignFrame): LucideIcon {
       return PenLine;
     case "frame":
       return Frame;
+    case "app":
+      return AppWindow;
   }
 }
 

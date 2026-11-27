@@ -1,5 +1,5 @@
 // Which design frames get a real iframe. Live iframes are expensive, so at
-// most six exist at once; every other file or artifact frame shows its last
+// most six exist at once; every other file, artifact or app frame shows its last
 // snapshot. Pure, so it is tested without a DOM.
 
 import type { DesignFrame } from "../shared/design-canvas/schema";
@@ -15,7 +15,7 @@ export const DESIGN_LIVE_MIN_ZOOM = 0.25;
  */
 const KEEP_LIVE_BONUS = 1.5;
 
-const canBeLive = (frame: DesignFrame) => frame.kind === "file" || frame.kind === "artifact";
+const canBeLive = (frame: DesignFrame) => frame.kind === "file" || frame.kind === "artifact" || frame.kind === "app";
 
 export function selectLiveFrames(input: {
   frames: DesignFrame[];

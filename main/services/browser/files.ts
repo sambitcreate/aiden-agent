@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import * as path from "node:path";
 import { BROWSER_DISCOVERY_LIMITS, browserAssetReferences, type BrowserAssetSourceKind } from "./asset-discovery.js";
 import { botIdForBrowserWorkspace } from "./bot-workspaces.js";
+import { registerListeningPort } from "../loopback-ports.js";
 
 const CAPABILITY_QUERY = "__aiden_preview";
 export const BROWSER_PREVIEW_AUTH_HEADER = "X-Aiden-Preview-Authorization";
@@ -106,6 +107,7 @@ interface Lease {
   reservations: Set<object>;
   consumers: Set<string>;
   closing?: Promise<void>;
+  unregisterPort?: () => void;
 }
 class FilePreviewError extends Error {
   constructor(
@@ -864,6 +866,7 @@ export class BrowserFileService {
         resolve();
       });
     });
+    lease.unregisterPort = registerListeningPort(lease.server);
     const address = lease.server.address() as AddressInfo;
     lease.host = `127.0.0.1:${address.port}`;
     lease.origin = `http://${lease.host}`;
@@ -877,6 +880,7 @@ export class BrowserFileService {
       return lease.closing;
     }
     lease.retiring = true;
+    lease.unregisterPort?.();
     if (this.leases.get(lease.key) === lease) this.leases.delete(lease.key);
     for (const id of lease.consumers)
       if (this.consumers.get(id) === lease) this.consumers.delete(id);

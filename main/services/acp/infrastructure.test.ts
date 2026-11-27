@@ -12,6 +12,7 @@ import { Value } from "typebox/value";
 
 import { createDeviceAgentTools } from "../devices/device-tools.js";
 import { createTodoExtensionRuntime } from "../rpiv-todo/extension.js";
+import { aidenLoopbackPorts } from "../loopback-ports.js";
 import { buildChildEnvironment } from "./environment.js";
 import { AcpConnection } from "./connection.js";
 import { redactSecrets } from "./errors.js";
@@ -514,6 +515,14 @@ test("schema sanitizing never requires a property it does not describe", () => {
     }
   }
   assert.deepEqual((sanitized.required as string[]).sort(), ["name", "payload"]);
+});
+
+test("the tool bridge's port is Aiden's own while it listens", async () => {
+  const bridge = new AcpMcpBridge({ tools: [], onCall: async () => ({ content: [] }) });
+  const port = Number(new URL((await bridge.start() as { url: string }).url).port);
+  assert.equal(aidenLoopbackPorts.has(port), true);
+  await bridge.close();
+  assert.equal(aidenLoopbackPorts.has(port), false);
 });
 
 test("the tool bridge requires its bearer token and validates arguments against the original schema", async () => {

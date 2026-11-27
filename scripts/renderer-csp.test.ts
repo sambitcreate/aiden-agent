@@ -6,6 +6,7 @@ import test from "node:test";
 import { finished } from "node:stream/promises";
 import { build, createServer } from "vite";
 import { createPackage } from "@electron/asar";
+import MAIN_WINDOW_FRAME_SRC from "../renderer/shared/design-canvas/main-window-frame-src.json";
 import { productionRendererCsp } from "./renderer-csp.js";
 // The release verifiers are JavaScript scripts also used outside TypeScript.
 // @ts-expect-error The release script has no declaration file.
@@ -69,4 +70,45 @@ test("release checks reject missing policies, missing required windows and later
     assert.throws(() => verifyPackagedRendererCsp(archive), /missing main-window/u);
     await assert.rejects(verifyRendererBuildCsp(path.join(root, "build", "renderer")), /missing main-window/u);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// Design mode v2 Phase 3a (D11, S52, deviation 9): the main window may frame
+// loopback app origins, and the release check holds every page's frame-src.
+const mainFrameSrc = [...MAIN_WINDOW_FRAME_SRC];
+const shippedPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'";
+const withFrameSrc = (sources: string[], base = shippedPolicy) => `${base}; frame-src ${sources.join(" ")}`;
+
+test("the production build keeps the main window's loopback frame sources", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-frame-src-csp-"));
+  try {
+    await Promise.all(pages.map(page => writeFile(path.join(root, page), html(page === "main-window.html" ? withFrameSrc(mainFrameSrc, devPolicy) : devPolicy))));
+    await writeFile(path.join(root, "entry.js"), "document.body.dataset.loaded = 'yes';");
+    const output = path.join(root, "build", "renderer");
+    await build({ configFile: false, root, plugins: [productionRendererCsp()], logLevel: "silent", build: {
+      outDir: output, rollupOptions: { input: pages.map(page => path.join(root, page)) },
+    } });
+    await verifyRendererBuildCsp(output);
+    const policy = csp(await readFile(path.join(output, "main-window.html"), "utf8"));
+    assert.deepEqual(policy.get("frame-src"), mainFrameSrc);
+    assert.deepEqual(policy.get("script-src"), ["'self'", "'wasm-unsafe-eval'"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the release check rejects a main window frame-src that is wider or missing a source", () => {
+  assert.doesNotThrow(() => assertProductionRendererCsp(html(withFrameSrc([...mainFrameSrc].reverse())), "main-window.html"));
+  for (const extra of ["https:", "http:", "*", "http://example.com", "http://[::1]:*"]) {
+    assert.throws(() => assertProductionRendererCsp(html(withFrameSrc([...mainFrameSrc, extra])), "main-window.html"), /frame-src/u, extra);
+    assert.throws(() => assertProductionRendererCsp(html(withFrameSrc([...mainFrameSrc, extra])), "build/renderer/main-window.html"), /frame-src/u, extra);
+  }
+  assert.throws(() => assertProductionRendererCsp(html(withFrameSrc(mainFrameSrc.filter(source => source !== "aiden-design:"))), "main-window.html"), /frame-src/u);
+});
+
+test("the release check rejects any other page that may frame the open web", () => {
+  assert.doesNotThrow(() => assertProductionRendererCsp(html(withFrameSrc(["'self'", "aiden-genui:"])), "quick-chat.html"));
+  assert.doesNotThrow(() => assertProductionRendererCsp(html(withFrameSrc(["'none'"])), "visual-snapshot.html"));
+  for (const source of ["https:", "http:", "*", "http://example.com", "https://*.example.com", "data:"]) {
+    assert.throws(() => assertProductionRendererCsp(html(withFrameSrc(["'self'", source])), "quick-chat.html"), /frame-src/u, source);
+  }
+  // With no frame-src, default-src decides what may be framed.
+  assert.throws(() => assertProductionRendererCsp(html(shippedPolicy.replace("default-src 'self'", "default-src 'self' https:")), "pill.html"), /frame-src/u);
 });

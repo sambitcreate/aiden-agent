@@ -217,6 +217,8 @@ type AidenE2eOptions = {
   workspaceSeed: boolean;
   /** Extra variables for the app process, such as experimental feature flags. */
   appEnvironment: Record<string, string>;
+  /** Extra test-only Chromium switches for the app process, before the app path. */
+  appArgs: string[];
   /**
    * Routes OpenRouter to a loopback fake and provides a test-only image-generation
    * key via env (the image registry never reads the chat OPENROUTER_API_KEY).
@@ -1118,10 +1120,11 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
   portableConfigSeed: ["lmstudio", { option: true }],
   workspaceSeed: [false, { option: true }],
   appEnvironment: [{}, { option: true }],
+  appArgs: [[], { option: true }],
   fakeOpenRouter: [false, { option: true }],
   isolatedKeychain: [false, { option: true }],
   aiden: async (
-    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment, fakeOpenRouter, isolatedKeychain },
+    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment, appArgs, fakeOpenRouter, isolatedKeychain },
     use,
     testInfo,
   ) => {
@@ -1187,6 +1190,8 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           // retain Playwright's worker transport after Electron main exits.
           // E2E still verifies the owned main PID directly during teardown.
           AIDEN_E2E_DISABLE_CRASH_REPORTER: "1",
+          // The default session's webRequest has one owner; observers subscribe through it.
+          AIDEN_E2E_WEB_REQUEST_OBSERVER: "1",
           // The production candidate stays acceptance-gated. E2E opts in only
           // to exercise its local setup/UI contract; it never connects Google.
           AIDEN_EXPERIMENTAL_GEMINI_LIVE: "1",
@@ -1197,6 +1202,9 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           XDG_DATA_HOME: testXdgDataDir,
           ...(redirectOrigin ? { [LM_STUDIO_REDIRECT_ENV]: redirectOrigin } : {}),
           ...fakeOpenRouterEnvironment,
+          // Flag-on v1 runs (design mode v2 Phase 3a): every launch gets live apps on,
+          // and a test's own environment still decides.
+          ...(process.env.AIDEN_E2E_DESIGN_LIVE_ALL === "1" ? { AIDEN_EXPERIMENTAL_DESIGN_LIVE: "1" } : {}),
           ...extraAppEnvironment,
         };
         const launchArgs = [
@@ -1210,6 +1218,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           "--force-renderer-accessibility",
           "--force-prefers-reduced-motion=reduce",
           `--user-data-dir=${testUserDataDir}`,
+          ...appArgs,
           REPOSITORY_ROOT,
         ];
         const launchedApp = await electron.launch({

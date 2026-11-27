@@ -55,6 +55,16 @@ function isEditableTarget(target: EventTarget | null): boolean {
   );
 }
 
+const PRESSABLE_ROLES = new Set(["button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "checkbox", "radio", "switch", "tab", "option"]);
+
+/** A control that Enter or Space presses (a node itself is a `group`, not a control). */
+function isPressableTarget(target: EventTarget | null, region: EventTarget): boolean {
+  if (!(target instanceof HTMLElement) || target === region) return false;
+  if (target.tagName === "BUTTON" || target.tagName === "SUMMARY" || (target.tagName === "A" && target.hasAttribute("href"))) return true;
+  const role = target.getAttribute("role");
+  return role !== null && PRESSABLE_ROLES.has(role);
+}
+
 export function StudioCanvas<N extends Node = Node, E extends Edge = Edge>(
   props: StudioCanvasProps<N, E>,
 ) {
@@ -99,6 +109,8 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented) return;
+    // Enter or Space on a focused button (Reload, a frame's actions) is that button's press.
+    if ((event.key === "Enter" || event.key === " ") && isPressableTarget(event.target, event.currentTarget)) return;
     const key: CanvasKeyEvent = {
       key: event.key,
       code: event.code,

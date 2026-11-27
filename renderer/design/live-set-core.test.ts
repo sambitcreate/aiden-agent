@@ -119,3 +119,19 @@ test("zoom scales the on-screen area and the view in canvas coordinates", () => 
   const frames = [file("in", 1700, 1300), file("out", 2100, 0)];
   assert.deepEqual(sorted(live(frames, { viewport: { x: 0, y: 0, zoom: 0.5 } })), ["in"]);
 });
+
+function app(id: string, x: number, y: number, w = 200, h = 200): DesignFrame {
+  return { id, kind: "app", title: id, x, y, w, h, appRoot: ".", route: "/", viewport: { width: 400, height: 400 }, scale: 0.5, pageId: "page-1", createdBy: "aiden" };
+}
+
+test("app frames compete with page frames for the six live slots, and an entered app frame is always live", () => {
+  const frames = [
+    ...Array.from({ length: 4 }, (_, index) => file(`page-${index}`, index * 210, 0)),
+    ...Array.from({ length: 4 }, (_, index) => app(`app-${index}`, index * 210, 300)),
+  ];
+  const chosen = live(frames);
+  assert.equal(chosen.size, DESIGN_LIVE_LIMIT);
+  assert.ok([...chosen].some((id) => id.startsWith("app-")), "app frames can be live");
+  const far = app("far", 5000, 5000);
+  assert.ok(live([...frames, far], { entered: "far" }).has("far"), "the entered app frame is live even off screen");
+});

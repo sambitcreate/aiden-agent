@@ -7,6 +7,7 @@ import test from "node:test";
 import { createDeviceStreamClient, type DeviceScreenSize, type DeviceStreamRuntime } from "../../../renderer/lib/device-stream.js";
 import { BOT_COMPUTER_VIEWER_HOST_ID } from "../../../renderer/shared/bot-computers.js";
 import { startDeviceHubProxy, type DeviceHubProxy } from "../devices/device-hub-proxy.js";
+import { aidenLoopbackPorts } from "../loopback-ports.js";
 import { createBotComputerControl } from "./control.js";
 import { XK } from "./keysyms.js";
 import { connectRfb } from "./rfb-client.js";
@@ -622,4 +623,20 @@ test("the Simulator's device stream client drives the Bot's computer through the
       client.stop();
     }
   });
+});
+
+test("the hub's port is Aiden's own while it listens", async () => {
+  const hub = await startBotComputerViewerHub({
+    key: randomBytes(32).toString("base64url"),
+    botForVm: () => undefined,
+    screen: async () => {
+      throw new Error("no computer is running");
+    },
+    control: createBotComputerControl(),
+    touch: () => undefined,
+  });
+  const port = Number(new URL(hub.origin).port);
+  assert.equal(aidenLoopbackPorts.has(port), true);
+  await hub.close();
+  assert.equal(aidenLoopbackPorts.has(port), false);
 });

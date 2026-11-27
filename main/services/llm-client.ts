@@ -3145,6 +3145,8 @@ async function prepareGeneration(
           }),
         stillAvailable: canvasStillAvailable,
         ...(mdTurn ? { designMdLine: (toolSignal?: AbortSignal) => mdTurn.canvasReadLine(toolSignal ?? signal) } : {}),
+        // Live app frames (design mode v2 Phase 3a, D17): kind app, read from the workspace's app servers.
+        ...(designLive ? { designLive: true, apps: { snapshot: (workspaceId: string) => designAppServers.snapshot(workspaceId) } } : {}),
       }),
       // The design_system tool joins the canvas tools, so it is declared, held and refused with them.
       ...(mdTurn ? [mdTurn.tool] : []),
