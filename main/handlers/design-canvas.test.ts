@@ -7,11 +7,13 @@ import {
   emptyDesignCanvas,
   type DesignCanvas,
 } from "../../renderer/shared/design-canvas/schema.js";
+import { AppFrameRegistry } from "../services/design-canvas/app-frames/app-frame-registry.js";
 import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { DesignMdReader } from "../services/design-canvas/design-md/reader.js";
 import { DesignCanvasStore, DesignChatCanvases } from "../services/design-canvas/store.js";
 import { DesignCanvasViews } from "../services/design-canvas/views.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import type { DesignAppStatus, DesignAppsSnapshot } from "../../renderer/shared/design-app.js";
 import {
   DESIGN_CAPTURE_MAX_SIDE,
   DESIGN_SOURCE_MAX_BYTES,
@@ -62,6 +64,7 @@ async function fixture(
     artifactTitles?: Record<string, string>;
     designMd?: Parameters<typeof registerDesignCanvasHandlers>[0]["designMd"];
     senderWindowShown?: Parameters<typeof registerDesignCanvasHandlers>[0]["senderWindowShown"];
+    appFrames?: Parameters<typeof registerDesignCanvasHandlers>[0]["appFrames"];
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
@@ -156,6 +159,7 @@ async function fixture(
       return { saved: true, canceled: false };
     },
     ...(options.designMd ? { designMd: options.designMd } : {}),
+    ...(options.appFrames ? { appFrames: options.appFrames } : {}),
   });
   const invokeFrom = async (event: unknown, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -1278,4 +1282,129 @@ test("designSystem works with design mode off, writes nothing, and sends no anal
   assert.equal(answer.status, "ok");
   assert.deepEqual(await listing(workspace), before);
   assert.deepEqual(events, []);
+});
+
+// ---- designCanvas:appFrameMount (design mode v2 Phase 3a, D2, D16) ----
+
+const MOUNT_TOKEN = "abcdefghijklmnop";
+const appPage: DesignCanvas = {
+  ...emptyDesignCanvas(),
+  frames: [
+    ...note.frames,
+    {
+      id: "app-1",
+      kind: "app",
+      title: "Pricing",
+      appRoot: "web",
+      route: "/pricing",
+      viewport: { width: 1280, height: 800 },
+      scale: 0.5,
+      x: 0,
+      y: 0,
+      w: 640,
+      h: 436,
+      pageId: "page-1",
+      createdBy: "aiden",
+    },
+  ],
+};
+
+function appStatus(workspaceId: string, appRoot: string, phase: DesignAppStatus["phase"], origin?: string): DesignAppStatus {
+  return { workspaceId, appRoot, source: "started", frameworkLabel: "Vite", phase, since: 0, revision: 1, ...(origin ? { origin, port: Number(new URL(origin).port) } : {}) };
+}
+
+async function mountFixture(
+  t: TestContext,
+  options: { live?: boolean; apps?: DesignAppStatus[]; owners?: Record<string, { workspaceId: string; appRoot: string }>; cap?: number } = {},
+) {
+  const registry = new AppFrameRegistry({ mainContents: () => ({}), liveIds: () => new Set<number>(), cap: options.cap });
+  const snapshots: string[] = [];
+  const result = await fixture(t, {
+    appFrames: {
+      enabled: () => options.live ?? true,
+      registry: () => registry,
+      apps: {
+        snapshot: async (workspaceId): Promise<DesignAppsSnapshot> => {
+          snapshots.push(workspaceId);
+          return {
+            workspaceId,
+            target: "single",
+            apps: (options.apps ?? []).filter((app) => app.workspaceId === workspaceId),
+            candidates: [],
+            chosen: [],
+          };
+        },
+        appForOrigin: (origin) => options.owners?.[origin],
+      },
+    },
+  });
+  await result.invoke("designCanvas:save", "chat-1", appPage, 0);
+  return { ...result, registry, snapshots };
+}
+
+const RUNNING = "http://127.0.0.1:5173";
+
+test("appFrameMount with live apps off answers live-off and records nothing", async (t) => {
+  const { invoke, snapshots } = await mountFixture(t, { live: false, apps: [appStatus("workspace-1", "web", "running", RUNNING)] });
+  assert.deepEqual(await invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN }), { error: "live-off" });
+  assert.deepEqual(snapshots, []);
+});
+
+test("appFrameMount for a frame that isn't an app frame, or a bad token, is unavailable", async (t) => {
+  const { invoke } = await mountFixture(t, { apps: [appStatus("workspace-1", "web", "running", RUNNING)] });
+  assert.deepEqual(await invoke("designCanvas:appFrameMount", "chat-1", { frameId: "n", mountToken: MOUNT_TOKEN }), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:appFrameMount", "chat-1", { frameId: "gone", mountToken: MOUNT_TOKEN }), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: "short" }), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:appFrameMount", "chat-1", null), { error: "unavailable" });
+});
+
+test("appFrameMount needs the frame's app root running in the chat's own workspace", async (t) => {
+  const stopped = await mountFixture(t, { apps: [appStatus("workspace-1", "web", "starting")] });
+  assert.deepEqual(await stopped.invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN }), { error: "app-not-running" });
+
+  const elsewhere = await mountFixture(t, {
+    apps: [appStatus("workspace-2", "web", "running", RUNNING), appStatus("workspace-1", "site", "running", "http://127.0.0.1:5174")],
+    owners: { [RUNNING]: { workspaceId: "workspace-2", appRoot: "web" } },
+  });
+  assert.deepEqual(await elsewhere.invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN }), { error: "app-not-running" });
+  assert.deepEqual(elsewhere.snapshots, ["workspace-1"]);
+});
+
+test("appFrameMount refuses a running entry whose origin main can't tie to that app (a lost holder)", async (t) => {
+  const { invoke } = await mountFixture(t, { apps: [appStatus("workspace-1", "web", "running", RUNNING)], owners: {} });
+  assert.deepEqual(await invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN }), { error: "app-not-running" });
+});
+
+test("appFrameMount answers the app's origin and leaves a record the registry admits once, ignoring any url in the payload", async (t) => {
+  const { invoke, registry } = await mountFixture(t, {
+    apps: [appStatus("workspace-1", "web", "running", RUNNING)],
+    owners: { [RUNNING]: { workspaceId: "workspace-1", appRoot: "web" } },
+  });
+  const reply = await invoke("designCanvas:appFrameMount", "chat-1", {
+    frameId: "app-1",
+    mountToken: MOUNT_TOKEN,
+    url: "http://127.0.0.1:9999/",
+    origin: "http://127.0.0.1:9999",
+  });
+  assert.deepEqual(reply, { origin: RUNNING });
+  const navigation = (targetUrl: string) => ({
+    frame: { frameTreeNodeId: 7, name: `aiden-app:app-1:${MOUNT_TOKEN}`, url: "about:blank" },
+    targetUrl,
+    isDirectChild: true,
+    initiator: "main-frame" as const,
+    designFrame: false,
+  });
+  assert.equal(registry.admit(navigation("http://127.0.0.1:9999/")), "refused", "the payload's origin is never the expected one");
+  await invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN });
+  assert.equal(registry.admit(navigation(`${RUNNING}/pricing`)), "app");
+});
+
+test("appFrameMount with a full registry answers too-many-frames", async (t) => {
+  const { invoke, registry } = await mountFixture(t, {
+    apps: [appStatus("workspace-1", "web", "running", RUNNING)],
+    owners: { [RUNNING]: { workspaceId: "workspace-1", appRoot: "web" } },
+    cap: 0,
+  });
+  assert.equal(registry.expectPlacement({ frameId: "x", mountToken: MOUNT_TOKEN, expectedOrigin: RUNNING }), "too-many-frames");
+  assert.deepEqual(await invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN }), { error: "too-many-frames" });
 });

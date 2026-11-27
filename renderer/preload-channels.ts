@@ -143,6 +143,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "designCanvas:focus",
   /** Aiden asks for a picture of the canvas: `{requestId, chatId}`; answered with `designCanvas:snapshotAnswer`. */
   "designCanvas:snapshot",
+  /** A live app frame's blocked count, refused navigation or suppressed dialog, from main: a `DesignAppFrameEvent`. */
+  "designCanvas:appFrame",
   "chats:fork-summary-changed",
   "chats:btw-event",
   "chats:pull-requests-changed",

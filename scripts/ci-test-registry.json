@@ -482,7 +482,10 @@
         "main/services/design-canvas/app-frames/app-frame-registry.test.ts",
         "main/services/loopback-ports.test.ts",
         "main/services/design-canvas/app-frames/app-frame-guard.test.ts",
-        "main/windows/main-window-navigation.test.ts"
+        "main/windows/main-window-navigation.test.ts",
+        "main/services/design-canvas/app-frames/app-network-main.test.ts",
+        "main/windows/main-window-console.test.ts",
+        "main/services/design-canvas/app-frames/app-sw-origins.test.ts"
       ],
       "preserved": [
         "browser"

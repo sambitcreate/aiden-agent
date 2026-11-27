@@ -59,6 +59,13 @@ import {
   type DesignChatCanvases,
 } from "../services/design-canvas/store.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { appFrameName } from "../../renderer/shared/design-canvas/app-frame.js";
+import {
+  DESIGN_APP_FRAME_MOUNT_CHANNEL,
+  type DesignAppFrameMountResult,
+} from "../../renderer/shared/design-canvas/app-frame-events.js";
+import type { DesignAppsSnapshot } from "../../renderer/shared/design-app.js";
+import type { AppFrameRegistry } from "../services/design-canvas/app-frames/app-frame-registry.js";
 import type { ChatMeta } from "../services/types.js";
 
 export { DESIGN_CANVAS_UPDATED_CHANNEL, type DesignCanvasUpdated };
@@ -316,6 +323,20 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     reader: Pick<DesignMdReader, "read">;
     appRoots: DesignAppRoots;
   };
+  /**
+   * Live app frames (design mode v2 Phase 3a, D2, D16), behind the live flag.
+   * Left out, or off, `designCanvas:appFrameMount` answers `live-off`.
+   */
+  appFrames?: {
+    enabled(): boolean;
+    /** The frame registry, or null before the design subscribers are installed. */
+    registry(): Pick<AppFrameRegistry, "expectPlacement"> | null;
+    apps: {
+      snapshot(workspaceId: string): Promise<DesignAppsSnapshot>;
+      /** 2b/2c's exact-address lookup; undefined while a holder is lost. */
+      appForOrigin(origin: string): { workspaceId: string; appRoot: string } | undefined;
+    };
+  };
 }): void {
   if (!deps.enabled()) return;
 
@@ -535,6 +556,41 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // The app's DESIGN.md for a workspace chat, read only (S41, R9). Like
   // designCanvas:get it doesn't need design mode on; it never writes, and it
   // reads with report: false, so it sends no event.
+  // Main decides the origin an app frame shows (D2, D16): the renderer names
+  // the frame and a fresh token, never a URL. A running app in the chat's own
+  // workspace, tied to its origin by 2b/2c's exact address check, gets a
+  // one-use placement record the registry admits on the first navigation.
+  const LOOPBACK_APP_ORIGIN = /^http:\/\/(?:127\.0\.0\.1|\[::1\]):\d{1,5}$/u;
+  deps.handle(DESIGN_APP_FRAME_MOUNT_CHANNEL, async (_event, chatId, request): Promise<DesignAppFrameMountResult> => {
+    const live = deps.appFrames;
+    if (!live || !live.enabled()) return { error: "live-off" };
+    const chat = await requireChat(chatId);
+    if (typeof request !== "object" || request === null) return { error: "unavailable" };
+    const { frameId, mountToken } = request as { frameId?: unknown; mountToken?: unknown };
+    if (typeof frameId !== "string" || typeof mountToken !== "string") return { error: "unavailable" };
+    try {
+      appFrameName(frameId, mountToken);
+    } catch {
+      return { error: "unavailable" };
+    }
+    const workspaceId = designCanvasWorkspaceOf(chat);
+    const { doc } = await deps.store.get(chat.id, { workspaceId });
+    const frame = doc.frames.find((entry) => entry.id === frameId);
+    if (!frame || frame.kind !== "app" || typeof frame.appRoot !== "string") return { error: "unavailable" };
+    const snapshot = await live.apps.snapshot(workspaceId);
+    const running = snapshot.apps.find(
+      (app) => app.workspaceId === workspaceId && app.appRoot === frame.appRoot && app.phase === "running" && typeof app.origin === "string",
+    );
+    const origin = running?.origin;
+    if (!origin || !LOOPBACK_APP_ORIGIN.test(origin)) return { error: "app-not-running" };
+    const owner = live.apps.appForOrigin(origin);
+    if (!owner || owner.workspaceId !== workspaceId || owner.appRoot !== frame.appRoot) return { error: "app-not-running" };
+    const registry = live.registry();
+    if (!registry) return { error: "unavailable" };
+    if (registry.expectPlacement({ frameId, mountToken, expectedOrigin: origin }) !== "ok") return { error: "too-many-frames" };
+    return { origin };
+  });
+
   deps.handle("designCanvas:designSystem", async (_event, request): Promise<DesignCanvasDesignSystemResult> => {
     if (!deps.enabled()) throw new Error(UNAVAILABLE);
     if (typeof request !== "object" || request === null || Array.isArray(request)) {
