@@ -1428,6 +1428,17 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
     - m1: leaving a frame moves focus to the canvas only when focus was in that frame (its iframe or the body). A frame that leaves by itself, because its app stopped or restarted, doesn't take focus from the composer or a panel.
     - m2: an app frame's own `data:` or `blob:` page, which the window's `frame-src` refuses, is counted with no toast and put back. Only what `frame-src` allows (`about:blank`, `about:srcdoc`, loopback `http:` outside Aiden's ports, where a block means the page's own `frame-ancestors`) is left alone.
 
+20. **review-p3a-4 (2026-11-27).** Gemini's fourth review, which included a full-phase security skim, found no blockers. It found three more, all verified and fixed test-first:
+    - **M1: the restore bound can't be gamed by timing or page messages.** Deviation 19's 3-in-3 s window let a loop slower than 1.5 s run forever, and a page could post `route` or `ready` to skip the path fallback. The new bound is per mount, on an injectable monotonic clock (`performance.now()`), and never reads bridge messages.
+      - A frame nobody has entered is put back once. It can't be clicked, so its next way out is the page's own, and it stops however long after.
+      - An entered frame is put back up to 3 times. It gets them back after the person stays in it 10 s with no way out, when they enter it afresh, or when they press Reload.
+      - The restore after one to a path other than the route always goes to the route.
+    - **m1: stuck frames and the Reload button.**
+      - A stuck frame is left: it goes inert behind its card and can't be entered.
+      - Enter or Space on a focused button (Reload, a frame's actions, any `button`, link or pressable role) is the button's. `StudioCanvas` no longer takes it as the canvas's Enter, which kept the button from being pressed. Nodes are `role="group"`, so selecting a frame and pressing Return still enters it.
+      - `reload()` clears the stuck flag synchronously.
+    - **m2: the frame guard frames only the `frame-src` hosts.** `[::1]` is counted and put back, with no toast, as a loopback page isn't outside the app. The list now lives in `renderer/shared/design-canvas/main-window-frame-src.json`. The guard derives its hosts from it, and `verify-renderer-csp.mjs` (which holds `main-window.html` to it exactly) and `renderer-csp.test.ts` read it.
+
 ### Build status (2026-11-27)
 
 Built: Tasks 0–15. Task 11 was unblocked by the S75 decision (deviation 15), and Task 14's live-frames spec runs (deviation 17). K1 and S1/D1 were decided and built, and review-p3a-2's findings are fixed (deviation 18). **Open:** Task 5's frameless audit. The allowlist is empty, and it is checked against real traffic once live frames can load.
