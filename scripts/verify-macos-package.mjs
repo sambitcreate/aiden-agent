@@ -938,29 +938,20 @@ export async function verifyMacPackage(appPath) {
     "MacOS",
     FOUNDATION_MODELS_HELPER_EXECUTABLE,
   );
-  const worktreeRemover = path.join(paths.app, "Contents", "Helpers", WORKTREE_REMOVER_EXECUTABLE);
-  const worktreeFileIo = path.join(paths.app, "Contents", "Helpers", WORKTREE_FILE_IO_EXECUTABLE);
-  const imcpLauncher = path.join(paths.app, "Contents", "Helpers", IMCP_LAUNCHER_EXECUTABLE);
-  const botInboxWriter = path.join(paths.app, "Contents", "Helpers", BOT_INBOX_WRITER_EXECUTABLE);
-  const leaseFlock = path.join(paths.app, "Contents", "Helpers", LEASE_FLOCK_EXECUTABLE);
-  const subagentRunStore = path.join(
-    paths.app,
-    "Contents",
-    "Helpers",
-    SUBAGENT_RUN_STORE_EXECUTABLE,
-  );
-  const subagentFileMutator = path.join(
-    paths.app,
-    "Contents",
-    "Helpers",
-    SUBAGENT_FILE_MUTATOR_EXECUTABLE,
-  );
-  const subagentShellRunner = path.join(
-    paths.app,
-    "Contents",
-    "Helpers",
-    SUBAGENT_SHELL_RUNNER_EXECUTABLE,
-  );
+  const MACOS_NATIVE_HELPERS = [
+    { executable: WORKTREE_REMOVER_EXECUTABLE, label: "Managed worktree remover" },
+    { executable: WORKTREE_FILE_IO_EXECUTABLE, label: "Managed worktree file I/O" },
+    { executable: IMCP_LAUNCHER_EXECUTABLE, label: "iMCP launcher" },
+    { executable: BOT_INBOX_WRITER_EXECUTABLE, label: "Bot inbox writer" },
+    { executable: LEASE_FLOCK_EXECUTABLE, label: "Lease lock helper" },
+    { executable: SUBAGENT_RUN_STORE_EXECUTABLE, label: "Private subagent run store" },
+    { executable: SUBAGENT_FILE_MUTATOR_EXECUTABLE, label: "Subagent file mutator" },
+    { executable: SUBAGENT_SHELL_RUNNER_EXECUTABLE, label: "Subagent shell runner" },
+  ].map((helper) => ({
+    ...helper,
+    path: path.join(paths.app, "Contents", "Helpers", helper.executable),
+  }));
+  const nativeHelperPaths = MACOS_NATIVE_HELPERS.map((helper) => helper.path);
   const electronHelpers = ELECTRON_HELPER_SUFFIXES.map((suffix) =>
     path.join(
       paths.app,
@@ -990,14 +981,7 @@ export async function verifyMacPackage(appPath) {
     paths.outerLicenseNotice,
     paths.electronExecutable,
     ...electronHelpers,
-    worktreeRemover,
-    worktreeFileIo,
-    imcpLauncher,
-    botInboxWriter,
-    leaseFlock,
-    subagentRunStore,
-    subagentFileMutator,
-    subagentShellRunner,
+    ...nativeHelperPaths,
     foundationModelsInfoPlist,
     foundationModelsExecutable,
     appAsar,
@@ -1019,14 +1003,9 @@ export async function verifyMacPackage(appPath) {
   await verifyExactComputerUseHelperTree(paths.helperApp);
   assertComputerUseExecutableMode((await lstat(paths.broker)).mode, paths.broker);
   assertComputerUseExecutableMode((await lstat(paths.driver)).mode, paths.driver);
-  assertComputerUseExecutableMode((await lstat(worktreeRemover)).mode, worktreeRemover);
-  assertComputerUseExecutableMode((await lstat(worktreeFileIo)).mode, worktreeFileIo);
-  assertComputerUseExecutableMode((await lstat(imcpLauncher)).mode, imcpLauncher);
-  assertComputerUseExecutableMode((await lstat(botInboxWriter)).mode, botInboxWriter);
-  assertComputerUseExecutableMode((await lstat(leaseFlock)).mode, leaseFlock);
-  assertComputerUseExecutableMode((await lstat(subagentRunStore)).mode, subagentRunStore);
-  assertComputerUseExecutableMode((await lstat(subagentFileMutator)).mode, subagentFileMutator);
-  assertComputerUseExecutableMode((await lstat(subagentShellRunner)).mode, subagentShellRunner);
+  for (const helper of MACOS_NATIVE_HELPERS) {
+    assertComputerUseExecutableMode((await lstat(helper.path)).mode, helper.path);
+  }
   assertComputerUseExecutableMode(
     (await lstat(foundationModelsExecutable)).mode,
     foundationModelsExecutable,
@@ -1098,38 +1077,12 @@ export async function verifyMacPackage(appPath) {
     identifier: AIDEN_COMPUTER_USE_BUNDLE_ID,
     teamId: AIDEN_SIGNING_TEAM_ID,
   });
-  await verifySignature(worktreeRemover, {
-    identifier: WORKTREE_REMOVER_EXECUTABLE,
-    teamId: AIDEN_SIGNING_TEAM_ID,
-  });
-  await verifySignature(imcpLauncher, {
-    identifier: IMCP_LAUNCHER_EXECUTABLE,
-    teamId: AIDEN_SIGNING_TEAM_ID,
-  });
-  await verifySignature(worktreeFileIo, {
-    identifier: WORKTREE_FILE_IO_EXECUTABLE,
-    teamId: AIDEN_SIGNING_TEAM_ID,
-  });
-  await verifySignature(botInboxWriter, {
-    identifier: BOT_INBOX_WRITER_EXECUTABLE,
-    teamId: AIDEN_SIGNING_TEAM_ID,
-  });
-  await verifySignature(leaseFlock, {
-    identifier: LEASE_FLOCK_EXECUTABLE,
-    teamId: AIDEN_SIGNING_TEAM_ID,
-  });
-  await verifySignature(subagentRunStore, {
-    identifier: SUBAGENT_RUN_STORE_EXECUTABLE,
-    teamId: AIDEN_SIGNING_TEAM_ID,
-  });
-  await verifySignature(subagentFileMutator, {
-    identifier: SUBAGENT_FILE_MUTATOR_EXECUTABLE,
-    teamId: AIDEN_SIGNING_TEAM_ID,
-  });
-  await verifySignature(subagentShellRunner, {
-    identifier: SUBAGENT_SHELL_RUNNER_EXECUTABLE,
-    teamId: AIDEN_SIGNING_TEAM_ID,
-  });
+  for (const helper of MACOS_NATIVE_HELPERS) {
+    await verifySignature(helper.path, {
+      identifier: helper.executable,
+      teamId: AIDEN_SIGNING_TEAM_ID,
+    });
+  }
   await verifySignature(foundationModelsHelper, {
     deep: true,
     identifier: FOUNDATION_MODELS_HELPER_BUNDLE_ID,
@@ -1153,14 +1106,7 @@ export async function verifyMacPackage(appPath) {
         paths.driver,
         paths.electronExecutable,
         ...electronHelpers,
-        worktreeRemover,
-        worktreeFileIo,
-        imcpLauncher,
-        botInboxWriter,
-        leaseFlock,
-        subagentRunStore,
-        subagentFileMutator,
-        subagentShellRunner,
+        ...nativeHelperPaths,
         foundationModelsHelper,
         formFillHelper,
       ].map(async (target) => [target, await readCodeDisplay(target)]),
@@ -1176,14 +1122,9 @@ export async function verifyMacPackage(appPath) {
     paths.broker,
   ]);
   assertComputerUseMachOMinimum(`${brokerBuild}\n${brokerBuildErrors}`);
-  await verifyUniversalMacOSHelper(worktreeRemover, "Managed worktree remover");
-  await verifyUniversalMacOSHelper(worktreeFileIo, "Managed worktree file I/O");
-  await verifyUniversalMacOSHelper(imcpLauncher, "iMCP launcher");
-  await verifyUniversalMacOSHelper(botInboxWriter, "Bot inbox writer");
-  await verifyUniversalMacOSHelper(leaseFlock, "Lease lock helper");
-  await verifyUniversalMacOSHelper(subagentRunStore, "Private subagent run store");
-  await verifyUniversalMacOSHelper(subagentFileMutator, "Subagent file mutator");
-  await verifyUniversalMacOSHelper(subagentShellRunner, "Subagent shell runner");
+  for (const helper of MACOS_NATIVE_HELPERS) {
+    await verifyUniversalMacOSHelper(helper.path, helper.label);
+  }
 
   const driverHash = await sha256(paths.driver);
   if (driverHash !== CUA_DRIVER_SHA256) {
@@ -1200,14 +1141,9 @@ export async function verifyMacPackage(appPath) {
 
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.helperApp));
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.broker));
-  assertMinimalComputerUseEntitlements(await readEntitlements(worktreeRemover));
-  assertMinimalComputerUseEntitlements(await readEntitlements(worktreeFileIo));
-  assertMinimalComputerUseEntitlements(await readEntitlements(imcpLauncher));
-  assertMinimalComputerUseEntitlements(await readEntitlements(botInboxWriter));
-  assertMinimalComputerUseEntitlements(await readEntitlements(leaseFlock));
-  assertMinimalComputerUseEntitlements(await readEntitlements(subagentRunStore));
-  assertMinimalComputerUseEntitlements(await readEntitlements(subagentFileMutator));
-  assertMinimalComputerUseEntitlements(await readEntitlements(subagentShellRunner));
+  for (const helper of MACOS_NATIVE_HELPERS) {
+    assertMinimalComputerUseEntitlements(await readEntitlements(helper.path));
+  }
   assertFormFillHelperEntitlements(await readEntitlements(formFillHelper));
   assertElectronEntitlements(await readEntitlements(paths.electronExecutable));
   for (const electronHelper of electronHelpers) {
