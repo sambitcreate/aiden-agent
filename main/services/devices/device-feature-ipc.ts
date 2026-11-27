@@ -11,11 +11,15 @@ import {
   isDeviceRecordingId,
   parseDeviceFeatureTarget,
   type DeviceFeatureTarget,
-  type DeviceRecordingInfo,
 } from "../../../renderer/shared/device-features.js";
 import { DEVICE_HOST_ID_PATTERN, DEVICE_ID_PATTERN } from "../../../renderer/shared/devices.js";
-import type { DeviceIpcEvent } from "./device-ipc.js";
 import type { ChooseSavePath, DeviceFeatures } from "./device-features.js";
+import {
+  createDeviceIpcGuard,
+  ownerSubscribers,
+  requireRecord,
+  type DeviceIpcEvent,
+} from "./device-ipc-support.js";
 
 export interface DeviceFeatureHandlerDeps {
   handle(channel: string, listener: (event: DeviceIpcEvent, ...args: unknown[]) => unknown): void;
@@ -25,13 +29,6 @@ export interface DeviceFeatureHandlerDeps {
   /** The save dialog for the calling window, starting in Downloads. */
   chooseSavePath(event: DeviceIpcEvent, options: { defaultName: string; kind: "png" | "mp4" }): Promise<string | null>;
   revealInFinder(file: string): void;
-}
-
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Invalid simulator request.");
-  }
-  return value as Record<string, unknown>;
 }
 
 function requireTarget(value: unknown): DeviceFeatureTarget {
@@ -74,31 +71,14 @@ function requirePng(value: unknown): Uint8Array {
 }
 
 export function registerDeviceFeatureHandlersWith(deps: DeviceFeatureHandlerDeps): void {
-  const subscribers = new Set<RendererDocumentOwner>();
+  const subscribers = ownerSubscribers<"devices:recordings">();
   let unsubscribe: (() => void) | null = null;
-  const publish = (recordings: DeviceRecordingInfo[]) => {
-    for (const subscriber of [...subscribers]) {
-      if (subscriber.isDestroyed()) subscribers.delete(subscriber);
-      else subscriber.send("devices:recordings", recordings);
-    }
-  };
   const subscribe = (owner: RendererDocumentOwner, features: DeviceFeatures) => {
-    unsubscribe ??= features.onRecordings(publish);
-    if (subscribers.has(owner)) return;
+    unsubscribe ??= features.onRecordings((recordings) => subscribers.broadcast("devices:recordings", recordings));
     subscribers.add(owner);
-    const cleanup = owner.onInvalidated(() => {
-      subscribers.delete(owner);
-      cleanup();
-    });
   };
 
-  const guarded =
-    <T>(run: (features: DeviceFeatures, args: unknown[], event: DeviceIpcEvent, owner: RendererDocumentOwner) => Promise<T>) =>
-    async (event: DeviceIpcEvent, ...args: unknown[]): Promise<T> => {
-      if (!deps.enabled()) throw new Error("Simulator devices are not enabled.");
-      const owner = deps.owner(event);
-      return run(deps.features(), args, event, owner);
-    };
+  const guarded = createDeviceIpcGuard(deps, deps.features);
 
   const chooser =
     (event: DeviceIpcEvent, owner: RendererDocumentOwner, kind: "png" | "mp4"): ChooseSavePath =>
@@ -111,26 +91,26 @@ export function registerDeviceFeatureHandlersWith(deps: DeviceFeatureHandlerDeps
 
   deps.handle(
     "devices:erase",
-    guarded(async (features, [input]) => features.erase(requireTarget(input))),
+    guarded(async (features, _owner, [input]) => features.erase(requireTarget(input))),
   );
   deps.handle(
     "devices:clipboard-paste",
-    guarded(async (features, [input]) => features.pasteFromHost(requireTarget(input))),
+    guarded(async (features, _owner, [input]) => features.pasteFromHost(requireTarget(input))),
   );
   deps.handle(
     "devices:clipboard-copy",
-    guarded(async (features, [input]) => features.copyToHost(requireTarget(input))),
+    guarded(async (features, _owner, [input]) => features.copyToHost(requireTarget(input))),
   );
   deps.handle(
     "devices:recordings-list",
-    guarded(async (features, _args, _event, owner) => {
+    guarded(async (features, owner) => {
       subscribe(owner, features);
       return features.recordings();
     }),
   );
   deps.handle(
     "devices:recording-start",
-    guarded(async (features, [input], _event, owner) => {
+    guarded(async (features, owner, [input]) => {
       const request = requireRecord(input);
       if (!isDeviceChatId(request.chatId)) throw new Error("A valid chat is required for a recording.");
       subscribe(owner, features);
@@ -139,35 +119,27 @@ export function registerDeviceFeatureHandlersWith(deps: DeviceFeatureHandlerDeps
   );
   deps.handle(
     "devices:recording-stop",
-    guarded(async (features, [input]) => features.stopRecording(requireRecordingId(input))),
+    guarded(async (features, _owner, [input]) => features.stopRecording(requireRecordingId(input))),
   );
   deps.handle(
     "devices:recording-save",
-    guarded(async (features, [input], event, owner) =>
+    guarded(async (features, owner, [input], event) =>
       features.saveRecording(requireRecordingId(input), chooser(event, owner, "mp4")),
     ),
   );
   deps.handle(
     "devices:recording-discard",
-    guarded(async (features, [input]) => features.discardRecording(requireRecordingId(input))),
+    guarded(async (features, _owner, [input]) => features.discardRecording(requireRecordingId(input))),
   );
   deps.handle(
     "devices:screenshot-save",
-    guarded(async (features, [input], event, owner) => {
-      const request = requireRecord(input);
-      const { hostId, deviceId } = request;
-      if (typeof hostId !== "string" || !DEVICE_HOST_ID_PATTERN.test(hostId)) {
-        throw new Error("A valid device host is required.");
-      }
-      if (typeof deviceId !== "string" || !DEVICE_ID_PATTERN.test(deviceId)) {
-        throw new Error("A valid simulator is required.");
-      }
-      return features.saveScreenshot({ hostId, deviceId }, chooser(event, owner, "png"));
-    }),
+    guarded(async (features, owner, [input], event) =>
+      features.saveScreenshot(requireSaveTarget(requireRecord(input)), chooser(event, owner, "png")),
+    ),
   );
   deps.handle(
     "devices:framed-screenshot-save",
-    guarded(async (features, [input], event, owner) => {
+    guarded(async (features, owner, [input], event) => {
       const request = requireRecord(input);
       const target = requireSaveTarget(request);
       return features.saveFramedScreenshot(target, requirePng(request.png), chooser(event, owner, "png"));
@@ -175,7 +147,7 @@ export function registerDeviceFeatureHandlersWith(deps: DeviceFeatureHandlerDeps
   );
   deps.handle(
     "devices:reveal-saved",
-    guarded(async (features, [input]) => {
+    guarded(async (features, _owner, [input]) => {
       const file = requireRecord(input).path;
       if (typeof file !== "string" || !features.isSavedPath(file)) {
         throw new Error("Only files saved from the Simulator tab can be revealed.");
