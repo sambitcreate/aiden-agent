@@ -1343,6 +1343,11 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
 
 Built: Tasks 0–10, 12 and 13, plus Task 14's flag-on switch and v1 runs, and Task 15's docs, spec amendments and memory for what is built. **Blocked:** Task 11, by probe 8 (S75), escalated to the owner. Task 14's live-frame spec and screenshots wait for Task 11. **Open:** Task 5's frameless audit. The allowlist is empty, and it is checked against real traffic once live frames can load.
 
+E2E in the Cua Space (Linux, 2026-11-27, host load averages 250–600):
+- **Flag off**, all six suites the plan names: 27 passed, 1 flaky and 2 failed. The two failures were `design-containment.spec.ts`'s observers. Its `onBeforeRequest` hit the unpackaged setter stub (D6). The spec now subscribes through the dispatcher, which E2E launches expose with `AIDEN_E2E_WEB_REQUEST_OBSERVER=1` in unpackaged builds only. Its assertions are unchanged, and the rerun passed 2 of 2. The flaky test was `design-canvas.spec.ts:242`: it timed out at `framePositions` after a reload, then passed on retry.
+- **Flag on** (`AIDEN_E2E_DESIGN_LIVE_ALL=1`): the v1 suites, Live, and the `chat-message-queue` chat-send smoke run. 34 passed and 3 failed: `chat-message-queue.spec.ts:447`, where a request was missing after 10 s; `chat-message-queue.spec.ts:636`, where onboarding timed out; and `design-canvas.spec.ts:1617`, which timed out on the rename poll. Retries are off in `--run` mode. Rerun with `--repeat-each=2`, flag off and flag on, all three passed 6 of 6 both ways. These were load flakes, not caused by the flag.
+- The plan's flag-on commands don't build: `--run` skips the guest's build step. The runs used `--run bash -c "npm run build && AIDEN_E2E_DESIGN_LIVE_ALL=1 npx playwright test …"`.
+
 ### Task 2 probe outcomes (Linux Space, Electron 43.8.4)
 
 | Probe | Outcome | Effect |
