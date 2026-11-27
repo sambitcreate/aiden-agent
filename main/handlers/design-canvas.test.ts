@@ -1431,7 +1431,7 @@ test("appFrameMount needs design mode on, before and after it looks for the app"
   const off = await mountFixture(t, {
     apps,
     owners: WEB_OWNER,
-    chats: { "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: false } },
+    chats: { "chat-1": { id: "chat-1", workspaceId: "workspace-1" } },
   });
   assert.deepEqual(await off.invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN }), { error: "unavailable" });
   assert.equal(admitted(off.registry), "refused", "no placement was recorded");
@@ -1442,7 +1442,7 @@ test("appFrameMount needs design mode on, before and after it looks for the app"
     owners: WEB_OWNER,
     chats,
     onSnapshot: () => {
-      chats["chat-1"] = { ...chats["chat-1"]!, designMode: false };
+      chats["chat-1"] = { id: "chat-1", workspaceId: "workspace-1" };
     },
   });
   assert.deepEqual(await turnedOff.invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN }), { error: "unavailable" });
