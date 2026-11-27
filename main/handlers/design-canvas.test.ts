@@ -5,6 +5,7 @@ import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   appRouteKey,
+  DESIGN_CANVAS_LIMITS,
   emptyDesignCanvas,
   type DesignCanvas,
 } from "../../renderer/shared/design-canvas/schema.js";
@@ -1604,4 +1605,141 @@ test("with live apps off an app frame answers live-off, and its source is unavai
   assert.deepEqual(await on.invoke("designCanvas:export", "chat-1", "app-1", "source"), { error: "unavailable" });
   assert.deepEqual(await on.invoke("designCanvas:source", "chat-1", "app-1"), { error: "unavailable" });
   assert.deepEqual(on.saveDialogs, []);
+});
+
+// ── 3b (S87): Add ▸ Page from app… ──
+
+async function pickerFixture(
+  t: TestContext,
+  options: {
+    live?: boolean;
+    target?: DesignAppsSnapshot["target"];
+    candidates?: DesignAppsSnapshot["candidates"];
+    apps?: DesignAppsSnapshot["apps"];
+    chats?: Record<string, DesignCanvasChat>;
+  } = {},
+) {
+  const reported: number[] = [];
+  const routeCalls: Array<string | undefined> = [];
+  const result = await fixture(t, {
+    ...(options.chats ? { chats: options.chats } : {}),
+    appFrames: {
+      enabled: () => options.live ?? true,
+      registry: () => null,
+      apps: {
+        snapshot: async (workspaceId) => ({
+          workspaceId,
+          target: options.target ?? "single",
+          apps: options.apps ?? [],
+          candidates: options.candidates ?? [{ appRoot: ".", framework: "next", frameworkLabel: "Next.js" }],
+          chosen: [],
+        }),
+        appForOrigin: () => undefined,
+        routes: async (_workspaceId, appRoot) => {
+          routeCalls.push(appRoot);
+          return {
+            appRoot: appRoot ?? ".",
+            framework: "next",
+            source: "discovered",
+            truncated: false,
+            routes: [
+              { route: "/", source: "discovered" },
+              { route: "/pricing", source: "discovered" },
+            ],
+          };
+        },
+      },
+      onAppFrameAdded: (width) => reported.push(width),
+    },
+  });
+  return { ...result, reported, routeCalls };
+}
+
+const appFramesIn = (doc: DesignCanvas) => doc.frames.filter((frame) => frame.kind === "app");
+
+test("3b: with live frames off, both picker channels answer unavailable", async (t) => {
+  const { invoke } = await pickerFixture(t, { live: false });
+  assert.deepEqual(await invoke("designCanvas:appRoutes", "chat-1", {}), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/" }), { error: "unavailable" });
+});
+
+test("3b: appRoutes lists the app's routes; a Bot chat gets nothing; an attached-only app is listed", async (t) => {
+  const { invoke } = await pickerFixture(t, {
+    chats: {
+      "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
+      "bot-chat": { id: "bot-chat", workspaceId: "workspace-1", designMode: true, botId: "bot-1" },
+    },
+  });
+  const listed = (await invoke("designCanvas:appRoutes", "chat-1", {})) as { apps: unknown; appRoot: string; list: { framework?: string; routes: { route: string }[] } };
+  assert.deepEqual(listed.apps, [{ appRoot: ".", label: "Next.js" }]);
+  assert.equal(listed.list.framework, "next");
+  assert.deepEqual(listed.list.routes.map((entry) => entry.route), ["/", "/pricing"]);
+  await assert.rejects(invoke("designCanvas:appRoutes", "bot-chat", {}), /not available/u);
+
+  const attached = await pickerFixture(t, {
+    target: "none",
+    candidates: [],
+    apps: [{ workspaceId: "workspace-1", appRoot: "web", source: "attached", frameworkLabel: "App", phase: "running", since: 0, revision: 1 }],
+  });
+  const answer = (await attached.invoke("designCanvas:appRoutes", "chat-1", {})) as { appRoot: string };
+  assert.equal(answer.appRoot, "web");
+  assert.deepEqual(attached.routeCalls, ["web"]);
+});
+
+test("3b: placeAppRoute puts the person's frame centred on the page on screen, as their undo step, and focuses it", async (t) => {
+  const { invoke, store, views, broadcasts, focusSent, reported } = await pickerFixture(t);
+  await store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "page-2", name: "Two" }] }));
+  await views.report("chat-1", "workspace-1", { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, 0);
+  const placed = (await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing", pageId: "page-2", viewSize: { w: 3000, h: 2000 } })) as {
+    placed: string;
+    pageId: string;
+  };
+  assert.equal(placed.pageId, "page-2");
+  const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const frame = appFramesIn(doc)[0]!;
+  assert.deepEqual([frame.id, frame.pageId, frame.createdBy, frame.route, frame.appRoot], [placed.placed, "page-2", "person", "/pricing", "."]);
+  assert.deepEqual([frame.x + frame.w / 2, frame.y + frame.h / 2], [1500, 1000], "centred in the reported view");
+  assert.match(broadcasts[broadcasts.length - 1]?.step ?? "", /^add-app-route:/u);
+  assert.deepEqual((focusSent[focusSent.length - 1]?.request as { frameIds: string[] }).frameIds, [placed.placed]);
+  assert.deepEqual(reported, [1280]);
+
+  const again = (await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing", pageId: "page-2" })) as { already: string };
+  assert.equal(again.already, placed.placed);
+  assert.equal(focusSent.length, 2, "an already-there frame is focused too");
+  assert.deepEqual(reported, [1280], "already isn't reported");
+
+  // The Add showed page-2; the person goes back to page-1.
+  const seen = (focusSent[focusSent.length - 1]?.request as { focusId: number }).focusId;
+  await views.report("chat-1", "workspace-1", { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, seen);
+  const fallback = (await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/", pageId: "no-such-page", viewSize: { w: -5, h: "tall" } })) as { pageId: string };
+  assert.equal(fallback.pageId, "page-1", "an unknown page falls back to the chat's view page; a bad size is ignored");
+});
+
+test("3b: placeAppRoute refuses a bad route or root, and a full page writes nothing", async (t) => {
+  const { invoke, store, reported } = await pickerFixture(t);
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "https://evil" }), { error: "bad-route" });
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/blog/[slug]" }), { error: "bad-route" });
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: "../x", route: "/" }), { error: "unknown-root" });
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: "other", route: "/" }), { error: "unknown-root" });
+
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: Array.from({ length: DESIGN_CANVAS_LIMITS.framesPerPage }, (_, index) => ({
+      id: `n${index}`, kind: "note" as const, title: "n", text: "n", x: index * 10, y: 0, w: 10, h: 10, pageId: "page-1", createdBy: "person" as const,
+    })),
+  }));
+  const before = ((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision;
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/", pageId: "page-1" }), { error: "full" });
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision, before);
+  assert.deepEqual(reported, []);
+});
+
+test("3b: the person can place a route they removed, which forgets the removal", async (t) => {
+  const { invoke } = await pickerFixture(t);
+  await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" });
+  const placed = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  await invoke("designCanvas:save", "chat-1", { ...placed, frames: [] }, placed.revision);
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedAppRoutes, [appRouteKey(".", "/pricing")]);
+  assert.ok("placed" in ((await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" })) as object));
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedAppRoutes, undefined);
 });

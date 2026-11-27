@@ -377,6 +377,7 @@ import {
   type DesignAppFrameMountResult,
 } from "../shared/design-canvas/app-frame-events";
 import type { DesignChatView } from "../shared/design-canvas/view";
+import type { AppRouteList } from "../shared/design-canvas/app-routes";
 import { invoke, onNotification } from "./ipc-bridge";
 import {
   APPROVAL_RULE_CHANNELS,
@@ -2870,6 +2871,26 @@ export const designCanvasApi = {
       | { status: "already"; frameId: string; page?: string }
       | { error: "missing" | "unsafe" | "full" }
     >("designCanvas:placeArtifact", chatId, mediaId, ...(viewSize ? [{ viewSize }] : [])),
+  /** 3b (S87): the workspace's apps for Add ▸ Page from app…, and one app's routes (the first, unless named). */
+  getDesignAppRoutes: (chatId: string, request: { appRoot?: string } = {}) =>
+    invoke<
+      | { apps: { appRoot: string; label: string }[]; appRoot: string; list: AppRouteList }
+      | { error: "unavailable" | "no-app" }
+    >("designCanvas:appRoutes", chatId, request),
+  /**
+   * 3b (S87): the person's Add of one app route, on `pageId` (the page on
+   * screen) and placed for a canvas of `viewSize`. Main resolves the app; a
+   * frame for it already on the page answers `already` and is focused.
+   */
+  placeDesignAppRoute: (
+    chatId: string,
+    request: { appRoot: string; route: string; pageId?: string; viewSize?: { w: number; h: number } },
+  ) =>
+    invoke<
+      | { placed: string; pageId: string }
+      | { already: string; pageId: string }
+      | { error: "unavailable" | "bad-route" | "unknown-root" | "full" }
+    >("designCanvas:placeAppRoute", chatId, request),
   /**
    * `aidenTurn` names the reply that made the change, when Aiden made it;
    * `step` marks the person's own change made through main (Send to canvas).
