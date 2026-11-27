@@ -1275,5 +1275,10 @@ Built 2026-11-27 on `t3/design-mode-v2-p3b`, stacked on 3a (merged from `origin/
   - A spread `flatRoutes(…)` with options is unreadable too, so only option-free `flatRoutes()` walks `app/routes/`.
   - `placeAppRoute` passes `stillFraming` into `pages.show()`. `DesignCanvasViews.showPage` takes an optional `stillOwned`, asked after its load and right before its synchronous change. Focus is checked again after the show.
 
+- **Pullfrog round 2 (PR #966, 2026-11-27).**
+  - Restore-after-read race. The walk now reads through `confinedRead`: an `lstat` before; an `lstat` after with the same dev/ino, which must also be the handle's own; and `realpath` must equal the path. The two parsed files are read through one `O_NOFOLLOW` handle (`readRouteFile`), so a folder renamed aside, linked out and put back around the read is caught on every platform. Folders are listed through a handle on Linux (`listOpenedDir`: `open(O_DIRECTORY|O_NOFOLLOW)`, then `readdir("/proc/self/fd/N")`).
+  - **Documented residual, macOS folder listings.** Node has no `fdopendir`, `openat` or `fchdir`, and `/dev/fd/N` answers `ENOTDIR` for a folder. So macOS lists by path, with identity taken from the `lstat` before. A process that renames a folder aside, links it out and renames it back within one `readdir` gets the outside folder's names listed. That is names only: they become route strings shown as text. No outside file is read, nothing is written or run, and the frame still loads the dev server's own URL. Closing it would need a native helper.
+  - Post-save fences. After `placeWrittenPagesOnCanvas` saves, `claimWithRoom` takes `stillOwned` (checked in `beforeWrite`), `show()` passes `shouldSave` to `pages.show`, and ownership is checked again after each await before any page or focus data is returned. A chat that left gets no claim, no view and no focus there; the frames already saved stay.
+
 **Verification.** Recorded in Task 13's Space runs below and in the FINISH line of the build's status log.
 
