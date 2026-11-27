@@ -5352,6 +5352,13 @@ export const llmClient = {
           // a card a remembered approval scope could already skip.
           let hookAsk: string | undefined;
           let hookAllow = false;
+          const blockToolCall = (reason: string) => {
+            if (!signal?.aborted) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+            }
+            return { block: true, reason };
+          };
           const runPreToolUseHooks = async () => {
             if (!chatHooks) return undefined;
             const hook = await chatHooks.preToolUse({
@@ -5362,11 +5369,7 @@ export const llmClient = {
               signal,
             });
             if (hook.kind === "block") {
-              if (!signal?.aborted) {
-                deniedToolCalls.add(context.toolCall.id);
-                timeline.toolFinished(context.toolCall.id, "blocked");
-              }
-              return { block: true, reason: hook.reason };
+              return blockToolCall(hook.reason);
             }
             if (hook.kind === "ask") hookAsk = hook.reason;
             else if (hook.kind === "allow") hookAllow = true;
@@ -5383,11 +5386,7 @@ export const llmClient = {
           // refused before hooks, approvals or the call itself.
           const turnRefusal = turnToolRefusal(context.toolCall.name, context.args);
           if (turnRefusal) {
-            if (!signal?.aborted) {
-              deniedToolCalls.add(context.toolCall.id);
-              timeline.toolFinished(context.toolCall.id, "blocked");
-            }
-            return { block: true, reason: turnRefusal };
+            return blockToolCall(turnRefusal);
           }
           // Computer Use and Form Fill check the chat's access first.
           if (
@@ -5426,18 +5425,11 @@ export const llmClient = {
           }
           let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] = [];
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
-            const blockComputerUse = (reason: string) => {
-              if (!signal?.aborted) {
-                deniedToolCalls.add(context.toolCall.id);
-                timeline.toolFinished(context.toolCall.id, "blocked");
-              }
-              return { block: true, reason };
-            };
             if (!computerUse) {
-              return blockComputerUse("Computer Use is not enabled for this response.");
+              return blockToolCall("Computer Use is not enabled for this response.");
             }
             const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
-            if (!access.allowed) return blockComputerUse(access.reason);
+            if (!access.allowed) return blockToolCall(access.reason);
             const hookBlock = await runPreToolUseHooks();
             if (hookBlock) return hookBlock;
             const computerUseDecision = workspaceToolApproval({
@@ -5449,7 +5441,7 @@ export const llmClient = {
             if (computerUseDecision.outcome === "ask") {
               // A hook asked: this one action needs its own card.
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
-              if (!toolCallId) return blockComputerUse("The tool approval step was not initialized.");
+              if (!toolCallId) return blockToolCall("The tool approval step was not initialized.");
               timeline.toolAwaitingApproval(context.toolCall.id);
               notifyApprovalWaiting();
               const hookOutcome = await approvals.request(
@@ -5467,7 +5459,7 @@ export const llmClient = {
                 currentOwnerDocumentId(),
               );
               if (hookOutcome !== "allowed") {
-                return blockComputerUse(toolApprovalBlockReason(hookOutcome, false));
+                return blockToolCall(toolApprovalBlockReason(hookOutcome, false));
               }
             }
             // The chat is allowed, so input actions run without a per-action card.
@@ -5479,7 +5471,7 @@ export const llmClient = {
                 signal,
               );
             } catch (error) {
-              return blockComputerUse(
+              return blockToolCall(
                 error instanceof Error ? error.message : "Computer Use rejected this action.",
               );
             }
@@ -5497,11 +5489,7 @@ export const llmClient = {
             // Form Fill drives the computer, so it needs the same chat access.
             const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
             if (!access.allowed) {
-              if (!signal?.aborted) {
-                deniedToolCalls.add(context.toolCall.id);
-                timeline.toolFinished(context.toolCall.id, "blocked");
-              }
-              return { block: true, reason: access.reason };
+              return blockToolCall(access.reason);
             }
             // Form Fill always shows its card; a hook's ask adds its reason there.
             const hookBlock = await runPreToolUseHooks();
@@ -5800,11 +5788,7 @@ export const llmClient = {
                   signal,
                 );
                 if (hookOutcome !== "allowed") {
-                  if (!signal?.aborted) {
-                    deniedToolCalls.add(context.toolCall.id);
-                    timeline.toolFinished(context.toolCall.id, "blocked");
-                  }
-                  return { block: true, reason: toolApprovalBlockReason(hookOutcome, false) };
+                  return blockToolCall(toolApprovalBlockReason(hookOutcome, false));
                 }
               }
               timeline.toolRunning(context.toolCall.id);
