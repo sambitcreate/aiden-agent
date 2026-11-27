@@ -7,7 +7,6 @@
 
 import type { CuaDriverHostFactory } from "../computer-use/controller.js";
 import type {
-  BotComputerSetupState,
   BotComputersSettings,
   BotComputersStatus,
   BotComputerStatus,
