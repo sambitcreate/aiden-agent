@@ -29,11 +29,22 @@ const FOREGROUND_POLL_MS = 1_000;
 const MAX_COMMAND_NAME_CHARS = 64;
 const FOREGROUND_GROUP_TIMEOUT_MS = 1_000;
 /**
- * How long after a reading that finds the shell itself on a CPU a close looks
- * again. A shell finishing its startup files or drawing its prompt is on a CPU
- * for a moment; a loop of builtins still is a moment later.
+ * How long a close check watches a shell that holds its own terminal before it
+ * decides. One `ps` reading is an instant: a loop of builtins can be between
+ * steps, and a prompt being drawn can look busy.
  */
-const FOREGROUND_RUNNING_CONFIRM_MS = 100;
+const FOREGROUND_CONFIRM_MS = 100;
+/** Linux reports CPU time in clock ticks of 1/100 s (`USER_HZ`). */
+const PROC_STAT_TICK_MS = 10;
+/**
+ * Answers a terminal sends on its own to a program's queries: device
+ * attributes, status and cursor reports, mode reports, keyboard flags, window
+ * reports, focus events, and OSC or DCS replies. A shell's startup files ask
+ * these; none of them is someone typing.
+ */
+const TERMINAL_REPORTS =
+  // eslint-disable-next-line no-control-regex -- escape sequences are the point
+  /^(?:\x1b\[[?>=]?[\d;]*[cnRt]|\x1b\[\??[\d;]*\$y|\x1b\[\?\d*u|\x1b\[[IO]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+$/u;
 const MIN_COLS = 20;
 const MAX_COLS = 500;
 const MIN_ROWS = 4;
@@ -77,6 +88,8 @@ interface TerminalSession extends TerminalSessionInfo {
   foregroundCommand: string | null;
   /** The previous poll's reading; a program must hold across two polls to be reported. */
   foregroundCandidate: string | null;
+  /** Someone has typed or pasted here. The terminal's answers to the shell's own queries do not count. */
+  typed: boolean;
 }
 
 export interface TerminalServiceOptions {
@@ -108,10 +121,8 @@ export interface TerminalServiceOptions {
   killGraceMs?: number;
   /** Foreground polling interval. Test seam. */
   foregroundPollMs?: number;
-  /** Who holds the shell's terminal and whether the shell is on a CPU, or null when unknown. */
+  /** Who holds the shell's terminal and what the shell is doing, or null when unknown. */
   readForegroundState?: (shellPid: number) => Promise<ForegroundState | null>;
-  /** The wait before a shell seen on a CPU is read again. Test seam. */
-  foregroundRunningConfirmMs?: number;
 }
 
 /**
@@ -148,15 +159,65 @@ export function foregroundCommandName(processTitle: unknown, shell: string): str
 export interface ForegroundState {
   /** The process group holding the shell's terminal. */
   group: number;
-  /** The shell itself is on a CPU, so it is not waiting at its prompt. */
+  /** The shell is on a CPU or in an uninterruptible (disk) wait, so it is not waiting at its prompt. */
   running: boolean;
+  /**
+   * Live children of the shell still in its own process group, as a `$(...)`
+   * subshell is. Background jobs have groups of their own and do not count.
+   */
+  children: number;
+  /** The shell's accumulated CPU time in milliseconds, or null when unknown. */
+  cpuMs: number | null;
 }
 
-/** Reads `ps -o tpgid= -o stat=`. Sandboxed kernels such as gVisor report group 0, which reads as unknown. */
-export function parseForegroundState(output: string): ForegroundState | null {
-  const [group, state] = output.trim().split(/\s+/u);
-  const parsed = Number.parseInt(group ?? "", 10);
-  return parsed > 0 ? { group: parsed, running: state?.startsWith("R") ?? false } : null;
+/** `ps` CPU time: `[[dd-]hh:]mm:ss[.cc]`. macOS counts hundredths; Linux whole seconds. */
+function parseCpuTime(value: string): number | null {
+  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/u.exec(value);
+  if (!match) return null;
+  const [, days = "0", hours = "0", minutes, seconds] = match;
+  const wholeMinutes = (Number(days) * 24 + Number(hours)) * 60 + Number(minutes);
+  return Math.round((wholeMinutes * 60 + Number(seconds)) * 1000);
+}
+
+/**
+ * Reads `ps -A -o pid= -o ppid= -o pgid= -o tpgid= -o stat= -o time=` for one
+ * shell. Sandboxed kernels such as gVisor report group 0, which reads as unknown.
+ */
+export function parseForegroundState(output: string, shellPid: number): ForegroundState | null {
+  let shell: { group: number; stat: string; time: string } | undefined;
+  let children = 0;
+  for (const line of output.split("\n")) {
+    const [pid, ppid, pgid, tpgid, stat = "", time = ""] = line.trim().split(/\s+/u);
+    const id = Number.parseInt(pid ?? "", 10);
+    if (id === shellPid) {
+      shell = { group: Number.parseInt(tpgid ?? "", 10), stat, time };
+    } else if (
+      Number.parseInt(ppid ?? "", 10) === shellPid &&
+      Number.parseInt(pgid ?? "", 10) === shellPid &&
+      !stat.startsWith("Z")
+    ) {
+      children += 1;
+    }
+  }
+  if (!shell || !(shell.group > 0)) return null;
+  return {
+    group: shell.group,
+    // R is on a CPU; U (macOS) and D (Linux) wait on a disk. An idle prompt sleeps (S or I).
+    running: /^[RUD]/u.test(shell.stat),
+    children,
+    cpuMs: parseCpuTime(shell.time),
+  };
+}
+
+/** A process's user plus system CPU time from Linux `/proc/<pid>/stat`, in milliseconds. */
+export function parseProcStatCpuMs(stat: string): number | null {
+  // The name is in parentheses and may hold spaces or parentheses itself.
+  const close = stat.lastIndexOf(")");
+  if (close < 0) return null;
+  // After the name: state, ppid, … with utime and stime at the 12th and 13th.
+  const fields = stat.slice(close + 1).trim().split(/\s+/u);
+  const ticks = Number(fields[11]) + Number(fields[12]);
+  return Number.isFinite(ticks) ? ticks * PROC_STAT_TICK_MS : null;
 }
 
 function readForegroundState(shellPid: number): Promise<ForegroundState | null> {
@@ -164,9 +225,20 @@ function readForegroundState(shellPid: number): Promise<ForegroundState | null> 
     execFile(
       "ps",
       // Separate -o flags: a comma list with `=` headers is not portable to BSD ps.
-      ["-o", "tpgid=", "-o", "stat=", "-p", String(shellPid)],
-      { timeout: FOREGROUND_GROUP_TIMEOUT_MS },
-      (error, stdout) => resolve(error ? null : parseForegroundState(stdout)),
+      ["-A", "-o", "pid=", "-o", "ppid=", "-o", "pgid=", "-o", "tpgid=", "-o", "stat=", "-o", "time="],
+      { timeout: FOREGROUND_GROUP_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
+      (error, stdout) => {
+        const state = error ? null : parseForegroundState(stdout, shellPid);
+        if (!state || process.platform !== "linux") {
+          resolve(state);
+          return;
+        }
+        // Linux ps counts whole seconds, too coarse for the confirm wait.
+        void fs
+          .readFile(`/proc/${shellPid}/stat`, "utf8")
+          .then(parseProcStatCpuMs, () => null)
+          .then((cpuMs) => resolve({ ...state, cpuMs }));
+      },
     );
   });
 }
@@ -479,6 +551,7 @@ export class TerminalService {
       pendingOutput: "",
       foregroundCommand: null,
       foregroundCandidate: null,
+      typed: false,
     };
     this.sessions.set(id, session);
     this.watchForegroundCommands();
@@ -560,7 +633,9 @@ export class TerminalService {
     if (typeof data !== "string" || data.length === 0 || data.length > MAX_INPUT_CHARS) {
       throw new Error("Terminal input must be a non-empty message smaller than 64 KB.");
     }
-    this.getOwned(id, owner).pty.write(data);
+    const session = this.getOwned(id, owner);
+    if (!session.typed && !TERMINAL_REPORTS.test(data)) session.typed = true;
+    session.pty.write(data);
   }
 
   resize(id: string, cols: unknown, rows: unknown, owner: RendererDocumentOwner): void {
@@ -575,29 +650,49 @@ export class TerminalService {
     this.terminate(id, session);
   }
 
-  /** A fresh reading for decisions such as confirming a close. */
+  /**
+   * A fresh reading for confirming a close: the program a close would stop, or
+   * null when nothing would be lost. Null too when the terminal ends meanwhile.
+   */
   async foregroundCommand(id: string, owner: RendererDocumentOwner): Promise<string | null> {
     const session = this.getOwned(id, owner);
     const command = this.readForegroundCommand(session);
     if (command !== null) return command;
     // A script run by the shell's own interpreter (`./deploy.sh` under bash)
-    // reads as the shell by name, so its process group tells them apart. A loop
-    // of builtins runs in the shell's own group; only its CPU state shows it.
+    // reads as the shell by name, so its process group tells them apart: one
+    // reading is proof. A loop of builtins or `$(...)` runs in the shell's
+    // own group, so only watching the shell for a moment shows it.
     const shellPid = session.pty.pid;
+    const shellName = commandBaseName(session.resolvedShell);
     const read = this.options.readForegroundState ?? readForegroundState;
-    const busy = (state: ForegroundState | null) => state !== null && (state.group !== shellPid || state.running);
-    const state = await read(shellPid);
-    if (!busy(state)) return null;
-    // The CPU state is one instant: a shell just started or redrawing its
-    // prompt reads as running too. Like the tab's two-poll rule, a close asks
-    // only when a second reading still finds the shell busy.
-    if (state?.group === shellPid) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, this.options.foregroundRunningConfirmMs ?? FOREGROUND_RUNNING_CONFIRM_MS),
-      );
-      if (!busy(await read(shellPid))) return null;
-    }
-    return commandBaseName(session.resolvedShell);
+    const open = () => this.sessions.get(id) === session && !owner.isDestroyed();
+    const first = await read(shellPid);
+    if (first === null || !open()) return null;
+    if (first.group !== shellPid) return shellName;
+    // Nobody has typed: whatever the shell is doing is its own startup.
+    if (!session.typed) return null;
+    if (!(await this.waitUnlessExited(session, FOREGROUND_CONFIRM_MS)) || !open()) return null;
+    const second = await read(shellPid);
+    if (second === null || !open()) return null;
+    const busy =
+      second.group !== shellPid ||
+      second.running ||
+      second.children > 0 ||
+      (first.cpuMs !== null && second.cpuMs !== null && second.cpuMs > first.cpuMs);
+    // A program may have taken the terminal during the wait.
+    return busy ? (this.readForegroundCommand(session) ?? shellName) : null;
+  }
+
+  /** Resolves true after `ms`, or false as soon as the shell exits. */
+  private waitUnlessExited(session: TerminalSession, ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(true), ms);
+      timer.unref?.();
+      void session.exited.then(() => {
+        clearTimeout(timer);
+        resolve(false);
+      });
+    });
   }
 
   closeForWebContents(webContentsId: number): void {
