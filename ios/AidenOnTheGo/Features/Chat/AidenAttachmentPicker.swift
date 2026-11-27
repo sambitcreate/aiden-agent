@@ -8,6 +8,7 @@ enum AidenAttachmentPickerMode: Equatable {
     case menu
     case camera
     case photos
+    case quickPhotos
 }
 
 enum AidenAttachmentPickerPolicy {
@@ -210,11 +211,11 @@ struct AidenAttachmentPickerLayout {
         windowSize: CGSize? = nil,
         mode: AidenAttachmentPickerMode,
         attachmentButtonCenter: CGPoint?,
+        composerTopY: CGFloat? = nil,
         widthIsRegular: Bool
     ) -> Self {
         let containerWidth = max(1, containerSize.width)
         let containerHeight = max(1, containerSize.height)
-        let expanded = mode == .photos || mode == .camera
         let centersLandscapeColumn = AidenChatReadableLayout.usesCenteredLandscapeColumn(
             containerSize: containerSize,
             windowSize: windowSize,
@@ -230,6 +231,47 @@ struct AidenAttachmentPickerLayout {
             windowSize: windowSize,
             widthIsRegular: widthIsRegular
         )
+        let fallbackButtonCenter = CGPoint(x: 50, y: containerHeight - 36)
+        let buttonCenter = attachmentButtonCenter ?? fallbackButtonCenter
+
+        if mode == .quickPhotos {
+            let panelWidth: CGFloat
+            let leadingPadding: CGFloat
+            if centersLandscapeColumn {
+                panelWidth = min(expandedMaximumWidth, max(1, readableWidth - 24))
+                leadingPadding = readableInset + ((readableWidth - panelWidth) / 2)
+            } else {
+                panelWidth = min(expandedMaximumWidth, max(1, containerWidth - 24))
+                leadingPadding = max(12, (containerWidth - panelWidth) / 2)
+            }
+            let rawBottomPadding: CGFloat = if let composerTopY, composerTopY.isFinite, composerTopY > 0 {
+                max(
+                    AidenQuickPhotoStripMotion.minimumBottomPadding,
+                    containerHeight - composerTopY + AidenQuickPhotoStripMotion.composerGap
+                )
+            } else {
+                max(
+                    AidenQuickPhotoStripMotion.minimumBottomPadding,
+                    containerHeight - buttonCenter.y + 36
+                )
+            }
+            let maxBottomPadding = max(12, containerHeight - 12 - min(AidenQuickPhotoStripMotion.stripHeight, max(1, containerHeight - 24)))
+            let bottomPadding = min(rawBottomPadding, maxBottomPadding)
+            let availableHeight = max(1, containerHeight - bottomPadding - 12)
+            let panelHeight = min(AidenQuickPhotoStripMotion.stripHeight, availableHeight)
+            let panelOriginY = containerHeight - bottomPadding - panelHeight
+            return Self(
+                panelSize: CGSize(width: panelWidth, height: panelHeight),
+                leadingPadding: leadingPadding,
+                bottomPadding: bottomPadding,
+                scaleAnchor: UnitPoint(
+                    x: boundedAnchor((buttonCenter.x - leadingPadding) / panelWidth),
+                    y: boundedAnchor((buttonCenter.y - panelOriginY) / panelHeight)
+                )
+            )
+        }
+
+        let expanded = mode == .photos || mode == .camera
         let usesWidePresentation = expanded && containerWidth >= 700
         let edgePadding: CGFloat = usesWidePresentation ? 28 : 12
         let panelWidth: CGFloat
@@ -251,8 +293,6 @@ struct AidenAttachmentPickerLayout {
             ? min(expandedMaximumHeight, min(preferredExpandedHeight, availableHeight))
             : min(222, availableHeight)
         let panelOriginY = containerHeight - bottomPadding - panelHeight
-        let fallbackButtonCenter = CGPoint(x: 50, y: containerHeight - 36)
-        let buttonCenter = attachmentButtonCenter ?? fallbackButtonCenter
 
         return Self(
             panelSize: CGSize(width: panelWidth, height: panelHeight),
@@ -290,9 +330,10 @@ final class AidenAttachmentPickerState {
     private(set) var libraryStatus: AidenPhotoLibraryStatus = .idle
     private(set) var assets: [PHAsset] = []
     private(set) var selectedAssetIDs: [String] = []
-    private(set) var committingAssets: [PHAsset] = []
-    private(set) var committingPendingPrefixCount = 0
     private(set) var selectionFeedbackSequence = 0
+    /// Incremented synchronously on every `openQuickPhotos()` so a fresh
+    /// out-of-process `PHPickerViewController` mounts once per open (no double XPC).
+    private(set) var quickPhotosGeneration = 0
     private var commitFence = AidenAttachmentLifecycleFence()
     private var libraryLoadGeneration = 0
 
@@ -302,6 +343,13 @@ final class AidenAttachmentPickerState {
         invalidateLibraryLoad()
         selectedAssetIDs = []
         mode = .menu
+    }
+
+    func openQuickPhotos() {
+        invalidateLibraryLoad()
+        selectedAssetIDs = []
+        quickPhotosGeneration &+= 1
+        mode = .quickPhotos
     }
 
     func dismiss() {
@@ -348,8 +396,6 @@ final class AidenAttachmentPickerState {
         let selected = selectedAssetIDs.compactMap { byID[$0] }
         guard !selected.isEmpty, selected.count == selectedAssetIDs.count else { return nil }
         let commitID = commitFence.begin()
-        committingPendingPrefixCount = pendingCount
-        committingAssets = selected
         selectedAssetIDs = []
         invalidateLibraryLoad()
         mode = .closed
@@ -357,17 +403,13 @@ final class AidenAttachmentPickerState {
     }
 
     func finishCommit(_ id: UUID) {
-        guard commitFence.consume(id) else { return }
-        committingAssets = []
-        committingPendingPrefixCount = 0
+        _ = commitFence.consume(id)
     }
 
     func reset() {
         invalidateLibraryLoad()
         mode = .closed
         selectedAssetIDs = []
-        committingAssets = []
-        committingPendingPrefixCount = 0
         commitFence.invalidate()
     }
 
@@ -569,6 +611,7 @@ private final class AidenPhotoLibraryImageRequest: @unchecked Sendable {
 
 struct AidenAttachmentPickerOverlay: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -576,49 +619,90 @@ struct AidenAttachmentPickerOverlay: View {
     @Bindable var picker: AidenAttachmentPickerState
     @StateObject private var cameraController = AidenAttachmentCameraController()
     @State private var windowSize: CGSize?
+    /// Retains the active panel during its exit animation so `.quickPhotos`,
+    /// `.menu`, `.photos`, and `.camera` collapse smoothly before unmounting.
+    @State private var renderedMode: AidenAttachmentPickerMode = .closed
+    /// Two-phase visual presentation state so newly mounted panels animate
+    /// smoothly from their hidden transform (`0.14` / `0.96`) on open and back on close.
+    @State private var isVisuallyPresented = false
 
-    let motionNamespace: Namespace.ID
     let attachmentCapacity: Int
     let canChoosePhotos: Bool
     let isBotChat: Bool
     let isBusy: Bool
     let attachmentButtonCenter: CGPoint?
+    var composerTopY: CGFloat? = nil
     let onUnavailableBotPhotos: () -> Void
     let onChooseFiles: () -> Void
     let onCaptureCameraPhoto: (Data) -> Void
     let onCommitPhotos: () -> Void
+    var onPickQuickPhoto: ((AidenQuickPhotoSelection) -> Void)? = nil
+
+    private var activeMode: AidenAttachmentPickerMode {
+        picker.mode != .closed ? picker.mode : renderedMode
+    }
+
+    private var isQuickPhotosPresentation: Bool {
+        activeMode == .quickPhotos
+    }
 
     var body: some View {
         GeometryReader { proxy in
             let layout = AidenAttachmentPickerLayout.resolve(
                 containerSize: proxy.size,
                 windowSize: windowSize,
-                mode: picker.mode,
+                mode: activeMode,
                 attachmentButtonCenter: attachmentButtonCenter,
+                composerTopY: composerTopY,
                 widthIsRegular: horizontalSizeClass == .regular
             )
+            let hiddenScale = isQuickPhotosPresentation
+                ? (reduceMotion ? 1 : AidenQuickPhotoStripMotion.hiddenScale)
+                : AidenAttachmentPickerPresentationMotion.hiddenScale
+            let hiddenVerticalOffset = isQuickPhotosPresentation
+                ? 0
+                : AidenAttachmentPickerPresentationMotion.hiddenVerticalOffset
 
             ZStack(alignment: .bottomLeading) {
-                Button(action: dismiss) {
-                    Color.black.opacity(
-                        picker.isPresented ? (picker.mode == .menu ? 0.08 : 0.2) : 0
+                if !reduceTransparency {
+                    AidenQuickPhotoBackdropBlur(
+                        isActive: picker.mode == .quickPhotos && isVisuallyPresented,
+                        colorScheme: colorScheme,
+                        reduceMotion: reduceMotion
                     )
                     .ignoresSafeArea()
-                    .contentShape(Rectangle())
+                    .allowsHitTesting(false)
+                }
+
+                Button(action: dismiss) {
+                    Color.black.opacity(scrimOpacity)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close attachment picker")
 
-                panel(size: layout.panelSize)
-                    .padding(.leading, layout.leadingPadding)
-                    .padding(.bottom, layout.bottomPadding)
-                    .scaleEffect(
-                        picker.isPresented ? 1 : AidenAttachmentPickerPresentationMotion.hiddenScale,
-                        anchor: layout.scaleAnchor
-                    )
-                    .offset(y: picker.isPresented ? 0 : AidenAttachmentPickerPresentationMotion.hiddenVerticalOffset)
-                    .opacity(picker.isPresented ? 1 : 0)
+                if activeMode != .closed {
+                    panel(size: layout.panelSize)
+                        .scaleEffect(
+                            isVisuallyPresented ? 1 : hiddenScale,
+                            anchor: layout.scaleAnchor
+                        )
+                        .offset(y: isVisuallyPresented ? 0 : hiddenVerticalOffset)
+                        .opacity(isVisuallyPresented ? 1 : 0)
+                        .padding(.leading, layout.leadingPadding)
+                        .padding(.bottom, layout.bottomPadding)
+                        .animation(
+                            isQuickPhotosPresentation && !reduceMotion
+                                ? .spring(duration: 0.28, bounce: 0)
+                                : nil,
+                            value: composerTopY
+                        )
+                        .id(isQuickPhotosPresentation)
+                        .allowsHitTesting(picker.isPresented)
+                }
             }
+            .animation(presentationAnimation, value: isVisuallyPresented)
         }
         .background {
             AidenWindowSizeReader { windowSize = $0 }
@@ -627,6 +711,59 @@ struct AidenAttachmentPickerOverlay: View {
         .sensoryFeedback(.selection, trigger: picker.selectionFeedbackSequence)
         .accessibilityAddTraits(.isModal)
         .accessibilityAction(.escape, dismiss)
+        .onChange(of: picker.mode, initial: true) { oldMode, newMode in
+            if newMode != .closed {
+                let wasQuick = renderedMode == .quickPhotos
+                let nowQuick = newMode == .quickPhotos
+                let familyChanged = renderedMode != .closed && wasQuick != nowQuick
+                if renderedMode == .closed || familyChanged {
+                    var resetTransaction = Transaction()
+                    resetTransaction.disablesAnimations = true
+                    withTransaction(resetTransaction) {
+                        renderedMode = newMode
+                        isVisuallyPresented = false
+                    }
+                    let anim = presentationAnimation(for: newMode, isPresented: true)
+                    DispatchQueue.main.async {
+                        guard picker.mode == newMode else { return }
+                        withAnimation(anim) {
+                            isVisuallyPresented = true
+                        }
+                    }
+                } else {
+                    renderedMode = newMode
+                    if !isVisuallyPresented {
+                        withAnimation(presentationAnimation(for: newMode, isPresented: true)) {
+                            isVisuallyPresented = true
+                        }
+                    }
+                }
+            } else {
+                let closingMode = oldMode != .closed ? oldMode : renderedMode
+                let anim = presentationAnimation(for: closingMode, isPresented: false)
+                withAnimation(anim) {
+                    isVisuallyPresented = false
+                }
+                if closingMode != .quickPhotos && reduceMotion {
+                    renderedMode = .closed
+                }
+            }
+        }
+        .task(id: picker.mode) {
+            guard picker.mode == .closed, renderedMode != .closed else { return }
+            let delay: TimeInterval = if renderedMode == .quickPhotos {
+                reduceMotion
+                    ? AidenQuickPhotoStripMotion.reducedMotionCloseDuration
+                    : AidenQuickPhotoStripMotion.closeDuration
+            } else {
+                reduceMotion ? 0 : AidenAttachmentPickerPresentationMotion.exitDuration
+            }
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay + 0.04))
+            }
+            guard !Task.isCancelled, picker.mode == .closed else { return }
+            renderedMode = .closed
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active, picker.mode == .photos else { return }
             picker.markLibraryForRefresh()
@@ -634,23 +771,62 @@ struct AidenAttachmentPickerOverlay: View {
         }
     }
 
+    private var scrimOpacity: Double {
+        guard isVisuallyPresented else { return 0 }
+        switch activeMode {
+        case .quickPhotos:
+            return reduceTransparency ? 0.34 : 0.18
+        case .menu:
+            return 0.08
+        case .camera, .photos:
+            return 0.2
+        case .closed:
+            return 0
+        }
+    }
+
+    private var presentationAnimation: Animation? {
+        presentationAnimation(for: activeMode, isPresented: isVisuallyPresented)
+    }
+
+    private func presentationAnimation(for mode: AidenAttachmentPickerMode, isPresented: Bool) -> Animation? {
+        if mode == .quickPhotos {
+            return isPresented
+                ? AidenQuickPhotoStripMotion.openAnimation(reduceMotion: reduceMotion)
+                : AidenQuickPhotoStripMotion.closeAnimation(reduceMotion: reduceMotion)
+        }
+        return AidenAttachmentPickerPresentationMotion.transition(
+            isPresented: isPresented,
+            reduceMotion: reduceMotion
+        )
+    }
+
     private func panel(size: CGSize) -> some View {
-        let cornerRadius: CGFloat = 46
+        let cornerRadius: CGFloat = isQuickPhotosPresentation
+            ? AidenQuickPhotoStripMotion.stripCornerRadius
+            : 46
 
         return ZStack {
-            if picker.mode == .menu {
+            if activeMode == .menu {
                 menuPanel.transition(panelContentTransition)
             }
-            if picker.mode == .photos {
+            if activeMode == .photos {
                 photoPanel.transition(panelContentTransition)
             }
-            if picker.mode == .camera {
+            if activeMode == .camera {
                 AidenAttachmentCameraPanel(
                     controller: cameraController,
                     onBack: { animate { picker.backToMenu() } },
                     onCaptured: onCaptureCameraPhoto
                 )
                 .transition(panelContentTransition)
+            }
+            if activeMode == .quickPhotos {
+                AidenQuickPhotoStripView { selection in
+                    onPickQuickPhoto?(selection)
+                }
+                .id(picker.quickPhotosGeneration)
+                .accessibilityLabel("Quick recent photos")
             }
         }
         .frame(width: size.width, height: size.height)
@@ -880,11 +1056,6 @@ struct AidenAttachmentPickerOverlay: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .matchedGeometryEffect(
-                    id: "photo-\(asset.localIdentifier)",
-                    in: motionNamespace,
-                    isSource: true
-                )
         }
         .buttonStyle(.plain)
         .frame(width: side, height: side)
@@ -954,29 +1125,6 @@ private struct AidenAttachmentSkeletonBlock: View {
     }
 }
 
-struct AidenCommittingPhotoCard: View {
-    let asset: PHAsset
-    let motionNamespace: Namespace.ID
-
-    var body: some View {
-        AidenPhotoAssetThumbnail(asset: asset, targetDimension: 94)
-            .frame(width: 94, height: 94)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(alignment: .center) {
-                ProgressView()
-                    .tint(.white)
-                    .padding(7)
-                    .background(.black.opacity(0.38), in: Circle())
-            }
-            .matchedGeometryEffect(
-                id: "photo-\(asset.localIdentifier)",
-                in: motionNamespace,
-                isSource: false
-            )
-            .accessibilityLabel("Adding photo")
-    }
-}
-
 /// How far the attachments being sent to the Mac have got: which one of the
 /// batch is going, and the share of its bytes already sent.
 struct AidenUploadProgress: Equatable, Sendable {
@@ -1006,58 +1154,24 @@ struct AidenUploadProgress: Equatable, Sendable {
     }
 }
 
-/// The bar over the composer while attachments go to the Mac, with a Stop.
-struct AidenUploadProgressRow: View {
-    @Environment(\.aidenPalette) private var palette
-    let progress: AidenUploadProgress
-    let onCancel: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text(progress.title)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(palette.foreground)
-                    Spacer(minLength: 8)
-                    Text("\(progress.percent)%")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(palette.secondary)
-                }
-                ProgressView(value: progress.overall)
-                    .progressViewStyle(.linear)
-                    .tint(palette.accent)
-                    .animation(.linear(duration: 0.15), value: progress.overall)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(progress.title)
-            .accessibilityValue("\(progress.percent) percent")
-            .accessibilityAddTraits(.updatesFrequently)
-
-            Button(action: onCancel) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(palette.secondary)
-                    .frame(width: 30, height: 30)
-                    .background(palette.canvas, in: Circle())
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Stop sending")
-        }
-        .padding(.leading, 12)
-        .padding(.trailing, 2)
-        .background(palette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-}
-
 struct AidenPendingAttachmentCard: View {
     @Environment(\.aidenPalette) private var palette
     let attachment: AidenAttachmentReference
     let loadImageData: () async -> Data?
     let onRemove: () -> Void
     @State private var image: UIImage?
+
+    init(
+        attachment: AidenAttachmentReference,
+        initialImage: UIImage? = nil,
+        loadImageData: @escaping () async -> Data?,
+        onRemove: @escaping () -> Void
+    ) {
+        self.attachment = attachment
+        self.loadImageData = loadImageData
+        self.onRemove = onRemove
+        _image = State(initialValue: initialImage)
+    }
 
     var body: some View {
         Group {
@@ -1070,44 +1184,48 @@ struct AidenPendingAttachmentCard: View {
                             .scaledToFill()
                     } else {
                         Image(systemName: "photo")
-                            .font(.title2)
+                            .font(.title3)
                             .foregroundStyle(palette.secondary)
                     }
                 }
-                .frame(width: 94, height: 94)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .frame(
+                    width: AidenAttachmentCardMetrics.imageSide,
+                    height: AidenAttachmentCardMetrics.imageSide
+                )
+                .clipShape(RoundedRectangle(cornerRadius: AidenAttachmentCardMetrics.cornerRadius, style: .continuous))
             } else {
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 5) {
                     Image(systemName: "doc.text.fill")
-                        .font(.title2)
+                        .font(.callout)
                     Spacer(minLength: 0)
                     Text(attachment.name)
-                        .font(.caption.weight(.medium))
+                        .font(.caption2.weight(.medium))
                         .lineLimit(2)
                 }
                 .foregroundStyle(palette.foreground)
-                .padding(11)
-                .frame(width: 118, height: 94, alignment: .leading)
-                .background(palette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(9)
+                .frame(
+                    width: AidenAttachmentCardMetrics.fileWidth,
+                    height: AidenAttachmentCardMetrics.fileHeight,
+                    alignment: .leading
+                )
+                .background(
+                    palette.raised,
+                    in: RoundedRectangle(cornerRadius: AidenAttachmentCardMetrics.cornerRadius, style: .continuous)
+                )
             }
         }
         .overlay(alignment: .topTrailing) {
-            Button(action: onRemove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 22, height: 22)
-                    .background(.black.opacity(0.58), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .padding(6)
-            .accessibilityLabel("Remove \(attachment.name)")
+            AidenAttachmentCardRemoveButton(
+                accessibilityLabel: String(localized: "Remove \(attachment.name)"),
+                action: onRemove
+            )
         }
         .accessibilityElement(children: .contain)
         .task(id: attachment.id) {
             guard attachment.kind == .image, image == nil else { return }
             guard let data = await loadImageData(), !Task.isCancelled else { return }
-            image = UIImage(data: data)
+            image = await AidenPickedPhotoItemLoader.makeThumbnailAsync(from: data) ?? UIImage(data: data)
         }
     }
 }

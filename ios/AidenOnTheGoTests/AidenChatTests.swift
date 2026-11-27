@@ -1,10 +1,12 @@
 import ActivityKit
 import AVFoundation
 import Foundation
+import ImageIO
 import MarkdownUI
 import Photos
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 import UserNotifications
 import Synchronization
 import XCTest
@@ -7001,6 +7003,318 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testStagedUploadHandsOffPreviewCancelsQueuedItemAndCancelsDuringPrepare() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        await model.load(observeProgress: false)
+
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            guard request.httpMethod == "POST", request.url?.path.hasSuffix("/attachments") == true else { return nil }
+            let count = AidenChatProgressLifecycleURLProtocol.uploadRequestCount
+            return (201, "application/json", try! JSONSerialization.data(withJSONObject: [
+                "id": "att_" + String(repeating: count == 1 ? "p" : "q", count: 43),
+                "name": "photo-\(count).png",
+                "mimeType": "image/png",
+                "kind": "image",
+                "size": 64,
+                "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600)),
+            ]))
+        }
+
+        let preview = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { ctx in
+            UIColor.systemGreen.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 24, height: 24))
+        }
+        let pngData = try XCTUnwrap(preview.pngData())
+        let holdFirst = AidenHeldAttachmentPreparation()
+        defer { holdFirst.release() }
+        let firstStarted = expectation(description: "first item preparing")
+
+        let firstID = UUID()
+        let secondID = UUID()
+        let task = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(id: firstID, kind: .image, displayName: "photo-1.png") { _, onPreview in
+                onPreview(preview)
+                await holdFirst.wait { firstStarted.fulfill() }
+                return .image(name: "photo-1.png", mimeType: "image/png", data: pngData)
+            },
+            AidenAttachmentStageItem(id: secondID, kind: .file, displayName: "queued.txt") { _, _ in
+                XCTFail("Cancelled queued item must not prepare")
+                return .text(name: "queued.txt", mimeType: "text/plain", text: "ignored")
+            },
+        ]))
+
+        // Synchronous insertion before any await.
+        XCTAssertEqual(model.stagingAttachments.map(\.id), [firstID, secondID])
+        XCTAssertFalse(model.canSend, "canSend waits for staging uploads")
+        await fulfillment(of: [firstStarted], timeout: 5)
+        XCTAssertNotNil(model.stagingAttachments.first?.previewImage)
+
+        // Cancel the queued second item while the first prepares.
+        model.cancelStagingAttachment(id: secondID)
+        XCTAssertEqual(model.stagingAttachments.map(\.id), [firstID])
+
+        holdFirst.release()
+        await task.value
+
+        XCTAssertTrue(model.stagingAttachments.isEmpty)
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["photo-1.png"])
+        let staged = try XCTUnwrap(model.pendingAttachments.first)
+        XCTAssertNotNil(model.pendingAttachmentPreviewImage(for: staged), "preview image hands off synchronously without flash")
+        XCTAssertTrue(model.canSend)
+
+        // Now verify cancelling during .preparing cancels the Progress handle and preserves staged attachments.
+        let iCloudProgress = Progress(totalUnitCount: 100)
+        let holdPrepare = AidenHeldAttachmentPreparation()
+        defer { holdPrepare.release() }
+        let prepareStarted = expectation(description: "iCloud prepare started")
+        let thirdID = UUID()
+        let cancelTask = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(id: thirdID, kind: .image, displayName: "icloud.heic") { onProgress, _ in
+                onProgress(iCloudProgress)
+                await holdPrepare.wait { prepareStarted.fulfill() }
+                try Task.checkCancellation()
+                return .image(name: "icloud.heic", mimeType: "image/png", data: pngData)
+            },
+        ]))
+        await fulfillment(of: [prepareStarted], timeout: 5)
+
+        model.cancelStagingAttachment(id: thirdID)
+        holdPrepare.release()
+        await cancelTask.value
+
+        XCTAssertTrue(iCloudProgress.isCancelled, "cancelling a staging card aborts its NSItemProvider Progress")
+        XCTAssertTrue(model.stagingAttachments.isEmpty)
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["photo-1.png"], "already staged attachments remain intact")
+        XCTAssertNil(model.presentedError, "cancelling a staging card is not an error")
+
+        // Verify cancelUploads() mid-HTTP-upload clears isUploadingAttachment and does not deadlock subsequent staging.
+        let uploadReachedMac = expectation(description: "staged upload held at Mac")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/attachments") {
+            uploadReachedMac.fulfill()
+        }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+
+        let fourthID = UUID()
+        let heldTask = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(id: fourthID, kind: .image, displayName: "held.png") { _, _ in
+                .image(name: "held.png", mimeType: "image/png", data: pngData)
+            },
+        ]))
+        await fulfillment(of: [uploadReachedMac], timeout: 5)
+        XCTAssertTrue(model.isUploadingAttachment)
+
+        model.cancelUploads()
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await heldTask.value
+
+        XCTAssertFalse(model.isUploadingAttachment, "cancelUploads must never leave isUploadingAttachment deadlocked true")
+        XCTAssertFalse(model.isPreparingAttachments)
+        XCTAssertTrue(model.stagingAttachments.isEmpty)
+        XCTAssertTrue(model.canSend, "chat remains sendable after cancelling an in-flight staged upload")
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["photo-1.png"])
+        model.setAllowsMutations(false)
+    }
+
+    @MainActor
+    func testCancelUploadsThenImmediateNewBatchAndDiscardKeepPromotedAttachment() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        await model.load(observeProgress: false)
+
+        let secondArrived = expectation(description: "batch 1 item 2 held at Mac")
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            guard request.httpMethod == "POST", request.url?.path.hasSuffix("/attachments") == true else { return nil }
+            let count = AidenChatProgressLifecycleURLProtocol.uploadRequestCount
+            if count == 2 {
+                AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/attachments") { secondArrived.fulfill() }
+            }
+            return (201, "application/json", try! JSONSerialization.data(withJSONObject: [
+                "id": "att_" + String(repeating: Character(UnicodeScalar(96 + count)!), count: 43),
+                "name": "file-\(count).txt",
+                "mimeType": "text/plain",
+                "kind": "text",
+                "size": 1,
+                "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600)),
+            ]))
+        }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+
+        let batch1 = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(kind: .file, displayName: "file-1.txt") { _, _ in
+                .text(name: "file-1.txt", mimeType: "text/plain", text: "1")
+            },
+            AidenAttachmentStageItem(kind: .file, displayName: "file-2.txt") { _, _ in
+                .text(name: "file-2.txt", mimeType: "text/plain", text: "2")
+            },
+        ]))
+        await fulfillment(of: [secondArrived], timeout: 5)
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["file-1.txt"])
+
+        // Stop batch 1 and immediately start batch 2 before batch 1's held request unwinds.
+        model.cancelUploads()
+        let batch2 = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(kind: .file, displayName: "file-3.txt") { _, _ in
+                .text(name: "file-3.txt", mimeType: "text/plain", text: "3")
+            },
+        ]))
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await batch1.value
+        await batch2.value
+
+        XCTAssertEqual(
+            model.pendingAttachments.map(\.name),
+            ["file-1.txt", "file-3.txt"],
+            "batch 1 unwinding after a new batch starts must not delete batch 1's promoted attachment"
+        )
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0)
+
+        // Leaving chat (`cancelAttachmentPreparation`) also preserves already-promoted attachments.
+        let holdLeave = AidenHeldAttachmentPreparation()
+        defer { holdLeave.release() }
+        let leaveStarted = expectation(description: "prepare held before leaving")
+        let leaveBatch = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(kind: .file, displayName: "file-4.txt") { _, _ in
+                await holdLeave.wait { leaveStarted.fulfill() }
+                try Task.checkCancellation()
+                return .text(name: "file-4.txt", mimeType: "text/plain", text: "4")
+            },
+        ]))
+        await fulfillment(of: [leaveStarted], timeout: 5)
+        model.cancelAttachmentPreparation()
+        holdLeave.release()
+        await leaveBatch.value
+
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["file-1.txt", "file-3.txt"])
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0)
+        model.setAllowsMutations(false)
+    }
+
+    @MainActor
+    func testStagedUploadRevocationCompletesPurgeWithoutSelfAwaitDeadlock() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-staged-upload-revocation-\(UUID())")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        let cache = AidenChatCache(root: root)
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator = $0 })
+        try await cache.saveChat(model.chat, instanceId: "instance-progress-lifecycle", writeToken: cache.reserveChatWrite())
+
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            guard request.httpMethod == "POST", request.url?.path.hasSuffix("/attachments") == true else { return nil }
+            return (401, "application/json", Data(#"{"error":{"code":"credential_revoked","message":"Pair again.","requestId":"revoked-staged-upload","retryable":false}}"#.utf8))
+        }
+
+        let finished = expectation(description: "revoked staged upload finishes purge without self-await deadlock")
+        let task = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(kind: .file, displayName: "revoked.txt") { _, _ in
+                .text(name: "revoked.txt", mimeType: "text/plain", text: "x")
+            },
+        ]))
+        let waiter = Task {
+            await task.value
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 5)
+        await waiter.value
+
+        let persisted = await AidenChatCache(root: root).loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertNil(persisted, "401 credential_revoked purges the chat cache")
+        XCTAssertEqual(coordinator.connectionState, .needsPairing, "coordinator completes revocation purge")
+        XCTAssertFalse(model.isUploadingAttachment)
+        XCTAssertFalse(model.isPreparingAttachments)
+        XCTAssertTrue(model.stagingAttachments.isEmpty)
+        XCTAssertTrue(model.pendingAttachments.isEmpty)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 1)
+    }
+
+    @MainActor
+    func testRemovalJoinsOlderCancelledStagedWorkerAfterReplacementBatchStarts() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-staged-old-worker-removal-\(UUID())")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        let gate = AidenChatWriteTestGate()
+        let cache = AidenChatCache(root: root, beforeAttachmentImageWrite: { await gate.waitIfArmed() })
+        let model = try await makeProgressLifecycleModel(mode: .denied, cache: cache)
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).pngData {
+            UIColor.systemBlue.setFill()
+            $0.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        }
+        let firstID = "att_" + String(repeating: "x", count: 43)
+        let secondID = "att_" + String(repeating: "y", count: 43)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "DELETE" {
+                return (204, "application/json", Data())
+            }
+            guard request.httpMethod == "POST", request.url?.path.hasSuffix("/attachments") == true else { return nil }
+            let count = AidenChatProgressLifecycleURLProtocol.uploadRequestCount
+            let id = count == 1 ? firstID : secondID
+            let isImage = count == 1
+            return (201, "application/json", try! JSONSerialization.data(withJSONObject: [
+                "id": id,
+                "name": isImage ? "first.png" : "second.txt",
+                "mimeType": isImage ? "image/png" : "text/plain",
+                "kind": isImage ? "image" : "text",
+                "size": isImage ? png.count : 2,
+                "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600)),
+            ]))
+        }
+
+        // Batch 1 uploads an image and pauses inside `cache.saveAttachmentImage`.
+        await gate.arm()
+        let batch1 = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(kind: .image, displayName: "first.png") { _, _ in
+                .image(name: "first.png", mimeType: "image/png", data: png)
+            },
+        ]))
+        await waitForChatWrite(gate)
+
+        // User stops batch 1 and immediately starts replacement batch 2 while batch 1's worker is still unwinding.
+        model.cancelUploads()
+        let batch2 = try XCTUnwrap(model.stageAndUploadAttachments([
+            AidenAttachmentStageItem(kind: .file, displayName: "second.txt") { _, _ in
+                .text(name: "second.txt", mimeType: "text/plain", text: "ok")
+            },
+        ]))
+        await batch2.value
+        XCTAssertEqual(model.pendingAttachments.map(\.id), [firstID, secondID])
+
+        // Removing the chat must wait until the older cancelled batch 1 worker also unwinds and deletes.
+        let returnedEarly = expectation(description: "removal waits for older unwinding staging worker")
+        returnedEarly.isInverted = true
+        var gateHeld = true
+        let removalStarted = expectation(description: "removal started")
+        let removing = Task {
+            removalStarted.fulfill()
+            await cache.removeChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+            if gateHeld { returnedEarly.fulfill() }
+        }
+        await fulfillment(of: [removalStarted], timeout: 2)
+        await fulfillment(of: [returnedEarly], timeout: 0.15)
+
+        gateHeld = false
+        await gate.release()
+        await removing.value
+        await batch1.value
+
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 2, "both older and replacement batch attachments are deleted on removal")
+        XCTAssertTrue(model.pendingAttachments.isEmpty)
+        XCTAssertTrue(model.stagingAttachments.isEmpty)
+        let image = AidenMessageAttachment(id: firstID, name: "first.png", mimeType: "image/png", kind: .image, size: png.count)
+        let persisted = await AidenChatCache(root: root).attachmentImage(
+            instanceId: "instance-progress-lifecycle",
+            deviceId: "device-progress-lifecycle",
+            chatId: model.chat.id,
+            attachment: image
+        )
+        XCTAssertNil(persisted)
+    }
+
+    @MainActor
     func testRemovalCancelsOwnedUploadAndRejectsHeldImageCompletion() async throws {
         try await assertRemovalJoinsUploadCleanup()
     }
@@ -12602,7 +12916,6 @@ private struct AidenChatComposerSwapHost: View {
     let model: AidenChatViewModel
     let session: AidenComposerSession
     let swap: AidenChatComposerSwap
-    @Namespace private var motion
     @State private var picker = AidenAttachmentPickerState()
 
     var body: some View {
@@ -12612,7 +12925,6 @@ private struct AidenChatComposerSwapHost: View {
                 session: session,
                 autoStartVoice: false,
                 attachmentPicker: picker,
-                motionNamespace: motion,
                 canToggleAttachments: true,
                 onToggleAttachmentPicker: {}
             )
@@ -14536,6 +14848,207 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .notDetermined), .requestingPermission)
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .denied), .denied)
         XCTAssertEqual(AidenAttachmentCameraPermissionPolicy.status(for: .restricted), .restricted)
+    }
+
+    func testQuickPhotoStripLayoutRespectsComposerTopAndReadableLandscapeColumn() {
+        let phone = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 393, height: 852),
+            mode: .quickPhotos,
+            attachmentButtonCenter: CGPoint(x: 42, y: 786),
+            composerTopY: 690,
+            widthIsRegular: false
+        )
+        XCTAssertEqual(phone.panelSize.width, 369, accuracy: 0.001)
+        XCTAssertEqual(phone.panelSize.height, AidenQuickPhotoStripMotion.stripHeight, accuracy: 0.001)
+        XCTAssertEqual(phone.leadingPadding, 12, accuracy: 0.001)
+        XCTAssertEqual(
+            phone.bottomPadding,
+            852 - 690 + AidenQuickPhotoStripMotion.composerGap,
+            accuracy: 0.001
+        )
+        XCTAssertLessThan(phone.scaleAnchor.x, 0.2)
+
+        let ipadLandscape = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 1_024, height: 768),
+            windowSize: CGSize(width: 1_024, height: 768),
+            mode: .quickPhotos,
+            attachmentButtonCenter: CGPoint(x: 290, y: 710),
+            composerTopY: 640,
+            widthIsRegular: true
+        )
+        XCTAssertEqual(ipadLandscape.panelSize.width, 488, accuracy: 0.001)
+        XCTAssertEqual(ipadLandscape.leadingPadding, 268, accuracy: 0.001)
+
+        let tightHeight = AidenAttachmentPickerLayout.resolve(
+            containerSize: CGSize(width: 375, height: 200),
+            mode: .quickPhotos,
+            attachmentButtonCenter: CGPoint(x: 40, y: 164),
+            composerTopY: 110,
+            widthIsRegular: false
+        )
+        XCTAssertLessThanOrEqual(tightHeight.panelSize.height + tightHeight.bottomPadding, 200)
+    }
+
+    @MainActor
+    func testQuickPhotoStripModeInvalidatesPhotoLibraryLoadAndResetsCleanly() {
+        let picker = AidenAttachmentPickerState()
+        picker.openMenu()
+        picker.beginShowingPhotos()
+        let generation = picker.markLibraryForRefresh()
+
+        let genBefore = picker.quickPhotosGeneration
+        picker.openQuickPhotos()
+        let genFirst = picker.quickPhotosGeneration
+
+        XCTAssertEqual(picker.mode, .quickPhotos)
+        XCTAssertTrue(picker.isPresented)
+        XCTAssertEqual(genFirst, genBefore + 1)
+        XCTAssertFalse(picker.isCurrentLibraryLoad(generation))
+        XCTAssertTrue(picker.selectedAssetIDs.isEmpty)
+
+        picker.dismiss()
+        XCTAssertEqual(picker.mode, .closed)
+        XCTAssertFalse(picker.isPresented)
+
+        // Immediate re-open bumps generation synchronously so PHPicker Coordinator is fresh.
+        picker.openQuickPhotos()
+        XCTAssertEqual(picker.quickPhotosGeneration, genFirst + 1)
+    }
+
+    func testPickedPhotoItemLoaderPreservesAlphaAndDownscalesRotatedLargeImage() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // 1. Transparent PNG passes through with alpha intact and bounded preview.
+        let alphaFormat = UIGraphicsImageRendererFormat.default()
+        alphaFormat.opaque = false
+        alphaFormat.scale = 1
+        let alphaImage = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64), format: alphaFormat).image { ctx in
+            UIColor.systemBlue.withAlphaComponent(0.4).setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+        }
+        let pngURL = dir.appendingPathComponent("alpha.png")
+        try XCTUnwrap(alphaImage.pngData()).write(to: pngURL)
+
+        let alphaLoaded = try AidenPickedPhotoItemLoader.loadPreviewAndUpload(from: pngURL, suggestedName: "../bad\u{0007}/alpha.png")
+        XCTAssertNotNil(alphaLoaded.preview)
+        guard case .image(let pngName, let pngMime, let pngData) = alphaLoaded.upload else {
+            return XCTFail("Expected image upload")
+        }
+        XCTAssertFalse(pngName.contains("/"))
+        XCTAssertFalse(pngName.contains("\u{0007}"))
+        XCTAssertTrue(pngName.hasSuffix(".png"))
+        XCTAssertEqual(pngMime, "image/png")
+        XCTAssertTrue(pngData.starts(with: [0x89, 0x50, 0x4E, 0x47]))
+
+        // 2. Oversized EXIF-rotated (90 deg CW, orientation 6) JPEG is downscaled <= 2048px with orientation baked in.
+        let opaqueFormat = UIGraphicsImageRendererFormat.default()
+        opaqueFormat.opaque = true
+        opaqueFormat.scale = 1
+        let wideImage = UIGraphicsImageRenderer(size: CGSize(width: 2_400, height: 1_200), format: opaqueFormat).image { ctx in
+            UIColor.systemOrange.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 2_400, height: 1_200))
+        }
+        let rotatedURL = dir.appendingPathComponent("rotated.jpg")
+        let dest = try XCTUnwrap(CGImageDestinationCreateWithURL(rotatedURL as CFURL, UTType.jpeg.identifier as CFString, 1, nil))
+        let cgImage = try XCTUnwrap(wideImage.cgImage)
+        CGImageDestinationAddImage(dest, cgImage, [kCGImagePropertyOrientation: 6] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(dest))
+
+        let rotatedLoaded = try AidenPickedPhotoItemLoader.loadPreviewAndUpload(from: rotatedURL, suggestedName: "rotated.heic")
+        let preview = try XCTUnwrap(rotatedLoaded.preview)
+        XCTAssertGreaterThan(preview.size.height, preview.size.width, "EXIF orientation 6 should rotate 2400x1200 into portrait")
+        XCTAssertLessThanOrEqual(max(preview.size.width * preview.scale, preview.size.height * preview.scale), 281)
+
+        guard case .image(_, let jpegMime, let jpegData) = rotatedLoaded.upload else {
+            return XCTFail("Expected JPEG upload")
+        }
+        XCTAssertEqual(jpegMime, "image/jpeg")
+        let decoded = try XCTUnwrap(UIImage(data: jpegData))
+        let maxEdge = max(decoded.size.width * decoded.scale, decoded.size.height * decoded.scale)
+        XCTAssertLessThanOrEqual(maxEdge, AidenPickedPhotoItemLoader.maximumUploadPixelDimension)
+        XCTAssertGreaterThan(decoded.size.height, decoded.size.width, "Encoded upload must bake EXIF rotation")
+    }
+
+    @MainActor
+    func testMonotonicPercentGateThrottlesSubPercentChunksAndStagingStorePreservesCardIdentity() {
+        let gate = AidenMonotonicPercentGate()
+        XCTAssertEqual(gate.accept(0.0), 0.0)
+        XCTAssertNil(gate.accept(0.004), "sub-percent jitter is dropped before hopping to MainActor")
+        XCTAssertEqual(gate.accept(0.125), 0.125)
+        XCTAssertNil(gate.accept(0.121), "out-of-order lower fractions are rejected")
+        XCTAssertEqual(gate.accept(1.2), 1.0)
+        XCTAssertNil(gate.accept(1.0))
+
+        let store = AidenAttachmentStagingStore()
+        let stagingID = UUID()
+        let preview = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { ctx in
+            UIColor.systemPurple.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        store.beginBatch([AidenAttachmentStageItem(id: stagingID, kind: .image, displayName: "p.png") { _, _ in
+            .text(name: "p.png", mimeType: "text/plain", text: "")
+        }])
+        store.setPreview(preview, for: stagingID)
+        store.promote(stagingID: stagingID, to: "att_server_1", fallbackPreview: nil)
+
+        XCTAssertTrue(store.isEmpty)
+        XCTAssertEqual(store.stableCardID(for: "att_server_1"), stagingID.uuidString)
+        XCTAssertTrue(store.previewImage(for: "att_server_1") === preview)
+
+        store.removePendingMetadata(for: "att_server_1")
+        XCTAssertNil(store.previewImage(for: "att_server_1"))
+        XCTAssertEqual(store.stableCardID(for: "att_server_1"), "att_server_1")
+    }
+
+    func testPickedPhotoItemLoaderRejectsCorruptHonorsCancellationAndStageCancelBoxIsIdempotent() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let corruptURL = dir.appendingPathComponent("corrupt.jpg")
+        try Data("not-an-image".utf8).write(to: corruptURL)
+        XCTAssertThrowsError(
+            try AidenPickedPhotoItemLoader.loadPreviewAndUpload(from: corruptURL, suggestedName: "corrupt.jpg")
+        ) { error in
+            XCTAssertEqual(error as? AidenAttachmentPreparationError, .invalidImage)
+        }
+
+        let emptyURL = dir.appendingPathComponent("empty.png")
+        try Data().write(to: emptyURL)
+        XCTAssertThrowsError(
+            try AidenPickedPhotoItemLoader.loadPreviewAndUpload(from: emptyURL, suggestedName: "empty.png")
+        ) { error in
+            XCTAssertEqual(error as? AidenAttachmentPreparationError, .invalidImage)
+        }
+
+        var previewFired = false
+        XCTAssertThrowsError(
+            try AidenPickedPhotoItemLoader.loadPreviewAndUpload(
+                from: corruptURL,
+                suggestedName: "corrupt.jpg",
+                isCancelled: { true },
+                onPreview: { _ in previewFired = true }
+            )
+        ) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertFalse(previewFired)
+
+        // Cancel-before-attach and double-cancel on AidenStageCancelBox.
+        let box = AidenStageCancelBox()
+        let cancelCount = Mutex(0)
+        box.attach {
+            cancelCount.withLock { $0 += 1 }
+        }
+        box.cancel()
+        box.cancel()
+        XCTAssertEqual(cancelCount.withLock { $0 }, 1)
+
+        let lateProgress = Progress(totalUnitCount: 10)
+        box.attach(progress: lateProgress)
+        XCTAssertTrue(lateProgress.isCancelled, "progress attached after cancel() is cancelled immediately")
     }
 
     // MARK: - Remote Slice 2 busy-composer run input

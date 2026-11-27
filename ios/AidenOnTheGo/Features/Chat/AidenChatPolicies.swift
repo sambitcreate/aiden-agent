@@ -250,7 +250,7 @@ enum AidenAttachmentPreparation {
         }
     }
 
-    private static func safeImageName(_ value: String, extension pathExtension: String) -> String {
+    static func safeImageName(_ value: String, extension pathExtension: String) -> String {
         let base = URL(fileURLWithPath: safeDisplayName(value)).deletingPathExtension().lastPathComponent
         return safeDisplayName("\(base.isEmpty ? "Photo" : base).\(pathExtension)")
     }

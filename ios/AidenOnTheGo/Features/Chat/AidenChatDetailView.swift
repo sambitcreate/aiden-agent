@@ -257,7 +257,7 @@ struct AidenChatDetailView: View {
     @State private var parts: AidenChatScreenParts
     @State private var isFileImporterPresented = false
     @State private var attachmentButtonCenter: CGPoint?
-    @Namespace private var attachmentMotionNamespace
+    @State private var composerTopY: CGFloat?
     @State private var coordinator: AidenRemoteCoordinator?
     @State private var forkSummaryRequest: AidenForkSummaryRequest?
     @State private var simulators = AidenChatSimulatorsModel()
@@ -383,6 +383,10 @@ struct AidenChatDetailView: View {
     }
 
     var body: some View {
+        chatLifecycleStack
+    }
+
+    private var chatConfiguredStack: some View {
         chatStack
         .background(palette.canvas.ignoresSafeArea())
         .onChange(of: effectiveAllowsMutations, initial: true) { _, allowed in
@@ -466,6 +470,10 @@ struct AidenChatDetailView: View {
             if url.isFileURL || raw.hasPrefix("/") || raw.hasPrefix("./") || raw.hasPrefix("../") || raw.hasPrefix("~/") { return .discarded }
             return .systemAction
         })
+    }
+
+    private var chatPresentedStack: some View {
+        chatConfiguredStack
         .sheet(isPresented: $showsWorkspaceFile) {
             if let coordinator, let workspace {
                 NavigationStack { AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace, owner: model.owner, initialReference: workspaceFileReference) }
@@ -541,6 +549,10 @@ struct AidenChatDetailView: View {
                 onChoose: performContinueInNewChat(workspaceID:)
             )
         }
+    }
+
+    private var chatLifecycleStack: some View {
+        chatPresentedStack
         .environment(\.aidenChatScreen, screen)
         // `/server` can grant the slider after the catalog loaded.
         .onChange(of: model.agentSlider != nil) { model.reconcileAgentSliderAvailability() }
@@ -636,16 +648,17 @@ struct AidenChatDetailView: View {
                 .safeAreaBar(edge: .top, spacing: 0) { stackedBotTitle }
             AidenAttachmentPickerOverlay(
                 picker: attachmentPicker,
-                motionNamespace: attachmentMotionNamespace,
                 attachmentCapacity: attachmentCapacity,
                 canChoosePhotos: model.acceptsImageAttachments,
                 isBotChat: model.chat.isBotChat,
                 isBusy: attachmentControlsAreBusy,
                 attachmentButtonCenter: attachmentButtonCenter,
+                composerTopY: composerTopY,
                 onUnavailableBotPhotos: { model.requestBotVisionSetup() },
                 onChooseFiles: { isFileImporterPresented = true },
                 onCaptureCameraPhoto: commitCapturedPhoto,
-                onCommitPhotos: commitSelectedPhotos
+                onCommitPhotos: commitSelectedPhotos,
+                onPickQuickPhoto: commitQuickPhoto
             )
             .allowsHitTesting(attachmentPicker.isPresented)
             .accessibilityHidden(!attachmentPicker.isPresented)
@@ -653,23 +666,19 @@ struct AidenChatDetailView: View {
         }
         .coordinateSpace(name: AidenChatAttachmentCoordinateSpace.name)
         .onPreferenceChange(AidenAttachmentButtonCenterPreferenceKey.self) { center in
+            guard attachmentButtonCenter != center else { return }
             attachmentButtonCenter = center
         }
-        .animation(
-            AidenAttachmentPickerPresentationMotion.transition(
-                isPresented: attachmentPicker.isPresented,
-                reduceMotion: reduceMotion
-            ),
-            value: attachmentPicker.isPresented
-        )
+        .onPreferenceChange(AidenComposerTopYPreferenceKey.self) { topY in
+            guard composerTopY != topY else { return }
+            composerTopY = topY
+        }
         .fileImporter(
             isPresented: $isFileImporterPresented,
             allowedContentTypes: allowedAttachmentContentTypes,
             allowsMultipleSelection: true
         ) { result in
-            model.prepareAttachments(result) { url in
-                try await AidenAttachmentPreparation.fileUploadAsync(url: url)
-            }
+            commitImportedFiles(result)
         }
     }
 
@@ -976,9 +985,9 @@ struct AidenChatDetailView: View {
                         session: composerSession,
                         autoStartVoice: autoStartVoice,
                         attachmentPicker: attachmentPicker,
-                        motionNamespace: attachmentMotionNamespace,
                         canToggleAttachments: canToggleAttachmentPicker,
                         onToggleAttachmentPicker: toggleAttachmentPicker,
+                        onLongPressAttachmentButton: canQuickPickPhotos ? openQuickPhotos : nil,
                         placeholder: config.placeholder
                     )
                     .disabled(model.isReadOnlyPresentation)
@@ -1050,7 +1059,9 @@ struct AidenChatDetailView: View {
     }
 
     private var attachmentCapacity: Int {
-        AidenAttachmentPickerPolicy.availableCapacity(pendingCount: model.pendingAttachments.count)
+        AidenAttachmentPickerPolicy.availableCapacity(
+            pendingCount: model.pendingAttachments.count + model.stagingAttachments.count
+        )
     }
 
     private var attachmentControlsAreBusy: Bool {
@@ -1062,9 +1073,13 @@ struct AidenChatDetailView: View {
             isReadOnly: model.isReadOnlyPresentation,
             isStreaming: model.isStreaming,
             isUploading: model.isUploadingAttachment,
-            isPreparing: model.isPreparingAttachments,
+            isPreparing: model.isPreparingAttachments || !model.stagingAttachments.isEmpty,
             capacity: attachmentCapacity
         )
+    }
+
+    private var canQuickPickPhotos: Bool {
+        canToggleAttachmentPicker && model.isConnected && model.acceptsImageAttachments
     }
 
     private var allowedAttachmentContentTypes: [UTType] {
@@ -1082,10 +1097,28 @@ struct AidenChatDetailView: View {
         }
     }
 
+    private func openQuickPhotos() {
+        guard canQuickPickPhotos else { return }
+        composerSession.putAwayKeyboard()
+        if model.chat.isBotChat && !model.acceptsImageAttachments {
+            model.requestBotVisionSetup()
+            return
+        }
+        guard model.acceptsImageAttachments else { return }
+        attachmentPicker.openQuickPhotos()
+    }
+
     private func openCameraForLaunch() {
         guard canToggleAttachmentPicker, model.acceptsImageAttachments else { return }
         composerSession.putAwayKeyboard()
         attachmentPicker.beginShowingCamera()
+    }
+
+    private func commitQuickPhoto(_ selection: AidenQuickPhotoSelection) {
+        attachmentPicker.dismiss()
+        guard !attachmentControlsAreBusy, attachmentCapacity > 0,
+              model.acceptsImageAttachments else { return }
+        model.stageAndUploadAttachments([.quickPhoto(selection)])
     }
 
     private func commitSelectedPhotos() {
@@ -1093,13 +1126,8 @@ struct AidenChatDetailView: View {
         let commit = attachmentPicker.beginCommit(pendingCount: model.pendingAttachments.count)
         guard let commit else { return }
 
-        let preparation = model.prepareAttachments(Result<[PHAsset], Error>.success(commit.assets)) { asset in
-            let picked = try await AidenPhotoLibraryImageLoader.pickedImage(for: asset)
-            return try await AidenAttachmentPreparation.imageUploadAsync(
-                data: picked.data,
-                name: picked.name
-            )
-        }
+        let items = commit.assets.map(AidenAttachmentStageItem.photoAsset)
+        let preparation = model.stageAndUploadAttachments(items)
         guard let preparation else {
             attachmentPicker.finishCommit(commit.id)
             return
@@ -1114,11 +1142,17 @@ struct AidenChatDetailView: View {
         guard !attachmentControlsAreBusy, attachmentCapacity > 0,
               model.acceptsImageAttachments else { return }
         attachmentPicker.dismiss()
-        model.prepareAttachments(.success([data])) { capturedData in
-            try await AidenAttachmentPreparation.imageUploadAsync(
-                data: capturedData,
-                name: "Camera Photo.jpg"
-            )
+        model.stageAndUploadAttachments([.cameraCapture(data)])
+    }
+
+    private func commitImportedFiles(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard !urls.isEmpty else { return }
+            model.stageAndUploadAttachments(urls.map(AidenAttachmentStageItem.fileURL))
+        case .failure(let error):
+            guard !aidenIsCancellation(error), (error as? CocoaError)?.code != .userCancelled else { return }
+            model.presentedError = String(localized: "One selected attachment could not be added. Other attachments are still ready to send.")
         }
     }
 
