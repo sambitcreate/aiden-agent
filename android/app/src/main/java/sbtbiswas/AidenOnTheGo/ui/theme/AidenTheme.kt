@@ -13,6 +13,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -312,15 +313,4 @@ fun Color.withElevationLuminosity(elevation: androidx.compose.ui.unit.Dp, isDark
     if (!isDark || elevation <= 0.dp) return this
     val alpha = ((4.5f * kotlin.math.ln(elevation.value + 1f)) + 2f) / 100f
     return Color.White.copy(alpha = alpha).compositeOver(this)
-}
-
-internal fun Color.compositeOver(background: Color): Color {
-    val fg = this
-    val bg = background
-    val a = fg.alpha + bg.alpha * (1f - fg.alpha)
-    if (a == 0f) return Color.Transparent
-    val r = (fg.red * fg.alpha + bg.red * bg.alpha * (1f - fg.alpha)) / a
-    val g = (fg.green * fg.alpha + bg.green * bg.alpha * (1f - fg.alpha)) / a
-    val b = (fg.blue * fg.alpha + bg.blue * bg.alpha * (1f - fg.alpha)) / a
-    return Color(r, g, b, a)
 }
