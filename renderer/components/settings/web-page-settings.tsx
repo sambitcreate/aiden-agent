@@ -9,6 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { Badge, Button, Field, FieldSet, Input, Switch, Text } from "../ui";
 import { webFetchApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
 import { queryKeys, useWebFetch } from "../../lib/queries";
 import {
   WEB_EXTRACT_MODELS,
@@ -19,10 +20,6 @@ import { WebSearchKeyPoolEditor } from "./web-search-key-pool";
 
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { localComputerNoun } from "../../shared/computer-noun";
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
-
 /** What the extract row says about its setup; exported for rendering tests. */
 export function webExtractStatus(snapshot: WebFetchRendererSnapshot): {
   label: string;

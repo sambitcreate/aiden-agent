@@ -17,6 +17,7 @@ import {
 import { isInlineVisualsMode, type InlineVisualsMode } from "../../shared/appearance";
 import type { LinuxTitleBarPreference, WindowChrome } from "../../shared/window-chrome";
 import { settingsApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
 import { useBots } from "../../lib/queries";
 import { showsBotToolActivity } from "../../shared/bots";
 import { useAppCapabilities } from "../../lib/app-capabilities";
@@ -84,10 +85,6 @@ function ChatPreferenceField<Value extends string>({ label, description, value, 
 }
 
 type CssProperties = React.CSSProperties & Record<`--${string}`, string>;
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
 
 function appearanceSafetyIssues(config: AppearanceConfig): string[] {
   return [

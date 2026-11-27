@@ -21,6 +21,7 @@ import {
 } from "../ui";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { peerHostsApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
 import { hostQueryKeys } from "../../lib/hosts/host-query-keys";
 import {
   mergePeerHostStatus,
@@ -30,10 +31,6 @@ import {
 import { localComputerNoun } from "../../shared/computer-noun";
 import type { PeerHostStatus, PeerHostView } from "../../shared/peer-host";
 import { PeerAddDeviceSheet } from "./peer-add-device-sheet";
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
 
 /**
  * Paired hosts and their live supervisor status. The registry list never

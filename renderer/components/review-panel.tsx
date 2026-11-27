@@ -19,6 +19,7 @@ import {
   Text,
 } from "./ui";
 import { gitApi } from "../lib/ipc";
+import { errorMessage } from "../lib/ipc-error";
 import { useGitBranches, useGitComparison, useGitReview } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import type { GitComparison, GitFileDiff, GitReviewFile, Workspace } from "../lib/types";
@@ -44,10 +45,6 @@ const STATUS_LABEL: Record<GitReviewFile["status"], string> = {
   renamed: "R",
   untracked: "?",
 };
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
 
 function fileName(value: string): string {
   return value.split("/").pop() || value;

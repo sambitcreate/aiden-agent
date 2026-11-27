@@ -7,6 +7,7 @@ import * as React from "react";
 import { Button, Switch, Text } from "../ui";
 import { Disclosure, Segmented, type ChoiceOption } from "../ui-primitives";
 import { mcpApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
 import { useMcpToolList } from "../../lib/queries";
 import type { McpServer, McpToolSummary } from "../../lib/types";
 import { mcpServerExposure, type McpExposure } from "../../shared/mcp-exposure";
@@ -23,10 +24,6 @@ const EXPOSURE_HELP: Record<McpExposure, string> = {
   direct: "Every message lists these tools to the model up front. Handy for tools you use constantly; uses more context.",
   hidden: "Chats, Bots, schedules and the Assistant can’t use this server. You can still test it and sign in here.",
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** Inventory tools first, then hidden names the server no longer lists (so they can be shown again). */
 function toolRows(inventory: readonly McpToolSummary[], hidden: readonly string[]): McpToolSummary[] {

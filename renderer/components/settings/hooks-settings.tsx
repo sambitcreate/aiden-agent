@@ -27,6 +27,7 @@ import {
   toast,
 } from "../ui";
 import { hooksApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
 import { BotPageSkeleton } from "../../main/bots/bot-page-shell";
 import { HookScriptCoverage } from "../hook-script-coverage";
 import { cn } from "../../lib/ui-utils";
@@ -63,10 +64,6 @@ import { useAppCapabilities } from "../../lib/app-capabilities";
 import { localComputerNoun } from "../../shared/computer-noun";
 export const HOOKS_QUERY_KEY = ["hooks", "overview"] as const;
 const runLogKey = (hookId: string) => ["hooks", "runLog", hookId] as const;
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
 
 function eventAndMatcher(listing: Pick<HookListing, "event" | "configuredEvent" | "matcher">): string {
   const event = listing.event === "unknown" ? listing.configuredEvent : listing.event;

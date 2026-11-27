@@ -31,6 +31,7 @@ import {
 import { InfoHint } from "../ui-info-hint";
 import { MoreHorizontal, Plus, Search, Trash2 } from "lucide-react";
 import { mcpApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
 import {
   mcpConnectionChanged,
   mcpDependentsSummary,
@@ -90,10 +91,6 @@ function linesToArgs(text: string): string[] {
     .split("\n")
     .map((line) => line.replace(/\r$/u, ""))
     .filter((line) => line.trim().length > 0);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 const LIVE_DOT: Record<McpLiveTone, string> = {

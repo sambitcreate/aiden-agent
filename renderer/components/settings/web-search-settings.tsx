@@ -48,6 +48,7 @@ import {
 } from "../ui";
 import { ProviderIcon } from "../provider-icon";
 import { webSearchApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
 import { queryKeys, useWebSearch } from "../../lib/queries";
 import type {
   BoundedNonSecretProviderConfig,
@@ -248,10 +249,6 @@ function routeEntryFor(
   providerId: WebSearchProviderId,
 ): WebSearchRouteEntry | undefined {
   return snapshot.route.find((entry) => entry.providerId === providerId);
-}
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function LinkIcon() {
