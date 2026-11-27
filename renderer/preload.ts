@@ -6,6 +6,7 @@ import {
   NOTIFICATION_CHANNELS,
 } from "./preload-channels.js";
 import { createAttachmentPreloadBridge } from "./preload-attachments.js";
+import { ipcRendererTransport } from "./preload-ipc-transport.js";
 import { windowChromeFromArgv, type WindowChrome } from "./shared/window-chrome.js";
 
 // Re-exported so the contract test can assert coverage without importing this
@@ -31,9 +32,7 @@ function subscribe(channel: string, callback: NotificationHandler): () => void {
   if (!NOTIFICATION_CHANNELS.has(channel)) {
     throw new Error(`Notification channel is not available to the renderer: ${channel}`);
   }
-  const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
-  ipcRenderer.on(channel, listener);
-  return () => ipcRenderer.removeListener(channel, listener);
+  return ipcRendererTransport.onNotification(channel, callback);
 }
 
 const windowChrome: WindowChrome =
@@ -45,7 +44,7 @@ const aidenAPI = {
   ipc: {
     invoke: <T = unknown>(channel: string, ...args: unknown[]): Promise<T> => {
       assertInvokeChannel(channel);
-      return ipcRenderer.invoke(channel, ...args) as Promise<T>;
+      return ipcRendererTransport.invoke<T>(channel, ...args);
     },
     onNotification: subscribe,
   },
@@ -57,8 +56,7 @@ const aidenAPI = {
       ) as Promise<OpenDialogReturnValue>,
   },
   attachments: createAttachmentPreloadBridge({
-    invoke: <T>(channel: string, ...args: unknown[]) =>
-      ipcRenderer.invoke(channel, ...args) as Promise<T>,
+    invoke: ipcRendererTransport.invoke,
     getPathForFile: (file: File) => webUtils.getPathForFile(file),
   }),
   nativeTheme: {
