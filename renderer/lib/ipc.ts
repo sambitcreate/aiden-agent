@@ -825,15 +825,12 @@ export const skillsApi = {
   remove: (id: string) => invoke<void>("skills:remove", id),
   catalog: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
     parseSkillCatalog(await invoke<unknown>("skills:catalog", workspaceId)),
-  /** @deprecated Compatibility alias for the renderer-safe catalog. */
   /** Every skill a workspace could switch off, with whether it is off there. */
   workspaceChoices: (workspaceId: string) =>
     invoke<import("../../main/services/skill-registry").WorkspaceSkillChoice[]>(
       "skills:workspaceChoices",
       workspaceId,
     ),
-  discovered: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
-    parseSkillCatalog(await invoke<unknown>("skills:discovered", workspaceId)),
 };
 
 // ── MCP servers ───────────────────────────────────────────────────────

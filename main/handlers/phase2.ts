@@ -368,11 +368,6 @@ export function registerPhase2Handlers(): void {
   ipcMain.handle("skills:workspaceChoices", async (_event, workspaceId: unknown) =>
     workspaceSkillChoices(await skillRegistry.snapshot(asString(workspaceId, "workspaceId"))),
   );
-  // Compatibility alias with the safe workspace-id contract. Renderer paths
-  // are never accepted as discovery authority.
-  ipcMain.handle("skills:discovered", async (_event, workspaceId: unknown) =>
-    skillRegistry.catalog(asString(workspaceId, "workspaceId")),
-  );
 
   // ── MCP servers ──────────────────────────────────────────────────────
   ipcMain.handle("mcp:list", async () => configStore.listMcpServers());
