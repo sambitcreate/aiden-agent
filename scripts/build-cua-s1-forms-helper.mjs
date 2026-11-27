@@ -8,22 +8,14 @@ import {
   chooseBestXcodeToolchain,
   discoverXcodeDeveloperDirectories,
 } from "./apple-developer-tools.mjs";
+import { buildSwiftHelperApp } from "./swift-helper-build.mjs";
 
 const required = process.argv.includes("--required");
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packagePath = path.join(projectRoot, "native", "cua-s1-forms");
 const scratchPath = path.join(projectRoot, "build", "native-swift-cua-s1-forms");
 const moduleCachePath = path.join(projectRoot, "build", "native-module-cache");
-const helperAppName = "Aiden CUA-S1 Forms Helper.app";
-const destination = path.join(projectRoot, "build", "native", helperAppName);
-const destinationExecutable = path.join(
-  destination,
-  "Contents",
-  "MacOS",
-  "aiden-cua-s1-forms-helper",
-);
-const infoPlist = path.join(packagePath, "Info.plist");
-const product = "AidenCuaS1FormsHelper";
+const destination = path.join(projectRoot, "build", "native", "Aiden CUA-S1 Forms Helper.app");
 
 function fail(message, status = 1) {
   fs.rmSync(destination, { force: true, recursive: true });
@@ -84,65 +76,16 @@ console.log(
   `Apple developer tools: Xcode ${toolchain.xcodeVersion} (${toolchain.buildVersion ?? "unknown"}), macOS SDK ${toolchain.sdkVersion}, ${toolchain.developerDir}`,
 );
 
-fs.mkdirSync(scratchPath, { recursive: true });
-fs.mkdirSync(moduleCachePath, { recursive: true });
-fs.rmSync(destination, { force: true, recursive: true });
-fs.mkdirSync(path.dirname(destinationExecutable), { recursive: true });
-
-const helperBuildEnv = {
-  ...process.env,
-  CLANG_MODULE_CACHE_PATH: moduleCachePath,
-  DEVELOPER_DIR: toolchain.developerDir,
-  SWIFT_MODULECACHE_PATH: moduleCachePath,
-  MACOSX_DEPLOYMENT_TARGET: "14.4",
-};
-const commonArgs = [
-  "swift",
-  "build",
-  "--disable-sandbox",
-  "--package-path",
+buildSwiftHelperApp({
+  projectRoot,
   packagePath,
-  "--scratch-path",
   scratchPath,
-  "--configuration",
-  "release",
-  "--product",
-  product,
-];
-
-const build = spawnSync("xcrun", commonArgs, {
-  cwd: projectRoot,
-  env: helperBuildEnv,
-  encoding: "utf8",
-  stdio: "inherit",
+  moduleCachePath,
+  destination,
+  executableName: "aiden-cua-s1-forms-helper",
+  product: "AidenCuaS1FormsHelper",
+  deploymentTarget: "14.4",
+  developerDir: toolchain.developerDir,
+  label: "CUA-S1 forms helper",
+  fail,
 });
-if (build.error || build.status !== 0) {
-  fail("Could not build the CUA-S1 forms helper.", build.status ?? 1);
-}
-
-const binPath = spawnSync("xcrun", [...commonArgs, "--show-bin-path"], {
-  cwd: projectRoot,
-  env: helperBuildEnv,
-  encoding: "utf8",
-});
-if (binPath.error || binPath.status !== 0) {
-  fail("Could not locate the built CUA-S1 forms helper.", binPath.status ?? 1);
-}
-
-const source = path.join(binPath.stdout.trim(), product);
-if (!fs.existsSync(source)) {
-  fail("The CUA-S1 forms helper build completed without an executable.");
-}
-
-fs.copyFileSync(source, destinationExecutable);
-fs.copyFileSync(infoPlist, path.join(destination, "Contents", "Info.plist"));
-fs.chmodSync(destinationExecutable, 0o755);
-const sign = spawnSync("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", destination], {
-  cwd: projectRoot,
-  encoding: "utf8",
-  stdio: "inherit",
-});
-if (sign.error || sign.status !== 0) {
-  fail("Could not sign the CUA-S1 forms helper app.", sign.status ?? 1);
-}
-console.log(`CUA-S1 forms helper: ${path.relative(projectRoot, destination)}`);
