@@ -171,17 +171,21 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
       }
     }),
   );
-  removals.push(
-    registry.onAdmit((origin) => {
-      const workspaceId = deps.appForOrigin?.(origin)?.workspaceId;
-      if (workspaceId !== undefined) {
-        const origins = workspaceOrigins.get(workspaceId) ?? new Set<string>();
-        origins.add(origin);
-        workspaceOrigins.set(workspaceId, origins);
-      }
-      void deps.serviceWorkers?.remember(origin).catch(() => undefined);
-    }),
-  );
+  /**
+   * S76: an origin whose page ran in app context may have registered a
+   * service worker. It is remembered for the start-up clear and tied to the
+   * workspace of the app it was reached from (`via`, an admitted app origin).
+   */
+  const rememberPage = (origin: string, via: string | null) => {
+    const workspaceId = via !== null ? deps.appForOrigin?.(via)?.workspaceId : undefined;
+    if (workspaceId !== undefined) {
+      const origins = workspaceOrigins.get(workspaceId) ?? new Set<string>();
+      origins.add(origin);
+      workspaceOrigins.set(workspaceId, origins);
+    }
+    void deps.serviceWorkers?.remember(origin).catch(() => undefined);
+  };
+  removals.push(registry.onAdmit((origin) => rememberPage(origin, origin)));
 
   const cache = new AppCancelCache({ now });
   const policy: AppPolicyContext = {
@@ -249,7 +253,16 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
           verdict: decision.verdict,
         });
       }
-      if (decision.verdict !== "cancel") return undefined;
+      if (decision.verdict !== "cancel") {
+        // A page an app frame (or export window) reached on another local server (G5) can
+        // register a service worker for that origin too: remember every such page's origin.
+        const page = details.resourceType === "mainFrame" || details.resourceType === "subFrame";
+        const origin = page && decision.context !== null && decision.context !== "frameless-app" && decision.context !== "frameless-unknown" ? originOf(details.url) : null;
+        if (origin !== null && origin !== deps.rendererOrigin && isLoopbackHttpOrigin(origin)) {
+          rememberPage(origin, registry.admittedOrigin(frame) ?? (deps.isAppOrigin(origin) ? origin : null));
+        }
+        return undefined;
+      }
       if (decision.context === "registered") registry.reportBlocked(frame, decision.target);
       if (decision.context === "frameless-unknown") logFrameless(decision.target);
       return "cancel";

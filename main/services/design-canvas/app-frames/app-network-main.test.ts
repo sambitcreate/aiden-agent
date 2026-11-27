@@ -491,6 +491,25 @@ test("an admitted origin is remembered, forgetting a workspace clears its origin
   assert.deepEqual(s.workers.calls, ["clear all", `remember ${ORIGIN}`, `clear ${ORIGIN}`]);
 });
 
+test("every loopback page an admitted frame reaches is remembered and cleared with its workspace, not only the admitted one", async () => {
+  const s = setup({ appForOrigin: (origin) => (origin === ORIGIN ? { workspaceId: "ws-1", appRoot: "." } : undefined) });
+  const app = s.admit();
+  const OTHER = "http://127.0.0.1:4321";
+  // G5: the frame itself goes to another local server, and a page inside it frames a third.
+  assert.equal(s.request({ url: `${OTHER}/login`, frame: app, webContentsId: 1, resourceType: "subFrame" }), "pass");
+  const inner = s.window().child(60, `${OTHER}/login`, "", app);
+  assert.equal(s.request({ url: "http://localhost:6006/iframe.html", frame: inner, webContentsId: 1, resourceType: "subFrame" }), "pass");
+  // A fetch isn't a page: nothing there can register a worker for that origin.
+  s.request({ url: "http://127.0.0.1:7070/api", frame: app, webContentsId: 1, resourceType: "xhr" });
+  await new Promise((resolve) => setImmediate(resolve));
+  await s.network!.forgetWorkspace("ws-1");
+  await new Promise((resolve) => setImmediate(resolve));
+  const cleared = s.workers.calls.find((call) => call.startsWith("clear http"));
+  assert.deepEqual(new Set(cleared?.slice("clear ".length).split(",")), new Set([ORIGIN, OTHER, "http://localhost:6006"]));
+  for (const origin of [ORIGIN, OTHER, "http://localhost:6006"]) assert.ok(s.workers.calls.includes(`remember ${origin}`), origin);
+  assert.equal(s.workers.calls.some((call) => call.includes("7070")), false);
+});
+
 test("disposing removes every subscriber, so the session has no listener left", () => {
   const s = setup();
   s.network!.dispose();
