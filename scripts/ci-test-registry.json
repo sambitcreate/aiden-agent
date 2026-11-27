@@ -481,7 +481,8 @@
         "main/services/design-canvas/app-frames/app-network-main.test.ts",
         "main/windows/main-window-console.test.ts",
         "main/services/design-canvas/app-frames/app-sw-origins.test.ts",
-        "renderer/shared/design-canvas/app-bridge-messages.test.ts"
+        "renderer/shared/design-canvas/app-bridge-messages.test.ts",
+        "main/services/design-canvas/app-frames/app-bridge-main.test.ts"
       ],
       "preserved": [
         "browser"

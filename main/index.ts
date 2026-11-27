@@ -9,6 +9,7 @@ import {
   registerNativeHandlers,
   screen,
   shell,
+  webFrameMain,
 } from "./platform.js";
 import { Menu, nativeImage, nativeTheme, session, type IpcMainInvokeEvent } from "electron";
 import { claimDefaultSessionWebRequest } from "./services/default-session-web-request.js";
@@ -44,6 +45,7 @@ import { installAppNetwork, type AppNetwork } from "./services/design-canvas/app
 import { createAppServiceWorkerOrigins } from "./services/design-canvas/app-frames/app-sw-origins.js";
 import { aidenLoopbackPorts } from "./services/loopback-ports.js";
 import { installMainWindowConsole } from "./windows/main-window-console.js";
+import { installAppBridge } from "./services/design-canvas/app-frames/app-bridge-main.js";
 import { url as inspectorUrl } from "node:inspector";
 import { mainWindowOptions } from "./windows/main-window-options.js";
 import {
@@ -1984,6 +1986,13 @@ async function createMainWindow(
     registry: () => appFrameRegistry,
     rendererOrigin: rendererOrigin(),
     ownPorts: () => appFrameOwnPorts(),
+  });
+  // With live apps on, admitted app frames get the canvas bridge (D12).
+  installAppBridge(createdWindow.webContents, {
+    enabled: designLiveEnabled(),
+    registry: () => appFrameRegistry,
+    isAppOrigin: (origin) => designAppServers.isAppOrigin(origin),
+    fromId: (processId, routingId) => webFrameMain.fromId(processId, routingId),
   });
 
   logger.info("main", "Loading renderer", { url: mainWindowUrl });

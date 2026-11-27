@@ -17,6 +17,7 @@ import {
   screen,
   shell,
   systemPreferences,
+  webFrameMain,
   type IpcMain,
   type IpcMainInvokeEvent,
 } from "electron";
@@ -241,4 +242,5 @@ export {
   screen,
   shell,
   systemPreferences,
+  webFrameMain,
 };
