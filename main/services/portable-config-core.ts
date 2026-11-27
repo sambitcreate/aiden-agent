@@ -508,20 +508,18 @@ function normalizeStoredProvider(value: unknown): StoredProvider | undefined {
   };
 }
 
-function normalizeLegacyMcpServers(value: unknown): McpServer[] {
-  if (!Array.isArray(value)) return [];
-  const valid = value.filter(isMcpServer);
+function uniqueById<T extends { id: string }>(values: readonly T[]): T[] {
   const counts = new Map<string, number>();
-  for (const server of valid) counts.set(server.id, (counts.get(server.id) ?? 0) + 1);
-  return valid.filter((server) => counts.get(server.id) === 1);
+  for (const value of values) counts.set(value.id, (counts.get(value.id) ?? 0) + 1);
+  return values.filter((value) => counts.get(value.id) === 1);
+}
+
+function normalizeLegacyMcpServers(value: unknown): McpServer[] {
+  return Array.isArray(value) ? uniqueById(value.filter(isMcpServer)) : [];
 }
 
 function normalizeLegacySkills(value: unknown): Skill[] {
-  if (!Array.isArray(value)) return [];
-  const valid = value.filter(isSkill);
-  const counts = new Map<string, number>();
-  for (const skill of valid) counts.set(skill.id, (counts.get(skill.id) ?? 0) + 1);
-  return valid.filter((skill) => counts.get(skill.id) === 1);
+  return Array.isArray(value) ? uniqueById(value.filter(isSkill)) : [];
 }
 
 function normalizeTelegramProfiles(value: unknown): AppSettings["telegramProfiles"] {
@@ -930,13 +928,9 @@ function normalizeLocalConfigShape(value: unknown): LocalConfigShape {
   const validWorkspaces = Array.isArray(workspaces)
     ? workspaces.filter(isWorkspace).map(withCleanCapabilityLists)
     : [];
-  const workspaceIdCounts = new Map<string, number>();
-  for (const workspace of validWorkspaces) {
-    workspaceIdCounts.set(workspace.id, (workspaceIdCounts.get(workspace.id) ?? 0) + 1);
-  }
   return {
     ...rest,
-    workspaces: validWorkspaces.filter((workspace) => workspaceIdCounts.get(workspace.id) === 1),
+    workspaces: uniqueById(validWorkspaces),
     seeded: seeded === true,
     ...(typeof aidenDirMigratedAt === "number" ? { aidenDirMigratedAt } : {}),
     ...(webSearchProfileKind === "fresh" || webSearchProfileKind === "upgrade"
@@ -1563,18 +1557,13 @@ export function createPortableConfigStores(
     if (Array.isArray(legacy.providers) && legacy.providers.some(hasSensitiveProviderUrl)) {
       return deferMigration();
     }
-    const structurallyValidLegacyProviders = Array.isArray(legacy.providers)
-      ? legacy.providers.flatMap((candidate) => {
-          const normalized = normalizeStoredProvider(candidate);
-          return normalized ? [normalized] : [];
-        })
-      : [];
-    const legacyProviderIdCounts = new Map<string, number>();
-    for (const candidate of structurallyValidLegacyProviders) {
-      legacyProviderIdCounts.set(candidate.id, (legacyProviderIdCounts.get(candidate.id) ?? 0) + 1);
-    }
-    const legacyProviders = structurallyValidLegacyProviders.filter(
-      (candidate) => legacyProviderIdCounts.get(candidate.id) === 1,
+    const legacyProviders = uniqueById(
+      Array.isArray(legacy.providers)
+        ? legacy.providers.flatMap((candidate) => {
+            const normalized = normalizeStoredProvider(candidate);
+            return normalized ? [normalized] : [];
+          })
+        : [],
     );
     const legacySplit = legacyProviders.map((provider) => splitStoredProvider(provider));
     // If an earlier attempt published the portable split and archived snapshot
