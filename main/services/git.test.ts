@@ -3,7 +3,6 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
@@ -26,23 +25,12 @@ import {
 import { reconcilePendingManagedWorktreeDeletions } from "./managed-worktree-deletion-recovery.js";
 import type { Workspace } from "./types.js";
 import { withWorkspaceScheduleRestoration } from "./workspace-schedule-restoration.js";
+import { createGitRepository, git, temporaryGitDirectory } from "./git-test-support.js";
 
 const execFileAsync = promisify(execFile);
 
-async function git(cwd: string, args: string[]): Promise<string> {
-  const result = await execFileAsync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LANG: "C", LC_ALL: "C" },
-  });
-  return String(result.stdout).trim();
-}
-
-async function temporaryDirectory(t: test.TestContext): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-git-test-"));
-  t.after(() => fs.rm(directory, { force: true, recursive: true }));
-  return directory;
-}
+const temporaryDirectory = (t: test.TestContext): Promise<string> =>
+  temporaryGitDirectory(t, "aiden-git-test-");
 
 async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -58,18 +46,8 @@ async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
   throw new Error(`Timed out waiting for ${path.basename(filePath)}.`);
 }
 
-async function createRepository(t: test.TestContext): Promise<string> {
-  const root = await temporaryDirectory(t);
-  const repository = path.join(root, "repository");
-  await fs.mkdir(repository);
-  await git(repository, ["init", "--initial-branch=main"]);
-  await git(repository, ["config", "user.email", "aiden@example.test"]);
-  await git(repository, ["config", "user.name", "Aiden Test"]);
-  await fs.writeFile(path.join(repository, "README.md"), "initial\n", "utf8");
-  await git(repository, ["add", "README.md"]);
-  await git(repository, ["commit", "-m", "Initial commit"]);
-  return repository;
-}
+const createRepository = (t: test.TestContext): Promise<string> =>
+  createGitRepository(t, "aiden-git-test-");
 
 test("unpushed commits count what no remote holds, and an unreadable branch is never zero", async (t) => {
   const repository = await createRepository(t);

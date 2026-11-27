@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import {
   GitManagedWorktreeDeleteError,
@@ -44,36 +41,13 @@ import {
   verifyProvisionedFileBlobs,
   type ManagedWorktreeSnapshot,
 } from "./managed-worktree-snapshot.js";
+import { createGitRepository, git, temporaryGitDirectory } from "./git-test-support.js";
 
-const execFileAsync = promisify(execFile);
+const temporaryDirectory = (t: test.TestContext): Promise<string> =>
+  temporaryGitDirectory(t, "aiden-lifecycle-test-");
 
-async function git(cwd: string, args: string[]): Promise<string> {
-  const result = await execFileAsync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LANG: "C", LC_ALL: "C" },
-  });
-  return String(result.stdout).trim();
-}
-
-async function temporaryDirectory(t: test.TestContext): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-lifecycle-test-"));
-  t.after(() => fs.rm(directory, { force: true, recursive: true }));
-  return directory;
-}
-
-async function createRepository(t: test.TestContext): Promise<string> {
-  const root = await temporaryDirectory(t);
-  const repository = path.join(root, "repository");
-  await fs.mkdir(repository);
-  await git(repository, ["init", "--initial-branch=main"]);
-  await git(repository, ["config", "user.email", "aiden@example.test"]);
-  await git(repository, ["config", "user.name", "Aiden Test"]);
-  await fs.writeFile(path.join(repository, "README.md"), "initial\n", "utf8");
-  await git(repository, ["add", "README.md"]);
-  await git(repository, ["commit", "-m", "Initial commit"]);
-  return repository;
-}
+const createRepository = (t: test.TestContext): Promise<string> =>
+  createGitRepository(t, "aiden-lifecycle-test-");
 
 /** A test remover standing in for the native helper: authorize then remove. */
 async function removeAfterAuthorize(identity: {

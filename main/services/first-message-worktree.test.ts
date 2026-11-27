@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { promisify } from "node:util";
 import { parseChatFirstMessage } from "../handlers/chat-first-message-params.js";
 import {
   createFirstMessageCommitter,
@@ -25,17 +23,7 @@ import { WorkspaceOperationRegistry, admitOwnedWorkspaceOperation } from "./work
 import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-application-service.js";
 import type { FirstMessageWorktreeProgress } from "../../renderer/shared/worktree-on-send.js";
 import { fakeDocumentOwner as documentOwner } from "../shared/document-owner-test-support.js";
-
-const execFileAsync = promisify(execFile);
-
-async function git(cwd: string, args: string[]): Promise<string> {
-  const result = await execFileAsync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LANG: "C", LC_ALL: "C" },
-  });
-  return String(result.stdout).trim();
-}
+import { git } from "./git-test-support.js";
 
 async function temporaryDirectory(t: test.TestContext, prefix = "aiden-wt-send-"): Promise<string> {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
