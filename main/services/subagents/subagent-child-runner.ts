@@ -1028,38 +1028,20 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     clearTimeout(deadlineTimer);
     removeParentAbort();
     unsubscribe();
-    if (workspaceWriteApproval) {
+    const drainApproval = async (gate?: { shutdown(): Promise<void> }) => {
+      if (!gate) return;
       let shutdownFailed = false;
       const shutdown = Promise.resolve()
-        .then(() => workspaceWriteApproval!.shutdown())
+        .then(() => gate.shutdown())
         .catch(() => {
           shutdownFailed = true;
         });
       if (!(await boundedDrain(shutdown, policy.cancellationGraceMs)) || shutdownFailed) {
         reportCleanupFailure(input);
       }
-    }
-    if (mcpMutationApproval) {
-      let shutdownFailed = false;
-      const shutdown = Promise.resolve()
-        .then(() => mcpMutationApproval!.shutdown())
-        .catch(() => {
-          shutdownFailed = true;
-        });
-      if (!(await boundedDrain(shutdown, policy.cancellationGraceMs)) || shutdownFailed) {
-        reportCleanupFailure(input);
-      }
-    }
-    if (shellApproval) {
-      let shutdownFailed = false;
-      const shutdown = Promise.resolve()
-        .then(() => shellApproval!.shutdown())
-        .catch(() => {
-          shutdownFailed = true;
-        });
-      if (!(await boundedDrain(shutdown, policy.cancellationGraceMs)) || shutdownFailed) {
-        reportCleanupFailure(input);
-      }
-    }
+    };
+    await drainApproval(workspaceWriteApproval);
+    await drainApproval(mcpMutationApproval);
+    await drainApproval(shellApproval);
   }
 }
