@@ -1273,7 +1273,7 @@ test("3c: the Trash toast's Undo waits for the canvas to show the Trash, then un
   fireEvent.click(screen.getByRole("menuitem", { name: "Move page file to Trash…" }));
   fireEvent.click(await screen.findByRole("button", { name: "Move to Trash" }));
   await waitFor(() => assert.equal(calledWith(calls, "designCanvas:appPageTrash").length, 1), SAVE_WAIT);
-  await waitFor(() => assert.equal(document.activeElement, region), SAVE_WAIT);
+  await waitFor(() => assert.ok(document.activeElement === region, "the canvas has focus"), SAVE_WAIT);
   await nextTask();
   assert.equal(screen.queryByText("Moved src/routes/pricing.tsx to the Trash."), null, "no Undo before the canvas has the Trash");
 

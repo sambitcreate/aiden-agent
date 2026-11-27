@@ -245,13 +245,6 @@ export function applyNodeChanges(
 }
 
 /**
- * Copies frames 32 px down and right. A copied group brings copies of its
- * members and keeps its lock; a member copied alone joins its group, unless
- * that group is locked, when the copy stands outside any group. Other copies
- * are unlocked. All or nothing: a copy that would pass the frame limit
- * returns `doc` unchanged.
- */
-/**
  * One undo step per drag or resize. The first change of a gesture that alters
  * the canvas records the step (a first change that rounds back to the same
  * document records nothing, so the next one must); later changes join it, and
@@ -288,6 +281,13 @@ export function gestureEdit(
   return { record: true, mutate };
 }
 
+/**
+ * Copies frames 32 px down and right. A copied group brings copies of its
+ * members and keeps its lock; a member copied alone joins its group, unless
+ * that group is locked, when the copy stands outside any group. Other copies
+ * are unlocked. All or nothing: a copy that would pass the frame limit
+ * returns `doc` unchanged.
+ */
 export function duplicateFrames(
   doc: DesignCanvas,
   ids: string[],

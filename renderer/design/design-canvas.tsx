@@ -483,7 +483,7 @@ function LoadedDesignCanvas({
         const lost = !active || active === document.body || !active.isConnected || host?.contains(active) === true;
         if (!lost) return;
       }
-      // A plain focus, not `returnFocus`: the modal confirmation that just closed may still hide the canvas (aria-hidden) this frame.
+      // A plain focus straight onto the canvas region, the target ⌘Z needs after a Trash.
       host?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
     });
   }, []);
