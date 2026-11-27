@@ -63,7 +63,6 @@ export const queryKeys = {
   bots: ["bots"] as const,
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
-  botSessionState: (id: string | undefined) => ["bot-session-state", id ?? "none"] as const,
   /** Every Bot's live summary (the sidebar rows); `botLiveSummary(id)` is one Bot's. */
   botLiveSummaries: ["bot-live-summary"] as const,
   botLiveSummary: (id: string) => ["bot-live-summary", id] as const,
