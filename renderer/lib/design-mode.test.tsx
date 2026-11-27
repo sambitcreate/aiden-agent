@@ -15,6 +15,7 @@ import {
 } from "./design-mode";
 import { queryKeys } from "./queries";
 import type { Chat, ChatMeta, Workspace } from "./types";
+import { createTestQueryClient } from "./test-harness";
 
 const ON = { designMode: true };
 const OFF = { designMode: false };
@@ -43,7 +44,6 @@ beforeEach(() => {
     return server;
   };
   installBotTestIpc({
-    "shortcut:get": () => null,
     "workspaces:list": () => [WORKSPACE],
     "chats:get": () => ({
       chat: server,
@@ -53,9 +53,7 @@ beforeEach(() => {
     }),
     "chats:setDesignMode": (id, enabled) => saveDesignMode(id, enabled),
   });
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
   queryClient.setQueryData(queryKeys.chat("chat-1"), server);
   queryClient.setQueryData<ChatMeta[]>(queryKeys.chats, [server, chat({ id: "chat-2", title: "Pricing" })]);
   queryClient.setQueryData(queryKeys.workspaces, [WORKSPACE]);

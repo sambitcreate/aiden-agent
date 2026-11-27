@@ -8,6 +8,7 @@ import { Composer } from "./composer";
 import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import type { Chat, Workspace } from "../lib/types";
+import { TEST_WORKSPACE, createTestQueryClient } from "../lib/test-harness";
 
 // On-device dictation with a model that keeps up shows the words in the draft
 // as the user speaks, where the dictation will land, then swaps in the final
@@ -18,14 +19,6 @@ let finishTranscription: (text: string) => void = () => {};
 let sent: string[] = [];
 let forks: string[] = [];
 
-const WORKSPACE: Workspace = {
-  id: "ws-1",
-  name: "app",
-  folderPath: "/tmp/app",
-  permission: "full",
-  createdAt: 1,
-  updatedAt: 1,
-};
 const ANSWERED = {
   id: "answered-dictation", title: "Release", createdAt: 1, updatedAt: 2,
   messages: [
@@ -73,9 +66,6 @@ beforeEach(() => {
   sent = [];
   forks = [];
   calls = installBotTestIpc({
-    "settings:get": () => null,
-    "shortcut:get": () => null,
-    "app:renderer-ready": () => null,
     "voice:resolveProvider": () => ({ kind: "ready", provider: "local", modelId: "parakeet-v3-metal", automatic: true }),
     "localVoice:warm": () => undefined,
     "voice:localLiveStart": () => ({ sessionId: "live-1" }),
@@ -98,9 +88,7 @@ beforeEach(() => {
     getMediaAccessStatus: async () => "granted",
     askForMediaAccess: async () => true,
   };
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
 });
 
 afterEach(() => {
@@ -118,7 +106,7 @@ function Harness({ sessionChat = DRAFT }: { sessionChat?: Chat }) {
             hasMessages={sessionChat.messages.length > 0}
             chatId={sessionChat.id}
             sessionChat={sessionChat}
-            workspace={WORKSPACE}
+            workspace={TEST_WORKSPACE}
             onRenameChat={() => undefined}
             onSend={async (text) => {
               sent.push(text);

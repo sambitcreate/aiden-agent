@@ -23,6 +23,7 @@ import {
   type GrabbedElementContextV1,
 } from "../shared/browser-element-grab";
 import type { Attachment, Chat, Workspace } from "../lib/types";
+import { createTestQueryClient } from "../lib/test-harness";
 
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -99,18 +100,13 @@ beforeEach(() => {
     "pullRequests:pending": () => [],
     "workspaces:repositoryIdentity": () => null,
     "workspaces:files": () => ({ entries: [], truncated: false, skippedDirectories: 0 }),
-    "settings:get": () => null,
-    "shortcut:get": () => null,
-    "app:renderer-ready": () => null,
     "skills:discover": () => [],
     "providers:list": () => [],
     "live:state": () => ({ offered: false, sessionActive: false, needsSetup: false }),
     "followThrough:list": () => ({ checks: [], pullRequests: [] }),
     "design:mode:get": () => null,
   });
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
 });
 
 afterEach(() => {

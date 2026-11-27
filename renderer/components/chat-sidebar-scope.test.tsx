@@ -43,8 +43,6 @@ beforeEach(() => {
   installBotTestIpc({
     "workspaces:list": () => workspaces,
     "chats:list": () => chats,
-    "shortcut:get": () => null,
-    "settings:get": () => null,
     "browser:link-preference": () => "ask",
   });
 });

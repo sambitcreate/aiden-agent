@@ -8,6 +8,7 @@ import { Composer } from "./composer";
 import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import type { Chat, GitInfo, Workspace } from "../lib/types";
+import { TEST_WORKSPACE, createTestQueryClient, settle } from "../lib/test-harness";
 
 // The real Composer and its context bar, with IPC faked. Boolean oracles
 // throughout: a failing assert on a happy-dom node would inspect the whole DOM.
@@ -17,15 +18,6 @@ let calls: BotTestIpcCall[];
 let linkedPullRequests: unknown[];
 let repositoryKey: string;
 let branchesUncommitted: number;
-
-const WORKSPACE: Workspace = {
-  id: "ws-1",
-  name: "app",
-  folderPath: "/tmp/app",
-  permission: "full",
-  createdAt: 1,
-  updatedAt: 1,
-};
 
 const CLEAN_REPO: GitInfo = { isRepo: true, branch: "main", uncommitted: 0, hasRemote: true };
 
@@ -53,13 +45,8 @@ beforeEach(() => {
       uncommitted: branchesUncommitted,
     }),
     "git:worktrees": () => [],
-    "settings:get": () => null,
-    "shortcut:get": () => null,
-    "app:renderer-ready": () => null,
   });
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
 });
 
 afterEach(() => {
@@ -86,7 +73,7 @@ function Harness({ chat, gitStatus, machinePicker }: HarnessProps) {
             hasMessages={chat.messages.length > 0}
             chatId={chat.id}
             sessionChat={chat}
-            workspace={WORKSPACE}
+            workspace={TEST_WORKSPACE}
             gitBranch={gitStatus?.isRepo ? gitStatus.branch : undefined}
             gitStatus={gitStatus}
             machinePicker={machinePicker}
@@ -144,12 +131,6 @@ const OPEN_PULL_REQUEST = {
   baseBranch: "main",
   checks: [],
 };
-
-async function settle() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-}
 
 test("a plain folder draft shows the workspace only: no Local label and no PR chip", async () => {
   await mount({ chat: DRAFT });

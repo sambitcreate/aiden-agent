@@ -13,6 +13,7 @@ import { useDeviceStream } from "./use-device-stream";
 import { DeviceViewer } from "../components/device-viewer";
 import { DeviceTabRenameInput } from "../components/device-workspace-tabs";
 import { TooltipProvider } from "../components/ui";
+import { createTestQueryClient } from "./test-harness";
 
 const clients: QueryClient[] = [];
 afterEach(() => {
@@ -26,8 +27,8 @@ function renderWindow(props: Parameters<typeof Window>[0] = {}) {
 
 function renderCommands(children: React.ReactNode, overrides?: KeybindingOverridesV1, applicationModal = false) {
   const snapshot = { overrides, effective: effectiveBindings(overrides), global: [] };
-  const calls = installBotTestIpc({ "shortcut:get": () => snapshot, "app:renderer-ready": () => null, "app:setMenuCommands": () => true });
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+  const calls = installBotTestIpc({ "shortcut:get": () => snapshot, "app:setMenuCommands": () => true });
+  const client = createTestQueryClient();
   clients.push(client);
   client.setQueryData(["shortcuts"], snapshot);
   const view = render(
@@ -246,8 +247,8 @@ for (const [binding, key, modifiers] of [
   test(`saved ${binding} runs its command before built-in focus navigation`, async () => {
     const overrides = applyKeybindingMutation(undefined, { commandId: "model.change", binding });
     const snapshot = { overrides, effective: effectiveBindings(overrides), global: [] };
-    installBotTestIpc({ "shortcut:get": () => snapshot, "app:renderer-ready": () => null, "app:setMenuCommands": () => true });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+    installBotTestIpc({ "shortcut:get": () => snapshot, "app:setMenuCommands": () => true });
+    const client = createTestQueryClient();
     client.setQueryData(["shortcuts"], snapshot);
     let opened = 0;
     function Command() {

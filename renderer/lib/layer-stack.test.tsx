@@ -222,7 +222,7 @@ test("the compact sidebar leaves Tab to a dialog that opened before it", () => {
   Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get: () => document.body });
   try {
     const shortcuts = { overrides: undefined, effective: effectiveBindings(undefined), global: [] };
-    installBotTestIpc({ "shortcut:get": () => shortcuts, "app:renderer-ready": () => null, "app:setMenuCommands": () => true });
+    installBotTestIpc({ "shortcut:get": () => shortcuts, "app:setMenuCommands": () => true });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     client.setQueryData(["shortcuts"], shortcuts);
     render(

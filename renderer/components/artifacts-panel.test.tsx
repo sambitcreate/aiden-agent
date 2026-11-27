@@ -702,7 +702,7 @@ test("a list from another workspace is never shown for this one", () => {
 });
 
 test("the launcher offers Artifacts only when told the workspace's list is ready", () => {
-  installBotTestIpc({ "settings:get": () => null });
+  installBotTestIpc();
   const client = createBotTestQueryClient();
   const launcher = (artifacts: boolean) => (
     <QueryClientProvider client={client}>
@@ -1004,8 +1004,6 @@ function renderWiredPanel(chat: { chatId: string; workspaceId: string }) {
 
 test("in the real panel, an empty workspace's Artifacts tab drafts New page into this workspace's chat", async () => {
   installBotTestIpc({
-    "settings:get": () => null,
-    "shortcut:get": () => null,
     "browser:link-preference": () => "ask",
     "workspaces:list": () => [WORKSPACE],
     "workspaces:artifacts:list": () => [],

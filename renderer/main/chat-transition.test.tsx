@@ -85,10 +85,7 @@ async function mountRoutedChatPane(
     "pullRequests:current": () => null,
     "remote:getPendingApproval": () => null,
     "remote:getPendingQuestion": () => null,
-    "settings:get": () => null,
-    "shortcut:get": () => null,
     "tts:status": () => null,
-    "app:renderer-ready": () => null,
     ...handlers,
   });
 

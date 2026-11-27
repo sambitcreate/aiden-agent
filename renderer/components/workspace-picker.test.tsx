@@ -12,6 +12,7 @@ import type { Workspace } from "../lib/types";
 import { workspaceCloneId, type WorkspacePathInspection } from "../shared/workspace-intake";
 import { queryKeys } from "../lib/queries";
 import { deferred } from "../../main/shared/async-test-support.js";
+import { createTestQueryClient } from "../lib/test-harness";
 
 // The real picker with IPC faked at the preload bridge. Boolean and string
 // oracles throughout: a failing assert on a happy-dom node would print the DOM.
@@ -57,9 +58,7 @@ beforeEach(() => {
   };
   // Tests add channels to `handlers` after install; the fake reads it per call.
   calls = installBotTestIpc(handlers);
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  queryClient = createTestQueryClient();
 });
 
 afterEach(() => {

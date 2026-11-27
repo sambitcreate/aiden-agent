@@ -268,7 +268,7 @@ test("unmounting mid-drag ends the drag and restores the cursor", () => {
 
 test("the sidebar divider drags and saves its width, and Enter hides the sidebar and focuses its toggle", async () => {
   const shortcuts = { overrides: undefined, effective: effectiveBindings(undefined), global: [] };
-  installBotTestIpc({ "shortcut:get": () => shortcuts, "app:renderer-ready": () => null, "app:setMenuCommands": () => true });
+  installBotTestIpc({ "shortcut:get": () => shortcuts, "app:setMenuCommands": () => true });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData(["shortcuts"], shortcuts);
   render(

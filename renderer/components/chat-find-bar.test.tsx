@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { ChatFindBar, useChatFind } from "./chat-find-bar";
 import { ScrollArea } from "./ui";
 import { chatFindStatus, findChatMatches } from "../lib/chat-find";
 import { CommandSystemProvider, useCommandSystem } from "../lib/command-system";
 import type { CommandId } from "../shared/keybindings";
+import { createTestQueryClient } from "../lib/test-harness";
 
 afterEach(cleanup);
 
@@ -158,14 +159,8 @@ test("Esc closes the bar and gives focus back to what had it", async () => {
 });
 
 test("⌘F's bar closes on leaving the chat and stays closed on coming back", async () => {
-  installBotTestIpc({
-    "settings:get": () => null,
-    "shortcut:get": () => null,
-    "app:renderer-ready": () => null,
-  });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
-  });
+  installBotTestIpc();
+  const queryClient = createTestQueryClient();
   let run: (commandId: CommandId) => boolean = () => false;
   function Pane({ chatId }: { chatId: string }) {
     run = useCommandSystem().execute;
