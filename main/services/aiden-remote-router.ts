@@ -1,4 +1,5 @@
 import { parseBotRoutineModelDirectory, type BotRoutineModelDirectory } from "../../renderer/shared/bot-routine-model-directory.js";
+import { isRecord as isPlainRecord } from "../shared/guards.js";
 import { isChatAudience } from "./chat-orchestration/audience.js";
 import { parseBotExecutionResumeStatus, type BotExecutionResumeStatus } from "../../renderer/shared/bot-execution-resume.js";
 import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, parseBotRoutineModelSave } from "../../renderer/shared/bot-routine-models.js";
@@ -2104,10 +2105,6 @@ function holdsBotMessaging(device: AidenRemoteRouterAuthenticatedDevice, depende
 /** Revision 39: schedule cards ride on stream approvals and phone run approvals. */
 function scheduleCardsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return Boolean(dependencies.streams || dependencies.hostRuns);
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Revision 61: typed cards ride on stream approvals, phone run approvals and Bot approvals. */

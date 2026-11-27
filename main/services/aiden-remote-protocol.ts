@@ -1,4 +1,5 @@
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
+import { hasOwn, isRecord } from "../shared/guards.js";
 import { BOT_STARTER_INSTRUCTIONS } from "../../renderer/shared/bot-presets.js";
 import {
   AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES,
@@ -3054,10 +3055,6 @@ function assertNoPrivateSummaryProjectionFields(value: unknown, label: string): 
   visit(value, []);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function isValidJsonString(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const codeUnit = value.charCodeAt(index);
@@ -3347,10 +3344,6 @@ const AIDEN_REMOTE_BOT_AVATAR_SHAPES = [
   "wisp", "orb", "drop", "hex", "cloud", "peak", "squircle", "capsule",
 ] as const;
 const AIDEN_REMOTE_BOT_AVATAR_COLORS = AIDEN_REMOTE_BOT_AVATAR_COLOR_VALUES;
-
-function hasOwn(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
 
 function boundedText(
   value: unknown,
