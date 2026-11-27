@@ -33,6 +33,40 @@ extension View {
     func aidenPrefersToolbarItems() -> some View {
         modifier(AidenPrefersToolbarItems())
     }
+
+    func aidenCatchUpNextToolbar(
+        onNext: (() -> Void)?,
+        holdsAttachments: Binding<Bool>,
+        isConfirmingNext: Binding<Bool>
+    ) -> some View {
+        toolbar {
+            if let onNext {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Next") {
+                        if holdsAttachments.wrappedValue {
+                            isConfirmingNext.wrappedValue = true
+                        } else {
+                            onNext()
+                        }
+                    }
+                    .accessibilityHint("Opens the next chat that needs you")
+                    .confirmationDialog(
+                        "Discard attachments?",
+                        isPresented: isConfirmingNext,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Discard attachments", role: .destructive, action: onNext)
+                        Button("Stay", role: .cancel) {}
+                    } message: {
+                        Text("They aren’t kept when you move to the next chat. Your message text is saved.")
+                    }
+                }
+            }
+        }
+        .onPreferenceChange(AidenChatHoldsAttachmentsKey.self) { holds in
+            holdsAttachments.wrappedValue = holds
+        }
+    }
 }
 
 private struct AidenPrefersToolbarItems: ViewModifier {
@@ -893,29 +927,11 @@ private struct AidenChatRouteView: View {
             }
         }
         .aidenConversationTabBar()
-        .toolbar {
-            if let onNext {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Next") {
-                        if holdsAttachments { isConfirmingNext = true } else { onNext() }
-                    }
-                    .accessibilityHint("Opens the next chat that needs you")
-                    .confirmationDialog(
-                        "Discard attachments?",
-                        isPresented: $isConfirmingNext,
-                        titleVisibility: .visible
-                    ) {
-                        Button("Discard attachments", role: .destructive, action: onNext)
-                        Button("Stay", role: .cancel) {}
-                    } message: {
-                        Text("They aren’t kept when you move to the next chat. Your message text is saved.")
-                    }
-                }
-            }
-        }
-        .onPreferenceChange(AidenChatHoldsAttachmentsKey.self) { holds in
-            holdsAttachments = holds
-        }
+        .aidenCatchUpNextToolbar(
+            onNext: onNext,
+            holdsAttachments: $holdsAttachments,
+            isConfirmingNext: $isConfirmingNext
+        )
         .onChange(of: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState, initial: true) {
             model.startLoading(coordinator: coordinator)
         }
