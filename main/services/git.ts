@@ -3149,28 +3149,38 @@ export class GitService {
     return path.isAbsolute(value) ? value : path.resolve(repo.cwd, value);
   }
 
-  private async commitStateBlocker(
+  private async inProgressOperation(
     repo: GitRepository,
+    action: "committing" | "pushing",
     signal?: AbortSignal,
   ): Promise<string | undefined> {
     const inProgress = [
-      ["MERGE_HEAD", "Finish or abort the merge before committing from Aiden."],
-      ["CHERRY_PICK_HEAD", "Finish or abort the cherry-pick before committing from Aiden."],
-      ["REVERT_HEAD", "Finish or abort the revert before committing from Aiden."],
-      ["rebase-merge", "Finish or abort the rebase before committing from Aiden."],
-      ["rebase-apply", "Finish or abort the rebase before committing from Aiden."],
+      ["MERGE_HEAD", "merge"],
+      ["CHERRY_PICK_HEAD", "cherry-pick"],
+      ["REVERT_HEAD", "revert"],
+      ["rebase-merge", "rebase"],
+      ["rebase-apply", "rebase"],
     ] as const;
-    for (const [gitPath, reason] of inProgress) {
+    for (const [gitPath, operation] of inProgress) {
       const resolvedPath = await this.repositoryGitPath(repo, gitPath, signal);
       try {
         await fs.access(resolvedPath);
-        return reason;
+        return `Finish or abort the ${operation} before ${action} from Aiden.`;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
           return "Aiden could not verify whether another Git operation is in progress.";
         }
       }
     }
+    return undefined;
+  }
+
+  private async commitStateBlocker(
+    repo: GitRepository,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const blocker = await this.inProgressOperation(repo, "committing", signal);
+    if (blocker) return blocker;
     const sharedIndex = await this.run(repo.cwd, ["rev-parse", "--shared-index-path"], {
       allowExitCodes: [128],
       signal,
@@ -3723,25 +3733,7 @@ export class GitService {
     repo: GitRepository,
     signal?: AbortSignal,
   ): Promise<string | undefined> {
-    const inProgress = [
-      ["MERGE_HEAD", "Finish or abort the merge before pushing from Aiden."],
-      ["CHERRY_PICK_HEAD", "Finish or abort the cherry-pick before pushing from Aiden."],
-      ["REVERT_HEAD", "Finish or abort the revert before pushing from Aiden."],
-      ["rebase-merge", "Finish or abort the rebase before pushing from Aiden."],
-      ["rebase-apply", "Finish or abort the rebase before pushing from Aiden."],
-    ] as const;
-    for (const [gitPath, reason] of inProgress) {
-      const resolvedPath = await this.repositoryGitPath(repo, gitPath, signal);
-      try {
-        await fs.access(resolvedPath);
-        return reason;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          return "Aiden could not verify whether another Git operation is in progress.";
-        }
-      }
-    }
-    return undefined;
+    return this.inProgressOperation(repo, "pushing", signal);
   }
 
   private async cohesivePushHead(
