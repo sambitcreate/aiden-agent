@@ -115,7 +115,7 @@ export type DesignFrame = {
   printMode?: DesignPrintMode;
   /** file and artifact: the PDF's paper (Letter when left out). */
   paper?: DesignPaper;
-  /** file, artifact and artboard: a layout guide drawn over it. */
+  /** file, artifact, artboard and app: a layout guide drawn over it. */
   guide?: DesignGuide;
   /** file and artifact: drawn in dark mode (`data-theme="dark"` and a dark color scheme on the page). */
   dark?: true;
@@ -151,7 +151,7 @@ export function isDesignPrintable(kind: DesignFrameKind): boolean {
   return kind === "file" || kind === "artifact";
 }
 
-/** Kinds a layout guide can be drawn over: pages, artifacts and artboards. */
+/** Kinds a layout guide can be drawn over: pages, artifacts, artboards and app frames. */
 export function canDesignGuide(kind: DesignFrameKind): boolean {
   return kind === "file" || kind === "artifact" || kind === "frame" || kind === "app";
 }

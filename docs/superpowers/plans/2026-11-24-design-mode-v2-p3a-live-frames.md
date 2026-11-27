@@ -1390,16 +1390,48 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
       - A `setTimeout(0)` or rAF restore lost 1 to 4 of 20.
       - `--enable-blink-features=BlockingFocusWithoutUserActivation` with `allow="focus-without-user-activation 'none'"` on the iframe lost 0 of 20. Without the switch, the `allow` token does nothing.
       - Probe 8 and the first K1 run used Electron's `sendInputEvent`. It delivers only to the main frame's widget, for keys and for mouse (a click on an app frame never reaches its page), so it couldn't show this.
-      - The K1 test is `live.fixme` with the real routing. Choosing between the Blink switch (app-wide), a timer guard that still leaks, or a documented limit is a decision for the owner.
+      - The K1 test was `live.fixme` with the real routing. Choosing between the Blink switch (app-wide), a timer guard that still leaks, or a documented limit was a decision for the owner, made in deviation 18.
     - **S1/D1 escalated.** The main window's CSP `frame-src` refuses a navigation or redirect out of an app frame before `will-frame-navigate` or `will-redirect` runs.
       - The dev log shows `ERR_BLOCKED_BY_CSP` with `isMainFrame: false` for `/go-out` → `https://example.com/` and for `mailto:`.
       - The frame lands on Chromium's blocked page. There's no "*host* is outside the app" toast, no Open in browser and no blocked count, but nothing leaves Aiden.
-      - The S1 test is `live.fixme`. A fix (for example, answering `did-fail-provisional-load` for app frames with the refusal and reloading the last in-app URL) needs a decision. `docs/design-mode.md` states the current behaviour.
-    - The `design-live-open-in-browser` screenshot waits for S1.
+      - The S1 test was `live.fixme`. A fix (for example, answering `did-fail-provisional-load` for app frames with the refusal and reloading the last in-app URL) needed a decision, made in deviation 18.
+    - The `design-live-open-in-browser` screenshot waited for S1.
+
+18. **The K1 and S1 decisions, and review-p3a-2 (2026-11-27).**
+    - **K1: the Blink switch, with the guard kept.**
+      - `main/index.ts` appends `BlockingFocusWithoutUserActivation` to `--enable-blink-features` at startup, before ready, only while `AIDEN_EXPERIMENTAL_DESIGN_LIVE` is on (`app-frame-switches.ts`). It keeps any features already named.
+      - App iframes deny `focus-without-user-activation` in their `allow` list, so a page's own `focus()` does nothing until the person activates the frame. The switch is process-wide, but it only affects frames whose policy denies the feature, and Aiden's own windows don't.
+      - Probe numbers: same-task restores lost 20 of 20 keys, a timer restore 1 to 4 of 20, and the switch with the `allow` token 0 of 20. Probe 8 had used `sendInputEvent`, which reaches only the main frame, so it couldn't see the leak.
+      - The S75 guard stays as defence in depth.
+      - The K1 E2E runs again (no `fixme`) and is the canary for a Chromium upgrade that drops the feature. It waits 5.5 s after its last check inside the frame before typing. Playwright runs frame checks as a user gesture (`callFunctionOn` with `userGesture`), and Chromium's transient activation lasts 5 s: an in-frame diagnostic showed `navigator.userActivation.isActive` true right after one.
+      - Aiden's own focus calls (composer autofocus, focus after IPC-driven opens) are in its own frames, which the policy doesn't touch. The flag-on v1 and chat-send suites cover them.
+    - **S1/D1: recover from the CSP block.**
+      - When an admitted app frame's load fails with `ERR_BLOCKED_BY_CSP` (`did-fail-provisional-load`, found with `webFrameMain.fromId`), main refuses it like a redirect: the blocked count goes up and the host is listed. An http or https target (`validatedURL`) gets the "*host* is outside the app" toast with Open in browser; `mailto:` and other schemes get no toast (D1). Main then sends `navigation-restore` to that mount.
+      - The renderer puts the iframe back on the last in-app path its page reported, or the frame's route.
+      - Open in browser still opens only on the person's press, in the browser panel. The probe's "`shell.openExternal` is never called" assertion holds.
+      - Other load failures, other frames and the flag off are left alone.
+      - The S1 E2E runs again and takes the `design-live-open-in-browser` screenshots.
+    - **review-p3a-2.** Gemini's second review (`3e1311fc6..b1f9592de`) confirmed 11 of the first review's fixes and found M1–M4 and m1–m6. All ten were verified, and each was fixed test-first:
+      - M1: `frameIsApp` fails closed when the ancestor walk ends before a root (more than 64 frames), as the registry's walk does.
+      - M2: a frame whose app stopped while it was live forgets the iframe it showed, so leaving the live set can't remount it with a used token.
+      - M3: entering holds only for the page on screen when the person entered. If that page goes (the app stopped, restarted or moved), or the frame was entered with no page, the frame is left, and the next page mounts inert. Double-click enters only a live, framed page. In Present, stepping and a click on the canvas leave an entered frame; Open full window's single frame stays entered.
+      - M4: a picture that falls due after the page has gone is dropped.
+      - m1: a new mount's blocked label doesn't carry the last mount's dialogs.
+      - m2: the header's status row gives way before the actions, so a quarter-scale frame keeps Dark and Download in reach (checked in the S1 E2E).
+      - m3: the focus guard is held only while a frame shows a page, and a released guard ignores a second look it had queued.
+      - m4: a Dark press before the page has loaded reaches it at load.
+      - m5: app frames draw their layout guide.
+      - m6: double-clicking the blocked or error label doesn't enter the frame.
 
 ### Build status (2026-11-27)
 
-Built: Tasks 0–15. Task 11 was unblocked by the S75 decision (deviation 15), and Task 14's live-frames spec runs (deviation 17). **Escalated:** K1 (a page's `focus()` loop still takes real keys) and S1/D1 (a redirect or `mailto:` out lands on a blocked page); both E2E tests are `fixme`. **Open:** Task 5's frameless audit. The allowlist is empty, and it is checked against real traffic once live frames can load.
+Built: Tasks 0–15. Task 11 was unblocked by the S75 decision (deviation 15), and Task 14's live-frames spec runs (deviation 17). K1 and S1/D1 were decided and built, and review-p3a-2's findings are fixed (deviation 18). **Open:** Task 5's frameless audit. The allowlist is empty, and it is checked against real traffic once live frames can load.
+
+E2E in the Cua Space after the K1 and S1 decisions and review-p3a-2 (2026-11-27, Space `aiden-p3a-3`, built first):
+- `design-live-frames.spec.ts`: 4 passed, K1 and S1 included, twice (once in the combined run, once alone for the screenshots).
+- **Flag off**, the six suites: 30 passed.
+- **Flag on** (`AIDEN_E2E_DESIGN_LIVE_ALL=1`), the four v1 and Live suites with the `chat-message-queue` chat-send smoke run: 37 passed.
+- No flakes, no retries.
 
 E2E in the Cua Space after Task 11 and the review fixes (2026-11-27, head `cd19cc0fc`):
 - `design-live-frames.spec.ts`: 2 passed, 2 skipped (K1, S1), with no retries needed on the final run.
