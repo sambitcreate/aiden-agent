@@ -1507,6 +1507,11 @@ export function createPortableConfigStores(
     }
   }
 
+  async function deferMigration(): Promise<false> {
+    await ensureReadme();
+    return false;
+  }
+
   async function runMigration(): Promise<boolean> {
     const legacyPath = await local.path();
     const archivePath = `${legacyPath}${LEGACY_CONFIG_ARCHIVE_SUFFIX}`;
@@ -1515,8 +1520,7 @@ export function createPortableConfigStores(
     // below before the file is slimmed.
     const loaded = (await local.load()) as LocalConfigShape & LegacyConfigShape;
     if ((await local.loadedFromCorruptFile()) || (await local.loadedFromUnsafeFile())) {
-      await ensureReadme();
-      return false;
+      return deferMigration();
     }
     const loadedLegacyContents = await local.loadedDiskContents();
     if (typeof loaded.aidenDirMigratedAt === "number") return true;
@@ -1525,59 +1529,39 @@ export function createPortableConfigStores(
     const portablePath = await portable.path();
     const portableExists = await exists(portablePath);
     const loadedPortable = portableExists ? await portable.load() : {};
-    if (portableExists && (await portable.loadedFromCorruptFile())) {
-      await ensureReadme();
-      return false;
-    }
-    if (portableExists && !isRecord(loadedPortable)) {
-      await ensureReadme();
-      return false;
-    }
+    if (portableExists && (await portable.loadedFromCorruptFile())) return deferMigration();
+    if (portableExists && !isRecord(loadedPortable)) return deferMigration();
     const existingPortable = loadedPortable as Partial<PortableConfigShape>;
     const has = (key: string) => Object.prototype.hasOwnProperty.call(existingPortable, key);
     const existingProviders = existingPortable.providers;
     const validExistingProviders = isPortableProviderList(existingProviders)
       ? existingProviders
       : undefined;
-    if (has("providers") && !validExistingProviders) {
-      await ensureReadme();
-      return false;
-    }
+    if (has("providers") && !validExistingProviders) return deferMigration();
     const existingAliases = existingPortable.providerIdAliases;
     const safeExistingAliases = isProviderAliasMap(existingAliases) ? existingAliases : undefined;
-    if (has("providerIdAliases") && !safeExistingAliases) {
-      await ensureReadme();
-      return false;
-    }
+    if (has("providerIdAliases") && !safeExistingAliases) return deferMigration();
     if (
       safeExistingAliases &&
       validExistingProviders &&
       !providerAliasSourcesAreInactive(safeExistingAliases, validExistingProviders)
     ) {
-      await ensureReadme();
-      return false;
+      return deferMigration();
     }
     const existingMcpServers = withoutRetiredMcpServers(existingPortable.mcpServers);
     const safeExistingMcpServers = isMcpServerList(existingMcpServers)
       ? existingMcpServers
       : undefined;
-    if (has("mcpServers") && !safeExistingMcpServers) {
-      await ensureReadme();
-      return false;
-    }
+    if (has("mcpServers") && !safeExistingMcpServers) return deferMigration();
     const safeExistingSkills = isSkillList(existingPortable.skills)
       ? existingPortable.skills
       : undefined;
-    if (has("skills") && !safeExistingSkills) {
-      await ensureReadme();
-      return false;
-    }
+    if (has("skills") && !safeExistingSkills) return deferMigration();
 
     // Do not archive a connection string containing embedded credentials or
     // URL-only state that the portable schema intentionally forbids.
     if (Array.isArray(legacy.providers) && legacy.providers.some(hasSensitiveProviderUrl)) {
-      await ensureReadme();
-      return false;
+      return deferMigration();
     }
     const structurallyValidLegacyProviders = Array.isArray(legacy.providers)
       ? legacy.providers.flatMap((candidate) => {
@@ -1610,8 +1594,7 @@ export function createPortableConfigStores(
       safeExistingAliases &&
       !providerAliasSourcesAreInactive(safeExistingAliases, portableProviders)
     ) {
-      await ensureReadme();
-      return false;
+      return deferMigration();
     }
     const recoveredMcpServers = normalizeLegacyMcpServers(legacy.mcpServers);
     const recoveredSkills = normalizeLegacySkills(legacy.skills);
