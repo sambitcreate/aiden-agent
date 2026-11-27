@@ -1641,7 +1641,8 @@
         "renderer/bot-bubbles/overlay-transition.test.tsx",
         "renderer/main/bots/bot-bubble-card.test.tsx",
         "renderer/main/bots/bot-approvals.test.tsx",
-        "renderer/components/settings/bot-bubbles-settings.test.tsx"
+        "renderer/components/settings/bot-bubbles-settings.test.tsx",
+        "renderer/design/app-viewport-ruler.test.tsx"
       ],
       "preserved": [
         "ios-release-policy",

@@ -223,3 +223,60 @@ main:has(.design-presenting) {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
+
+/* 3c (S91): a live app frame's size while it is resized, and the page's own
+   width breakpoints along the edge that stays put. Screen space, no motion. */
+.design-viewport-ruler {
+  position: relative;
+  min-height: 22px;
+  pointer-events: none;
+  font-size: var(--text-small);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.design-viewport-readout {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: var(--radius-menu);
+  background: var(--surface-popover);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.design-viewport-ruler[data-side="left"] .design-viewport-readout {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+.design-viewport-ruler[data-side="left"],
+.design-viewport-ruler[data-side="right"] {
+  height: 46px;
+}
+
+.design-viewport-track {
+  position: absolute;
+  top: 26px;
+  left: 0;
+  right: 0;
+  height: 20px;
+}
+
+.design-viewport-tick {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 8px;
+  background: var(--text-tertiary);
+}
+
+.design-viewport-tick-label {
+  position: absolute;
+  top: 10px;
+  left: 0;
+  transform: translateX(-50%);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}

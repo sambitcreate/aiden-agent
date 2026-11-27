@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { Toaster } from "../components/ui";
+import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
@@ -67,11 +68,18 @@ function measureCanvasAt1000x800() {
   };
 }
 
-async function mount() {
-  render(
+async function mount(options: { designLive?: boolean } = {}) {
+  const tree = (
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <DesignCanvasRegion chatId="chat-1" workspaceId="workspace-1" width={1000} placement="split" hidden={false} />
-    </QueryClientProvider>,
+    </QueryClientProvider>
+  );
+  render(
+    options.designLive === undefined ? (
+      tree
+    ) : (
+      <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, designMode: true, designLive: options.designLive }}>{tree}</AppCapabilitiesProvider>
+    ),
   );
   // The landmark shows while the canvas loads; wait until the loaded canvas replaces the skeleton.
   await waitFor(() => assert.equal(screen.queryByRole("status", { name: "Loading canvas" }) === null, true), SAVE_WAIT);
@@ -954,4 +962,94 @@ test("while the canvas can't be saved, the Code tab says so instead of reading a
   } finally {
     window.localStorage.removeItem("aiden.design.sidePanel");
   }
+});
+
+// ── 3c: live app frames' edges and corners (S89) ──
+
+const APP_SNAPSHOT = {
+  workspaceId: "workspace-1",
+  target: "single",
+  apps: [{ workspaceId: "workspace-1", appRoot: ".", source: "started", frameworkLabel: "Vite", phase: "stopped", since: 1, revision: 1 }],
+  candidates: [],
+  chosen: [],
+};
+
+function liveAppFrame(overrides: Partial<DesignFrame> = {}): DesignFrame {
+  return {
+    id: "app-1",
+    kind: "app",
+    title: "Pricing",
+    pageId: "page-1",
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 436,
+    createdBy: "aiden",
+    appRoot: ".",
+    route: "/pricing",
+    viewport: { width: 1280, height: 800 },
+    scale: 0.5,
+    ...overrides,
+  };
+}
+
+async function mountLiveApp(doc: DesignCanvas, extra: Record<string, (...args: unknown[]) => unknown> = {}) {
+  const ipc = setup(doc, { "designApp:status:get": () => APP_SNAPSHOT, ...extra });
+  const region = await mount({ designLive: true });
+  return { ...ipc, region };
+}
+
+const mouse = (type: string, target: EventTarget, at: { x: number; y: number } = { x: 10, y: 10 }) =>
+  act(() => {
+    target.dispatchEvent(new window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, view: window, clientX: at.x, clientY: at.y }));
+  });
+const ruler = () => document.querySelector<HTMLElement>(".design-viewport-ruler");
+const nextTask = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+
+async function selectedAppControls() {
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await waitFor(() => assert.ok(document.querySelector(".react-flow__resize-control.line.right")));
+  return (position: string) => document.querySelector<HTMLElement>(`.react-flow__resize-control.${position}`)!;
+}
+
+test("3c: a press on a resize control without a drag leaves no resize mode", async () => {
+  await mountLiveApp(canvasWith(liveAppFrame()));
+  const control = await selectedAppControls();
+  mouse("mousedown", control("line.right"));
+  assert.equal(ruler()?.dataset.side, "right", "the readout shows while the control is held");
+  mouse("mouseup", window);
+  // xyflow sends nothing for a press that never moved; the canvas clears the mode a task later.
+  await nextTask();
+  assert.equal(ruler(), null);
+});
+
+test("3c: a real drag clears its mode on the final change, not on a timer", async () => {
+  const { saved } = await mountLiveApp(canvasWith(liveAppFrame()));
+  const control = await selectedAppControls();
+  mouse("mousedown", control("line.right"), { x: 640, y: 200 });
+  mouse("mousemove", window, { x: 600, y: 200 });
+  mouse("mouseup", window, { x: 600, y: 200 });
+  assert.equal(ruler(), null, "cleared before any timer ran");
+  await waitFor(() => {
+    const app = saved()?.frames.find((frame) => frame.id === "app-1");
+    assert.ok(app);
+    assert.equal(app.scale, 0.5, "an edge keeps the scale");
+    assert.notEqual(app.viewport?.width, 1280, "and changes the viewport");
+  }, SAVE_WAIT);
+});
+
+test("3c: a new resize started before the timer fires keeps its mode", async () => {
+  await mountLiveApp(canvasWith(liveAppFrame()));
+  const control = await selectedAppControls();
+  mouse("mousedown", control("line.right"));
+  mouse("mouseup", window);
+  mouse("mousedown", control("line.left"));
+  await nextTask();
+  assert.equal(ruler()?.dataset.side, "left", "the first press's timer leaves the second resize alone");
+  mouse("mouseup", window);
+  await nextTask();
+  assert.equal(ruler(), null);
 });

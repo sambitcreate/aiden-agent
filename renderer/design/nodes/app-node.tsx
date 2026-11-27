@@ -38,6 +38,7 @@ import {
 } from "../../shared/design-app";
 import type { DesignNode } from "../canvas-adapter-core";
 import { APP_FRAME_ENTERED_ATTRIBUTE, holdAppFrameFocusGuard } from "../app-frame-focus-guard";
+import { AppViewportRulerToolbar } from "../app-viewport-ruler";
 import { useDesignAppsSnapshot } from "../design-app-chip";
 import { captureFrameSnapshot, designFrameSnapshots, useFrameSnapshot } from "../frame-snapshots";
 import { DESIGN_FRAME_HEADER_PX, useDesignNodeContext } from "./design-node-context";
@@ -822,10 +823,33 @@ export function AppFrame({
   );
 }
 
+/**
+ * The final size of a resize, said once politely when it ends (S91): nothing
+ * during the drag, and the region stays mounted so the words are read.
+ */
+function useResizeAnnouncement(resizing: boolean, viewport: { width: number; height: number }): string {
+  const [said, setSaid] = React.useState("");
+  const [was, setWas] = React.useState(resizing);
+  if (was !== resizing) {
+    setWas(resizing);
+    setSaid(resizing ? "" : `Viewport ${viewport.width} by ${viewport.height}`);
+  }
+  return said;
+}
+
 export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
   const canvas = useDesignNodeContext();
   const { designLive } = useAppCapabilities();
   const { frame } = data;
+  const resize = designLive && canvas.activeResize?.frameId === id ? canvas.activeResize.side : null;
+  const viewport = frame.viewport ?? APP_DEFAULT_VIEWPORT;
+  const scale = frame.scale ?? APP_DEFAULT_SCALE;
+  const announcement = useResizeAnnouncement(resize !== null, viewport);
+  const ruler = React.useCallback(
+    (breakpoints: readonly number[]) =>
+      resize === null ? null : <AppViewportRulerToolbar nodeId={id} side={resize} viewport={viewport} scale={scale} breakpoints={breakpoints} />,
+    [id, resize, viewport, scale],
+  );
   return (
     <>
       {designLive ? (
@@ -834,7 +858,7 @@ export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
           nodeId={id}
           selected={selected}
           minSize={designMinSize("app")}
-          scale={frame.scale ?? APP_DEFAULT_SCALE}
+          scale={scale}
           onStart={(mode) => canvas.resizeStart(id, mode)}
         />
       ) : (
@@ -851,7 +875,13 @@ export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
         onOpenInBrowser={canvas.openInBrowser}
         titleSlot={<FrameTitle frame={frame} />}
         actions={<FrameActions frame={frame} />}
+        ruler={designLive ? ruler : undefined}
       />
+      {designLive ? (
+        <span role="status" aria-live="polite" className="sr-only">
+          {announcement}
+        </span>
+      ) : null}
     </>
   );
 }

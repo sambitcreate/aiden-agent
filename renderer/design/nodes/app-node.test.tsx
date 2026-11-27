@@ -941,13 +941,23 @@ test("3b: a variant's label shows after the title in the frame's header", async 
 
 // ── 3c: edges reflow, corners scale (S89) ──
 
-function NodeHarness({ frame, designLive, resizeStart }: { frame: DesignFrame; designLive: boolean; resizeStart(id: string, mode: string): void }) {
+function NodeHarness({
+  frame,
+  designLive,
+  resizeStart = noop,
+  activeResize = null,
+}: {
+  frame: DesignFrame;
+  designLive: boolean;
+  resizeStart?(id: string, mode: string): void;
+  activeResize?: DesignNodeContextValue["activeResize"];
+}) {
   const props = { id: frame.id, data: { frame }, selected: true, type: "app" } as unknown as NodeProps<DesignNode>;
   return (
     <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, designMode: true, designLive }}>
       {/* xyflow's resizer starts only for a node its store knows. */}
       <ReactFlowProvider initialNodes={[{ id: frame.id, position: { x: frame.x, y: frame.y }, data: { frame }, width: frame.w, height: frame.h }]}>
-        <DesignNodeContext.Provider value={{ ...nodeContext(noop), resizeStart }}>
+        <DesignNodeContext.Provider value={{ ...nodeContext(noop), resizeStart, activeResize }}>
           <AppNode {...props} />
         </DesignNodeContext.Provider>
       </ReactFlowProvider>
@@ -1011,4 +1021,21 @@ test("3c: breakpoints from an earlier route are forgotten", async () => {
   assert.equal(screen.getByRole("status", { name: "Breakpoints" }).textContent, "640,768,1024");
   view.rerender(<Harness frame={{ ...frame, route: "/about" }} ruler={ruler} />);
   assert.equal(screen.getByRole("status", { name: "Breakpoints" }).textContent, "");
+});
+
+test("3c: the end of a resize announces the final size once", () => {
+  setup();
+  const frame = appFrame();
+  const view = render(<NodeHarness frame={frame} designLive />);
+  const said = () => document.querySelector('[aria-live="polite"]')!.textContent;
+  assert.equal(said(), "");
+  view.rerender(<NodeHarness frame={frame} designLive activeResize={{ frameId: frame.id, side: "right" }} />);
+  const dragged = { ...frame, viewport: { width: 1180, height: 800 }, w: 590 };
+  view.rerender(<NodeHarness frame={dragged} designLive activeResize={{ frameId: frame.id, side: "right" }} />);
+  assert.equal(said(), "", "nothing is said during the drag");
+  view.rerender(<NodeHarness frame={dragged} designLive activeResize={null} />);
+  assert.equal(said(), "Viewport 1180 by 800");
+  // Another frame's resize says nothing here.
+  view.rerender(<NodeHarness frame={dragged} designLive activeResize={{ frameId: "other", side: "right" }} />);
+  assert.equal(said(), "Viewport 1180 by 800");
 });
