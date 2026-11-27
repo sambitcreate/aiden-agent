@@ -761,12 +761,13 @@ export function reduceDesignCanvasSync(
         flushQueuedWhileSaving: false,
         debounceElapsedWhileSaving: false,
       };
-      if (state.lifecycle === "closing") {
-        return { state: finishClosedSession(dropped, effects), effects };
-      }
-      // Sealed: nothing here may save, fetch or undo into the workspace the chat left.
+      // Sealed either way: nothing here may save, fetch or undo into the
+      // workspace the chat left, and a flush waiting on this save hears that
+      // its edits were not kept. A closing canvas has already unsubscribed and
+      // is gone from the screen, so it only finishes.
       if (state.timer !== null) effects.push({ type: "cancel_timer" });
-      effects.push({ type: "unsubscribe" }, { type: "finish" }, { type: "moved", workspaceId: event.workspaceId });
+      if (state.lifecycle === "closing") effects.push({ type: "finish" });
+      else effects.push({ type: "unsubscribe" }, { type: "finish" }, { type: "moved", workspaceId: event.workspaceId });
       return {
         state: {
           ...dropped,
@@ -1030,10 +1031,12 @@ function createCanvasSync(
   };
 
   const dispatch = (event: DesignCanvasSyncEvent) => {
+    const wasClosing = state.lifecycle === "closing";
     const transition = reduceDesignCanvasSync(state, event);
     state = transition.state;
     reportGuard();
-    if (state.lifecycle !== "disposed") {
+    // A canvas sealed while closing is no longer on screen to show it.
+    if (state.lifecycle !== "disposed" && !(wasClosing && state.lifecycle === "moved")) {
       const nextView = selectDesignCanvasView(state);
       if (!viewsEqual(lastView, nextView)) {
         lastView = nextView;
