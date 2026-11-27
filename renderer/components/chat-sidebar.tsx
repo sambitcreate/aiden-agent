@@ -114,6 +114,7 @@ import { inboxTriageMenuItems } from "./sidebar/inbox-triage-menu";
 import { useInboxTriage, type InboxTriageRow } from "../lib/use-inbox-triage";
 import { inboxTriageOffer, settledInboxReads, withInboxReadsPending } from "../lib/inbox-triage";
 import { userFacingErrorMessage } from "../lib/ipc-error";
+import { environmentWorkBlockedReason } from "../lib/history-navigation";
 import { RemoteHostAdapter, remoteHostCapabilities } from "../lib/hosts/remote-host-adapter";
 import { isRevisionConflict, type HostChatCapability } from "../lib/hosts/host-chat-adapter";
 import { ChatRowContextGlyphs } from "./chat-row-context";
@@ -889,18 +890,15 @@ function WorkspaceChatSidebar({
   const workspaceActionBlocked =
     environmentPanel.editorState.saving || environmentPanel.gitOperationBusy;
   const workspaceSwitchBlocked = workspaceActionBlocked || environmentPanel.editorState.dirty;
-  const settingsBlockedReason = environmentPanel.gitOperationBusy
-    ? "Wait for the current Git operation to finish"
-    : environmentPanel.editorState.saving
-      ? "Wait for the open file to finish saving"
-      : environmentPanel.editorState.dirty
-        ? "Save or discard the open file's edits first"
-        : undefined;
-  const updateRestartBlockedReason = environmentPanel.gitOperationBusy
-    ? "Wait for the current Git operation to finish before restarting."
-    : environmentPanel.editorState.saving
-      ? "Wait for the open file to finish saving before restarting."
-      : undefined;
+  const settingsBlockedReason = environmentWorkBlockedReason({
+    gitBusy: environmentPanel.gitOperationBusy,
+    saving: environmentPanel.editorState.saving,
+    dirty: environmentPanel.editorState.dirty,
+  });
+  const updateRestartBlockedReason = environmentWorkBlockedReason(
+    { gitBusy: environmentPanel.gitOperationBusy, saving: environmentPanel.editorState.saving },
+    "restarting",
+  );
   const openChat = React.useCallback(
     async (chat: ChatMeta | null | undefined) => {
       if (!chat) return;
@@ -1214,16 +1212,16 @@ function WorkspaceChatSidebar({
   // Move to a workspace and open its latest chat, or an unsaved draft if empty.
   const enterWorkspace = React.useCallback(
     async (id: string, allowDirtyDiscard = false) => {
-      if (environmentPanel.gitOperationBusy) {
-        toast.info("Wait for the current Git operation to finish before switching workspaces.");
-        return false;
-      }
-      if (environmentPanel.editorState.saving) {
-        toast.info("Wait for the open file to finish saving before switching workspaces.");
-        return false;
-      }
-      if (environmentPanel.editorState.dirty && !allowDirtyDiscard) {
-        toast.info("Save or discard the open file's edits before switching workspaces.");
+      const blocked = environmentWorkBlockedReason(
+        {
+          gitBusy: environmentPanel.gitOperationBusy,
+          saving: environmentPanel.editorState.saving,
+          dirty: environmentPanel.editorState.dirty && !allowDirtyDiscard,
+        },
+        "switching workspaces",
+      );
+      if (blocked) {
+        toast.info(blocked);
         return false;
       }
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
@@ -1275,12 +1273,12 @@ function WorkspaceChatSidebar({
 
   const commitRemoveWorkspace = async () => {
     if (!removingWorkspace || removingWorkspaceBusy) return;
-    if (environmentPanel.gitOperationBusy) {
-      toast.info("Wait for the current Git operation to finish before removing this workspace.");
-      return;
-    }
-    if (environmentPanel.editorState.saving) {
-      toast.info("Wait for the open file to finish saving before removing this workspace.");
+    const blocked = environmentWorkBlockedReason(
+      { gitBusy: environmentPanel.gitOperationBusy, saving: environmentPanel.editorState.saving },
+      "removing this workspace",
+    );
+    if (blocked) {
+      toast.info(blocked);
       return;
     }
     const remaining = workspaces.filter((w) => w.id !== removingWorkspace.id);
@@ -1304,12 +1302,12 @@ function WorkspaceChatSidebar({
   const commitDeleteWorktree = async () => {
     const target = deletingWorktree;
     if (!target || deletingWorktreeBusy) return;
-    if (environmentPanel.gitOperationBusy) {
-      toast.info("Wait for the current Git operation to finish before deleting this worktree.");
-      return;
-    }
-    if (environmentPanel.editorState.saving) {
-      toast.info("Wait for the open file to finish saving before deleting this worktree.");
+    const blocked = environmentWorkBlockedReason(
+      { gitBusy: environmentPanel.gitOperationBusy, saving: environmentPanel.editorState.saving },
+      "deleting this worktree",
+    );
+    if (blocked) {
+      toast.info(blocked);
       return;
     }
     const remaining = workspaces.filter((workspace) => workspace.id !== target.id);
