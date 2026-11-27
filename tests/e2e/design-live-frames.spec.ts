@@ -371,7 +371,8 @@ live("a probe in an app frame reaches nothing outside localhost: each try fails 
     ]) {
       failed(name);
     }
-    expect(outcomes.getUserMedia).toBe("failed:NotAllowedError");
+    // Denied by the permission layer, or refused before it on a runner with no capture device.
+    expect(outcomes.getUserMedia).toMatch(/^failed:(NotAllowedError|NotFoundError)$/u);
     expect(outcomes.windowOpen, "window.open returns null").toBe("ok:true");
     expect(outcomes.confirm, "confirm returns at once").toBe("ok:false");
     expect(outcomes.notification).toBe("ok:denied");
