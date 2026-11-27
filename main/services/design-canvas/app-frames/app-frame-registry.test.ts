@@ -204,3 +204,17 @@ test("export contents are registered for their lifetime", () => {
   remove();
   assert.equal(s.registry.isExportContents(77), false);
 });
+
+test("an export window's request starts are stamped for its settle, and only while it is registered", () => {
+  const s = setup();
+  s.registry.noteExportRequest(77);
+  assert.equal(s.registry.lastExportRequest(77), undefined, "not an export window yet");
+  const remove = s.registry.addExportContents(77);
+  assert.equal(s.registry.lastExportRequest(77), undefined, "no request yet");
+  s.registry.noteExportRequest(77);
+  assert.equal(s.registry.lastExportRequest(77), 1_000);
+  s.registry.noteExportRequest(78);
+  assert.equal(s.registry.lastExportRequest(78), undefined);
+  remove();
+  assert.equal(s.registry.lastExportRequest(77), undefined, "forgotten with the window");
+});

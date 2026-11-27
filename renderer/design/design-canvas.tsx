@@ -135,6 +135,9 @@ const EXPORT_ERRORS = {
   unavailable: "This frame can't be downloaded.",
   missing: "This frame's file is gone, so it can't be downloaded.",
   failed: "The download couldn't be saved. Try again.",
+  // A live app frame's (design mode v2 Phase 3a, D18).
+  "app-not-running": "Start the app to download this frame.",
+  "live-off": "Live apps are off.",
 } as const;
 
 const PICK_ERRORS = {

@@ -354,6 +354,17 @@ test("an export window's requests are denied, and display and device requests fr
   assert.equal((s.permissions.state.device as unknown as (details: unknown) => boolean)({ origin: ORIGIN, deviceType: "hid" }), false);
 });
 
+test("a request an export window starts is stamped on the registry, so its export can wait for quiet", () => {
+  const s = setup();
+  const remove = s.network!.registry.addExportContents(42);
+  s.tick(250);
+  s.request({ url: `${ORIGIN}/src/main.tsx`, webContentsId: 42, resourceType: "script" });
+  assert.equal(s.network!.registry.lastExportRequest(42), 10_250);
+  s.request({ url: `${ORIGIN}/x`, webContentsId: 43, resourceType: "script" });
+  assert.equal(s.network!.registry.lastExportRequest(43), undefined, "another web contents isn't an export window");
+  remove();
+});
+
 test("HID, serial and USB choosers cancel for app context and pass for the main frame", () => {
   const s = setup();
   const app = s.admit();

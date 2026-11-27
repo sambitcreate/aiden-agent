@@ -2812,7 +2812,7 @@ export const designCanvasApi = {
     >("designCanvas:undoBakeTweaks", chatId, frameId, undoId),
   /** Saves one frame as a PNG, a PDF or its original file, through the save dialog. `theme` draws a dark artifact. */
   exportDesignFrame: (chatId: string, frameId: string, format: "png" | "pdf" | "source", theme?: unknown) =>
-    invoke<{ saved: true } | { canceled: true } | { error: "unavailable" | "missing" | "failed" }>(
+    invoke<{ saved: true } | { canceled: true } | { error: "unavailable" | "missing" | "failed" | "app-not-running" | "live-off" }>(
       "designCanvas:export",
       chatId,
       frameId,

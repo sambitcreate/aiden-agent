@@ -25,6 +25,7 @@ import {
   type DesignCanvasPlaceArtifactResult,
   type DesignCanvasSaveOptions,
   type DesignCanvasUpdated,
+  type DesignAppRenderRequest,
   type DesignFrameRenderRequest,
 } from "./design-canvas.js";
 
@@ -1315,12 +1316,25 @@ function appStatus(workspaceId: string, appRoot: string, phase: DesignAppStatus[
 
 async function mountFixture(
   t: TestContext,
-  options: { live?: boolean; apps?: DesignAppStatus[]; owners?: Record<string, { workspaceId: string; appRoot: string }>; cap?: number } = {},
+  options: {
+    live?: boolean;
+    apps?: DesignAppStatus[];
+    owners?: Record<string, { workspaceId: string; appRoot: string }>;
+    cap?: number;
+    saveFile?: (options: DesignCanvasSaveOptions) => string | null;
+    page?: DesignCanvas;
+  } = {},
 ) {
   const registry = new AppFrameRegistry({ mainContents: () => ({}), liveIds: () => new Set<number>(), cap: options.cap });
   const snapshots: string[] = [];
+  const appRenders: DesignAppRenderRequest[] = [];
   const result = await fixture(t, {
+    ...(options.saveFile ? { saveFile: options.saveFile } : {}),
     appFrames: {
+      renderApp: async (request) => {
+        appRenders.push(request);
+        return new TextEncoder().encode(`${request.format}:${request.url}`);
+      },
       enabled: () => options.live ?? true,
       registry: () => registry,
       apps: {
@@ -1338,8 +1352,8 @@ async function mountFixture(
       },
     },
   });
-  await result.invoke("designCanvas:save", "chat-1", appPage, 0);
-  return { ...result, registry, snapshots };
+  await result.invoke("designCanvas:save", "chat-1", options.page ?? appPage, 0);
+  return { ...result, registry, snapshots, appRenders };
 }
 
 const RUNNING = "http://127.0.0.1:5173";
@@ -1407,4 +1421,56 @@ test("appFrameMount with a full registry answers too-many-frames", async (t) => 
   });
   assert.equal(registry.expectPlacement({ frameId: "x", mountToken: MOUNT_TOKEN, expectedOrigin: RUNNING }), "too-many-frames");
   assert.deepEqual(await invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN }), { error: "too-many-frames" });
+});
+
+// ---- Export of live app frames (design mode v2 Phase 3a, D18, S73) ----------
+
+const WEB_OWNER = { [RUNNING]: { workspaceId: "workspace-1", appRoot: "web" } };
+
+test("an app frame's PNG is drawn from its running app at its viewport and scheme, then written where the person chose", async (t) => {
+  const darkPage: DesignCanvas = { ...appPage, frames: appPage.frames.map((frame) => (frame.id === "app-1" ? { ...frame, colorScheme: "dark" as const } : frame)) };
+  let target = "";
+  const s = await mountFixture(t, {
+    apps: [appStatus("workspace-1", "web", "running", RUNNING)],
+    owners: WEB_OWNER,
+    saveFile: () => target,
+    page: darkPage,
+  });
+  target = path.join(s.root, "pricing.png");
+  assert.deepEqual(await s.invoke("designCanvas:export", "chat-1", "app-1", "png"), { saved: true });
+  assert.deepEqual(s.appRenders, [{ url: `${RUNNING}/pricing`, origin: RUNNING, width: 1280, height: 800, format: "png", colorScheme: "dark" }]);
+  assert.equal(await fs.readFile(path.join(s.root, "pricing.png"), "utf8"), `png:${RUNNING}/pricing`);
+  assert.deepEqual(s.renders, [], "file and artifact rendering isn't used");
+  assert.equal(s.saveDialogs.length, 1);
+  target = path.join(s.root, "pricing.pdf");
+  assert.deepEqual(await s.invoke("designCanvas:export", "chat-1", "app-1", "pdf"), { saved: true });
+  assert.equal(s.appRenders[1]?.format, "pdf");
+  assert.equal(await fs.readFile(target, "utf8"), `pdf:${RUNNING}/pricing`);
+});
+
+test("an app frame whose app isn't running here answers app-not-running before any Save dialog", async (t) => {
+  const elsewhere = await mountFixture(t, {
+    apps: [appStatus("workspace-2", "web", "running", RUNNING)],
+    owners: { [RUNNING]: { workspaceId: "workspace-2", appRoot: "web" } },
+    saveFile: () => "/never",
+  });
+  assert.deepEqual(await elsewhere.invoke("designCanvas:export", "chat-1", "app-1", "png"), { error: "app-not-running" });
+  const stopped = await mountFixture(t, { apps: [appStatus("workspace-1", "web", "starting")], saveFile: () => "/never" });
+  assert.deepEqual(await stopped.invoke("designCanvas:export", "chat-1", "app-1", "pdf"), { error: "app-not-running" });
+  const lost = await mountFixture(t, { apps: [appStatus("workspace-1", "web", "running", RUNNING)], owners: {}, saveFile: () => "/never" });
+  assert.deepEqual(await lost.invoke("designCanvas:export", "chat-1", "app-1", "png"), { error: "app-not-running" });
+  for (const s of [elsewhere, stopped, lost]) {
+    assert.deepEqual(s.saveDialogs, [], "saveFile was never called");
+    assert.deepEqual(s.appRenders, []);
+  }
+});
+
+test("with live apps off an app frame answers live-off, and its source is unavailable either way", async (t) => {
+  const off = await mountFixture(t, { live: false, apps: [appStatus("workspace-1", "web", "running", RUNNING)], owners: WEB_OWNER, saveFile: () => "/never" });
+  assert.deepEqual(await off.invoke("designCanvas:export", "chat-1", "app-1", "png"), { error: "live-off" });
+  assert.deepEqual(off.saveDialogs, []);
+  const on = await mountFixture(t, { apps: [appStatus("workspace-1", "web", "running", RUNNING)], owners: WEB_OWNER, saveFile: () => "/never" });
+  assert.deepEqual(await on.invoke("designCanvas:export", "chat-1", "app-1", "source"), { error: "unavailable" });
+  assert.deepEqual(await on.invoke("designCanvas:source", "chat-1", "app-1"), { error: "unavailable" });
+  assert.deepEqual(on.saveDialogs, []);
 });

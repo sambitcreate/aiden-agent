@@ -224,6 +224,8 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
 
   removals.push(
     deps.webRequest.onBeforeRequest(SUBSCRIBER, (details) => {
+      // An export window settles once it has started nothing for a while (D18).
+      if (details.webContentsId !== undefined) registry.noteExportRequest(details.webContentsId);
       const { inMainWindow, frame } = locate(details as { webContentsId?: number; frame?: FrameLike | null });
       const decision = decideAppRequest(
         { url: details.url, frame, initiatorOrigin: details.initiatorOrigin, webContentsId: details.webContentsId, inMainWindow },

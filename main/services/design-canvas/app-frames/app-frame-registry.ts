@@ -49,6 +49,8 @@ export class AppFrameRegistry {
   private readonly members = new Map<number, { frameId: string; mountToken: string; origin: string }>();
   private readonly waiting = new Map<string, Placement>();
   private readonly exportContents = new Set<number>();
+  /** When each export window last started a request, for its settle (D18). */
+  private readonly exportActivity = new Map<number, number>();
   private readonly listeners = new Set<(event: DesignAppFrameEvent) => void>();
   private readonly admitListeners = new Set<(origin: string) => void>();
   private readonly pendingBlocked = new Map<number, { count: number; hosts: string[] }>();
@@ -213,11 +215,22 @@ export class AppFrameRegistry {
       if (removed) return;
       removed = true;
       this.exportContents.delete(webContentsId);
+      this.exportActivity.delete(webContentsId);
     };
   }
 
   isExportContents(webContentsId: number): boolean {
     return this.exportContents.has(webContentsId);
+  }
+
+  /** A request started in `webContentsId`; recorded only for a registered export window. */
+  noteExportRequest(webContentsId: number): void {
+    if (this.exportContents.has(webContentsId)) this.exportActivity.set(webContentsId, this.now());
+  }
+
+  /** When the export window last started a request, or undefined when none has. */
+  lastExportRequest(webContentsId: number): number | undefined {
+    return this.exportActivity.get(webContentsId);
   }
 
   /** A blocked request or navigation in app context; counted for its registered frame only. */

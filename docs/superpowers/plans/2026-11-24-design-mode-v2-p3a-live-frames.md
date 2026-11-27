@@ -1322,6 +1322,16 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
     - Two behaviours apply in both flag states, since neither touches a tool definition: the aspect-locked resize (width decides the scale, else height) and the `canvas_inspect` refusal for app frames. With the flag off, a stored app frame still resizes correctly and isn't inspected.
     - The D19 "no `report` call" test is left out. The canvas tools take no analytics dependency, so the test would assert something the code can't do (a tautology the test rules forbid).
 
+13. **Export of live app frames (Task 13).**
+    - The plan's single `app-export.ts` is split. `app-export-core.ts` holds the decisions: the window options, the 1× pixel size, the navigation guard, the export-window registration with its timeout, the quiet-network wait and the dark script. They are tested without Electron in `app-export-core.test.ts`, not in `design-canvas.test.ts`, because they are a service's decisions, not the handler's. `app-export.ts` is the production-only window, like `frame-render.ts`.
+    - PNGs are 1× (`APP_EXPORT_DEVICE_SCALE = 1`, per probe 9), not `deviceScaleFactor: 2`.
+    - "Settled" means no request started for 500 ms, capped at 15 s, with the whole render limited to 30 s. To measure it, the registry keeps a last-request stamp per export window, which `onBeforeRequest` sets and removal clears. This is the only new registry state.
+    - The export window allows one main-frame load, on the app's own origin. Redirects may stay on that origin only. The page can't navigate or open windows, and frames inside the app draw empty (S65). `markLoaded` closes the window to any further load.
+    - The order of checks is: flag off → `live-off`; no renderer, a bad format or no viewport → `unavailable`; app not running in the chat's workspace → `app-not-running`. All three come before the Save dialog. `saveFile` is called only after they pass, and the file is written only after the render succeeds.
+    - The renderer toast text for the two new errors is added now ("Start the app to download this frame." and "Live apps are off."), not in Task 11, so the widened result type never reaches an unmapped error.
+    - The default session keeps zoom per host. In development the app's host (`localhost`) can also be the main window's, so zoom 1 is set on every commit and the render is held inside `designFrameZoomGate` (the same gate `frame-render.ts` uses).
+    - The E3 download cancel for export windows was already covered by `app-network-main.test.ts` and is unchanged.
+
 ### Task 2 probe outcomes (Linux Space, Electron 43.8.4)
 
 | Probe | Outcome | Effect |

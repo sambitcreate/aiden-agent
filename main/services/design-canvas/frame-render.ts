@@ -47,8 +47,9 @@ const HEIGHT_SCRIPT =
 
 type HiddenWindow = InstanceType<typeof BrowserWindow>;
 
-/** Keeps a 2× PNG window from zooming a 1× window that shows the same address (zoom-gate.ts). */
+/** Keeps a 2× PNG window from zooming a 1× window that shows the same address (zoom-gate.ts); live app exports share it. */
 const zoomGate = createDesignZoomGate();
+export const designFrameZoomGate = zoomGate;
 
 /** A fresh hidden, sandboxed window, in the offline session, that may load one page and go nowhere else. */
 async function openHiddenWindow(width: number, zoom: number): Promise<{ window: HiddenWindow; markLoaded(): void }> {

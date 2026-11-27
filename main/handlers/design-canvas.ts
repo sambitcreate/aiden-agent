@@ -158,7 +158,21 @@ const DESIGN_SYSTEM_MAX_FINDINGS = 50;
 export type DesignCanvasExportResult =
   | { saved: true }
   | { canceled: true }
-  | { error: "unavailable" | "missing" | "failed" };
+  /** `app-not-running` and `live-off` are a live app frame's (design mode v2 Phase 3a, D18). */
+  | { error: "unavailable" | "missing" | "failed" | "app-not-running" | "live-off" };
+
+/**
+ * What a live app frame's Download draws (D18): main's own address for it
+ * (the running app's origin plus the frame's route), at its viewport.
+ */
+export type DesignAppRenderRequest = {
+  url: string;
+  origin: string;
+  width: number;
+  height: number;
+  format: "png" | "pdf";
+  colorScheme?: "light" | "dark";
+};
 
 /** `designCanvas:source` reply: a page's or artifact's code, for the side panel's Code tab. */
 export type DesignCanvasSourceResult =
@@ -331,6 +345,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     enabled(): boolean;
     /** The frame registry, or null before the design subscribers are installed. */
     registry(): Pick<AppFrameRegistry, "expectPlacement"> | null;
+    /** Draws a live app frame on the default session (app-export.ts); left out, Download answers unavailable. */
+    renderApp?(request: DesignAppRenderRequest): Promise<Uint8Array>;
     apps: {
       snapshot(workspaceId: string): Promise<DesignAppsSnapshot>;
       /** 2b/2c's exact-address lookup; undefined while a holder is lost. */
@@ -553,6 +569,26 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     return { grant };
   });
 
+  /**
+   * The origin of the app a live frame shows, when that app root is running
+   * in the chat's own workspace and main can tie the origin back to it; null
+   * otherwise (stopped, elsewhere, or a lost holder).
+   */
+  const runningAppOrigin = async (
+    live: NonNullable<typeof deps.appFrames>,
+    workspaceId: string,
+    appRoot: string,
+  ): Promise<string | null> => {
+    const snapshot = await live.apps.snapshot(workspaceId);
+    const running = snapshot.apps.find(
+      (app) => app.workspaceId === workspaceId && app.appRoot === appRoot && app.phase === "running" && typeof app.origin === "string",
+    );
+    const origin = running?.origin;
+    if (!origin || !LOOPBACK_APP_ORIGIN.test(origin)) return null;
+    const owner = live.apps.appForOrigin(origin);
+    return owner && owner.workspaceId === workspaceId && owner.appRoot === appRoot ? origin : null;
+  };
+
   // The app's DESIGN.md for a workspace chat, read only (S41, R9). Like
   // designCanvas:get it doesn't need design mode on; it never writes, and it
   // reads with report: false, so it sends no event.
@@ -577,14 +613,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const { doc } = await deps.store.get(chat.id, { workspaceId });
     const frame = doc.frames.find((entry) => entry.id === frameId);
     if (!frame || frame.kind !== "app" || typeof frame.appRoot !== "string") return { error: "unavailable" };
-    const snapshot = await live.apps.snapshot(workspaceId);
-    const running = snapshot.apps.find(
-      (app) => app.workspaceId === workspaceId && app.appRoot === frame.appRoot && app.phase === "running" && typeof app.origin === "string",
-    );
-    const origin = running?.origin;
-    if (!origin || !LOOPBACK_APP_ORIGIN.test(origin)) return { error: "app-not-running" };
-    const owner = live.apps.appForOrigin(origin);
-    if (!owner || owner.workspaceId !== workspaceId || owner.appRoot !== frame.appRoot) return { error: "app-not-running" };
+    const origin = await runningAppOrigin(live, workspaceId, frame.appRoot);
+    if (!origin) return { error: "app-not-running" };
     const registry = live.registry();
     if (!registry) return { error: "unavailable" };
     if (registry.expectPlacement({ frameId, mountToken, expectedOrigin: origin }) !== "ok") return { error: "too-many-frames" };
@@ -686,6 +716,35 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const { doc } = await deps.store.get(chat.id, { workspaceId: designCanvasWorkspaceOf(chat) });
       const frame = doc.frames.find((entry) => entry.id === frameId);
       if (!frame || !designExportFormats(frame).includes(kind)) return { error: "unavailable" };
+
+      // A live app frame is drawn from its running app, on the default session
+      // (D18). Everything is checked before the Save dialog opens, and the
+      // address is main's own: the renderer never names a URL.
+      if (frame.kind === "app") {
+        const live = deps.appFrames;
+        if (!live || !live.enabled()) return { error: "live-off" };
+        if (!live.renderApp || (kind !== "png" && kind !== "pdf") || typeof frame.appRoot !== "string" || !frame.viewport) {
+          return { error: "unavailable" };
+        }
+        const origin = await runningAppOrigin(live, designCanvasWorkspaceOf(chat), frame.appRoot);
+        if (!origin) return { error: "app-not-running" };
+        const destination = await deps.saveFile(event, { defaultPath: designExportFileName(frame, kind), filters: [EXPORT_FILTERS[kind]] });
+        if (destination === null) return { canceled: true };
+        try {
+          const bytes = await live.renderApp({
+            url: `${origin}${frame.route ?? "/"}`,
+            origin,
+            width: frame.viewport.width,
+            height: frame.viewport.height,
+            format: kind,
+            ...(frame.colorScheme ? { colorScheme: frame.colorScheme } : {}),
+          });
+          await fs.writeFile(destination, bytes);
+        } catch {
+          return { error: "failed" };
+        }
+        return { saved: true };
+      }
 
       let url: string;
       let source: string | null = null;

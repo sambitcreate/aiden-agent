@@ -24,6 +24,7 @@ import { generativeUiArtifactStore } from "../services/generative-ui-artifact-st
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designLiveEnabled, designModeEnabled } from "../services/studio/feature-flags.js";
 import { installedAppNetwork } from "../services/design-canvas/app-frames/app-network-main.js";
+import { renderAppFrame } from "../services/design-canvas/app-frames/app-export.js";
 import { registerDesignCanvasHandlers } from "./design-canvas.js";
 import { createDesignModeCardEnter, registerDesignAppHandlers } from "./design-app.js";
 
@@ -69,6 +70,8 @@ export function registerDesignCanvasIpc(): void {
     appFrames: {
       enabled: () => designLiveEnabled(),
       registry: () => installedAppNetwork()?.registry ?? null,
+      // Download draws the running app on the default session, as an export window (D18).
+      renderApp: (request) => renderAppFrame(request, () => installedAppNetwork()?.registry ?? null),
       apps: designAppServers,
     },
     handle: (channel, handler) => ipcMain.handle(channel, handler),
