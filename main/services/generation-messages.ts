@@ -259,6 +259,6 @@ export function chatMessageToPiMessage(
     message.createdAt,
     false,
     true,
-    message.grabbedElements,
+    message.role === "user" ? message.grabbedElements : undefined,
   );
 }
