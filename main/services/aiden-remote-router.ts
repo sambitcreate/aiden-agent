@@ -1,5 +1,5 @@
 import { parseBotRoutineModelDirectory, type BotRoutineModelDirectory } from "../../renderer/shared/bot-routine-model-directory.js";
-import { isRecord as isPlainRecord } from "../shared/guards.js";
+import { isRecord } from "../shared/guards.js";
 import { isChatAudience } from "./chat-orchestration/audience.js";
 import { parseBotExecutionResumeStatus, type BotExecutionResumeStatus } from "../../renderer/shared/bot-execution-resume.js";
 import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, parseBotRoutineModelSave } from "../../renderer/shared/bot-routine-models.js";
@@ -3071,12 +3071,12 @@ export function createAidenRemoteRequestHandler(
         // fills in an empty purpose and the starter text, and the new Bot then
         // introduces itself). Every other device keeps the earlier rule that
         // both are required.
-        const omitsLegacyField = isPlainRecord(body)
+        const omitsLegacyField = isRecord(body)
           && (!Object.prototype.hasOwnProperty.call(body, "purpose") || !Object.prototype.hasOwnProperty.call(body, "instructions"));
         if (omitsLegacyField && !holdsBotTemplates(device, dependencies)) {
           throw new AidenRemoteServiceError("invalid_request", "A Bot needs a purpose and instructions.", 400);
         }
-        const oneField = omitsLegacyField && isPlainRecord(body) && !Object.prototype.hasOwnProperty.call(body, "instructions");
+        const oneField = omitsLegacyField && isRecord(body) && !Object.prototype.hasOwnProperty.call(body, "instructions");
         const created = await dependencies.bots.create(device.id, key, body);
         if (oneField) dependencies.botSessions!.introduceCreated!(created.id);
         await writeBotDetail(response, 201, created, device, dependencies);
