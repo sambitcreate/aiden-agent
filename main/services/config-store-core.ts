@@ -26,6 +26,8 @@ import {
   splitStoredProvider,
   isPortableProviderList,
   isProviderAliasMap,
+  isProvisionedWorktreeFile,
+  isWorktreeIndex,
   isMcpServerList,
   withoutRetiredMcpServers,
   retiredMcpServerIds,
@@ -258,33 +260,17 @@ function normalizeWorkspace(workspace: Workspace): Workspace {
             ...(typeof w.managedWorktree.ownershipToken === "string"
               ? { ownershipToken: w.managedWorktree.ownershipToken }
               : {}),
-            ...(typeof w.managedWorktree.worktreeDevice === "number" &&
-            Number.isSafeInteger(w.managedWorktree.worktreeDevice) &&
-            w.managedWorktree.worktreeDevice >= 0
+            ...(isWorktreeIndex(w.managedWorktree.worktreeDevice)
               ? { worktreeDevice: w.managedWorktree.worktreeDevice }
               : {}),
-            ...(typeof w.managedWorktree.worktreeInode === "number" &&
-            Number.isSafeInteger(w.managedWorktree.worktreeInode) &&
-            w.managedWorktree.worktreeInode >= 0
+            ...(isWorktreeIndex(w.managedWorktree.worktreeInode)
               ? { worktreeInode: w.managedWorktree.worktreeInode }
               : {}),
             createdFromHead: w.managedWorktree.createdFromHead,
             ...(Array.isArray(w.managedWorktree.provisionedFiles)
               ? {
                   provisionedFiles: w.managedWorktree.provisionedFiles
-                    .filter(
-                      (entry): entry is string =>
-                        typeof entry === "string" &&
-                        entry.length > 0 &&
-                        entry.length <= 512 &&
-                        !path.isAbsolute(entry) &&
-                        !entry.includes("\\") &&
-                        !entry.includes("\u0000") &&
-                        path.posix.normalize(entry) === entry &&
-                        entry !== "." &&
-                        !entry.startsWith("../") &&
-                        entry !== "..",
-                    )
+                    .filter(isProvisionedWorktreeFile)
                     .slice(0, 4_096),
                 }
               : {}),

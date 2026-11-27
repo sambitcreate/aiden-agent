@@ -246,6 +246,25 @@ export function providerAliasSourcesAreInactive(
   return Object.keys(aliases).every((source) => !active.has(source));
 }
 
+export function isWorktreeIndex(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+export function isProvisionedWorktreeFile(entry: unknown): entry is string {
+  return (
+    typeof entry === "string" &&
+    entry.length > 0 &&
+    entry.length <= 512 &&
+    !path.isAbsolute(entry) &&
+    !entry.includes("\\") &&
+    !entry.includes("\u0000") &&
+    path.posix.normalize(entry) === entry &&
+    entry !== "." &&
+    entry !== ".." &&
+    !entry.startsWith("../")
+  );
+}
+
 function isManagedWorktree(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
@@ -258,30 +277,12 @@ function isManagedWorktree(value: unknown): boolean {
     (value.worktreeGitDir === undefined ||
       (typeof value.worktreeGitDir === "string" && path.isAbsolute(value.worktreeGitDir))) &&
     (value.ownershipToken === undefined || typeof value.ownershipToken === "string") &&
-    (value.worktreeDevice === undefined ||
-      (typeof value.worktreeDevice === "number" &&
-        Number.isSafeInteger(value.worktreeDevice) &&
-        value.worktreeDevice >= 0)) &&
-    (value.worktreeInode === undefined ||
-      (typeof value.worktreeInode === "number" &&
-        Number.isSafeInteger(value.worktreeInode) &&
-        value.worktreeInode >= 0)) &&
+    (value.worktreeDevice === undefined || isWorktreeIndex(value.worktreeDevice)) &&
+    (value.worktreeInode === undefined || isWorktreeIndex(value.worktreeInode)) &&
     (value.provisionedFiles === undefined ||
       (Array.isArray(value.provisionedFiles) &&
         value.provisionedFiles.length <= 4_096 &&
-        value.provisionedFiles.every(
-          (entry) =>
-            typeof entry === "string" &&
-            entry.length > 0 &&
-            entry.length <= 512 &&
-            !path.isAbsolute(entry) &&
-            !entry.includes("\\") &&
-            !entry.includes("\u0000") &&
-            path.posix.normalize(entry) === entry &&
-            entry !== "." &&
-            entry !== ".." &&
-            !entry.startsWith("../"),
-        )))
+        value.provisionedFiles.every(isProvisionedWorktreeFile)))
   );
 }
 
