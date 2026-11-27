@@ -21,7 +21,34 @@ function fileBaseComponentName(filePath: string): string | undefined {
   return base && base.length <= 160 ? base : undefined;
 }
 
+function componentFrame(name: string, source?: RawGrabSourceHint): RawGrabComponentFrame {
+  const minified = isMinifiedComponentName(name);
+  return {
+    name: name.slice(0, 160),
+    ...(source ? { source } : {}),
+    ...(minified ? { minified: true } : {}),
+  };
+}
+
+function frameworkResult(
+  framework: FrameworkInspectionResult["framework"],
+  frames: RawGrabComponentFrame[],
+  source?: RawGrabSourceHint,
+): FrameworkInspectionResult | null {
+  if (frames.length === 0) return null;
+  const primary = frames.find((frame) => !frame.minified);
+  return {
+    framework,
+    ...(primary ? { componentName: primary.name } : {}),
+    componentStack: frames,
+    ...(source ? { source } : {}),
+  };
+}
+
 function inspectVue(element: unknown): FrameworkInspectionResult | null {
+  const vueResult = (frames: RawGrabComponentFrame[]) =>
+    frameworkResult("vue", frames, (frames.find((frame) => !frame.minified) ?? frames[0])?.source);
+
   // Vue 3: __vueParentComponent or __vnode.component
   let comp: unknown =
     safeOwnProp(element, "__vueParentComponent") ??
@@ -40,24 +67,12 @@ function inspectVue(element: unknown): FrameworkInspectionResult | null {
             ? fileBaseComponentName(filePath)
             : undefined;
       if (name) {
-        const minified = isMinifiedComponentName(name);
-        frames.push({
-          name: name.slice(0, 160),
-          ...(filePath ? { source: { fileName: filePath.slice(0, 512) } } : {}),
-          ...(minified ? { minified: true } : {}),
-        });
+        frames.push(componentFrame(name, filePath ? { fileName: filePath.slice(0, 512) } : undefined));
       }
       comp = safeOwnProp(comp, "parent");
     }
-    if (frames.length > 0) {
-      const primary = frames.find((frame) => !frame.minified);
-      return {
-        framework: "vue",
-        ...(primary ? { componentName: primary.name } : {}),
-        componentStack: frames,
-        ...(primary?.source ?? frames[0]?.source ? { source: primary?.source ?? frames[0]?.source } : {}),
-      };
-    }
+    const result = vueResult(frames);
+    if (result) return result;
   }
 
   // Vue 2: __vue__.$options
@@ -76,24 +91,12 @@ function inspectVue(element: unknown): FrameworkInspectionResult | null {
             ? fileBaseComponentName(filePath)
             : undefined;
       if (name) {
-        const minified = isMinifiedComponentName(name);
-        frames.push({
-          name: name.slice(0, 160),
-          ...(filePath ? { source: { fileName: filePath.slice(0, 512) } } : {}),
-          ...(minified ? { minified: true } : {}),
-        });
+        frames.push(componentFrame(name, filePath ? { fileName: filePath.slice(0, 512) } : undefined));
       }
       vm = safeOwnProp(vm, "$parent");
     }
-    if (frames.length > 0) {
-      const primary = frames.find((frame) => !frame.minified);
-      return {
-        framework: "vue",
-        ...(primary ? { componentName: primary.name } : {}),
-        componentStack: frames,
-        ...(primary?.source ?? frames[0]?.source ? { source: primary?.source ?? frames[0]?.source } : {}),
-      };
-    }
+    const result = vueResult(frames);
+    if (result) return result;
   }
 
   return null;
@@ -126,24 +129,13 @@ function inspectSvelte(element: Element): FrameworkInspectionResult | null {
       if (!seenFiles.has(file)) {
         seenFiles.add(file);
         const name = fileBaseComponentName(file) ?? "SvelteComponent";
-        frames.push({
-          name,
-          source,
-          ...(isMinifiedComponentName(name) ? { minified: true } : {}),
-        });
+        frames.push(componentFrame(name, source));
       }
     }
     cursor = cursor.parentElement;
   }
 
-  if (frames.length === 0) return null;
-  const primary = frames.find((frame) => !frame.minified);
-  return {
-    framework: "svelte",
-    ...(primary ? { componentName: primary.name } : {}),
-    componentStack: frames,
-    ...(firstSource ? { source: firstSource } : {}),
-  };
+  return frameworkResult("svelte", frames, firstSource);
 }
 
 function inspectAstro(element: Element): FrameworkInspectionResult | null {
@@ -182,22 +174,12 @@ function inspectPreact(element: unknown): FrameworkInspectionResult | null {
     if (typeof type === "function") {
       const rawName = safeOwnProp(type, "displayName") ?? safeOwnProp(type, "name");
       if (typeof rawName === "string" && rawName.trim()) {
-        const name = rawName.trim().slice(0, 160);
-        frames.push({
-          name,
-          ...(isMinifiedComponentName(name) ? { minified: true } : {}),
-        });
+        frames.push(componentFrame(rawName.trim()));
       }
     }
     vnode = safeOwnProp(vnode, "__") ?? safeOwnProp(vnode, "_parent");
   }
-  if (frames.length === 0) return null;
-  const primary = frames.find((frame) => !frame.minified);
-  return {
-    framework: "preact",
-    ...(primary ? { componentName: primary.name } : {}),
-    componentStack: frames,
-  };
+  return frameworkResult("preact", frames);
 }
 
 function inspectSolid(element: Element): FrameworkInspectionResult | null {
@@ -214,21 +196,12 @@ function inspectSolid(element: Element): FrameworkInspectionResult | null {
     if (typeof rawName === "string" && rawName.trim()) {
       const name = rawName.trim().slice(0, 160);
       if (!frames.some((frame) => frame.name === name)) {
-        frames.push({
-          name,
-          ...(isMinifiedComponentName(name) ? { minified: true } : {}),
-        });
+        frames.push(componentFrame(name));
       }
     }
     cursor = safeOwnProp(cursor, "owner");
   }
-  if (frames.length === 0) return null;
-  const primary = frames.find((frame) => !frame.minified);
-  return {
-    framework: "solid",
-    ...(primary ? { componentName: primary.name } : {}),
-    componentStack: frames,
-  };
+  return frameworkResult("solid", frames);
 }
 
 function inspectAngular(element: Element): FrameworkInspectionResult | null {
@@ -253,13 +226,7 @@ function inspectAngular(element: Element): FrameworkInspectionResult | null {
   const ctor = safeOwnProp(component, "constructor");
   const rawName = typeof ctor === "function" ? safeOwnProp(ctor, "name") : undefined;
   if (typeof rawName !== "string" || !rawName.trim() || rawName === "Object") return null;
-  const name = rawName.trim().slice(0, 160);
-  const minified = isMinifiedComponentName(name);
-  return {
-    framework: "angular",
-    ...(!minified ? { componentName: name } : {}),
-    componentStack: [{ name, ...(minified ? { minified: true } : {}) }],
-  };
+  return frameworkResult("angular", [componentFrame(rawName.trim())]);
 }
 
 /** Inspects non-React frontend frameworks (Vue 2/3, Svelte 4/5, Astro, Preact, Solid, Angular). */
