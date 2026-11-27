@@ -73,8 +73,16 @@ export const BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE =
 export class BotRuntimeAuthorityError extends Error {
   readonly name = "BotRuntimeAuthorityError";
 
-  constructor(readonly classification: BotRuntimeAuthorityFailure, message?: string) {
+  /**
+   * True when the cause is the Bot access notice, not drift: the wire still
+   * says `access_unavailable`, but health checks and file routes must not
+   * read it as a changed grant.
+   */
+  readonly noticeRequired: boolean;
+
+  constructor(readonly classification: BotRuntimeAuthorityFailure, message?: string, options: { noticeRequired?: boolean } = {}) {
     super(message ?? BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES[classification]);
+    this.noticeRequired = options.noticeRequired === true;
   }
 }
 
@@ -607,7 +615,7 @@ export class BotRuntimeAuthorityResolver {
         }
         // By name: the store may come from another module instance.
         if (error instanceof Error && error.name === "BotCapabilityNoticeRequiredError") {
-          throw new BotRuntimeAuthorityError("access_unavailable", this.deps.noticeRequiredMessage ?? BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE);
+          throw new BotRuntimeAuthorityError("access_unavailable", this.deps.noticeRequiredMessage ?? BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE, { noticeRequired: true });
         }
         throw error;
       }

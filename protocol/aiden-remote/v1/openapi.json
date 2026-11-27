@@ -348,7 +348,7 @@
       "post": {
         "operationId": "updateDeviceCapabilities",
         "x-aiden-capability": "server:read",
-        "description": "Additive post-pairing negotiation. Any device may request tasks:read and agents:read; only a paired mac or linux device may request simulators:control, which is never advertised to phones or tablets. Bot and legacy grants remain pairing-bound. The response returns the authenticated device's complete updated grant list. Compatibility: an older Aiden cannot load a device record holding simulators:control, so downgrading the serving Mac after a desktop negotiates it requires re-pairing that desktop.",
+        "description": "Additive post-pairing negotiation. accepts may name only members of the negotiable vocabulary (AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES): the progress grants, simulators:control and simulators:mobile, host:events and runs:*, and the display and route opt-ins such as the bot:* opt-ins, schedule:cards, chat:jobs and attachments:raw. An empty list, duplicates, unknown names, bot:read, bot:write and the other legacy grants fail closed with 400 invalid_request; those grants remain pairing-bound. Each name must also be served by this host: an unwired feature or route answers 404 not_found, a bot:* opt-in is granted only where serverCapabilities lists it for this device (paired with acceptsBotCapabilities), a name the device type may not hold answers 403 capability_denied (only a paired mac or linux device may request simulators:control or host:events; only a phone or tablet may request simulators:mobile), and app-controls:* answers 403 until paired-device chat controls are allowed. Nothing is granted unless every name passes. The response is the device's updated grant list, filtered like GET /server: progress grants the host no longer serves and bot:* opt-ins it does not advertise to this device are left out, so it stays within serverCapabilities. Compatibility: an older Aiden cannot load a device record holding simulators:control, so downgrading the serving Mac after a desktop negotiates it requires re-pairing that desktop.",
         "requestBody": {
           "required": true,
           "content": {
@@ -361,7 +361,7 @@
         },
         "responses": {
           "200": {
-            "description": "Complete updated capability grants",
+            "description": "Updated capability grants, filtered to what this host serves this device",
             "content": {
               "application/json": {
                 "schema": {
