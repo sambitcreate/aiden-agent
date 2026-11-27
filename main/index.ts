@@ -1327,13 +1327,18 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
   }
 }
 
+function mainWindowFor(
+  event: Pick<IpcMainInvokeEvent, "sender">,
+): BrowserWindow | null {
+  return mainWindow &&
+    !mainWindow.isDestroyed() &&
+    event.sender.id === mainWindow.webContents.id
+    ? mainWindow
+    : null;
+}
+
 ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
-    return false;
+  if (!mainWindowFor(event)) return false;
   const input = (
     typeof value === "object" && value !== null ? value : {}
   ) as Record<string, unknown>;
@@ -1352,22 +1357,13 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
 });
 
 ipcMain.handle("app:resetOnboarding", async (event) => {
-  const window = mainWindow;
-  if (
-    !window ||
-    window.isDestroyed() ||
-    event.sender.id !== window.webContents.id
-  )
-    return false;
+  const window = mainWindowFor(event);
+  if (!window) return false;
   return requestOnboardingReset(window);
 });
 
 ipcMain.handle("app:getOnboardingState", async (event, legacyComplete: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindowFor(event)) {
     throw new Error("Onboarding state is unavailable outside the active application window.");
   }
   const owner = rendererDocumentOwner(
@@ -1380,11 +1376,7 @@ ipcMain.handle("app:getOnboardingState", async (event, legacyComplete: unknown) 
 ipcMain.handle(
   "app:setOnboardingOutcome",
   async (event, outcome: unknown, selectedProviderId: unknown) => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
+    if (!mainWindowFor(event)) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
     if (outcome !== "incomplete" && outcome !== "deferred" && outcome !== "completed") {
@@ -1411,11 +1403,7 @@ ipcMain.handle(
 ipcMain.handle(
   "app:setOnboardingProgress",
   async (event, step: unknown, selectedProviderId: unknown) => {
-    if (
-      !mainWindow ||
-      mainWindow.isDestroyed() ||
-      event.sender.id !== mainWindow.webContents.id
-    ) {
+    if (!mainWindowFor(event)) {
       throw new Error("Onboarding can only be changed from the active application window.");
     }
     if (step !== "profile" && step !== "provider" && step !== "bots") {
@@ -1438,11 +1426,7 @@ ipcMain.handle(
 );
 
 ipcMain.handle("app:getUpdateState", (event) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindowFor(event)) {
     return {
       status: "idle",
       version: null,
@@ -1466,11 +1450,7 @@ ipcMain.handle(
 );
 
 function restartToUpdateBlocker(event: IpcMainInvokeEvent): AppUpdateRestartResult | null {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  ) {
+  if (!mainWindowFor(event)) {
     return {
       accepted: false,
       reason: "unavailable",
@@ -1515,12 +1495,7 @@ ipcMain.handle("app:restartToUpdate", async (event): Promise<AppUpdateRestartRes
 });
 
 ipcMain.handle("app:renderer-ready", (event) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
-    return false;
+  if (!mainWindowFor(event)) return false;
   rendererReadiness.markReady();
   return true;
 });
@@ -1565,12 +1540,7 @@ async function restoreDockIconPreference(
 }
 
 ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
-    return false;
+  if (!mainWindowFor(event)) return false;
   if (value !== "aiden" && value !== "monochrome")
     throw new Error("Invalid Dock icon preference.");
   return applyDockIconPreference(value);
@@ -1578,10 +1548,7 @@ ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
 
 // The Inbox switch and view, reported by the main window only.
 registerInboxDockBadgeIpc({
-  isMainWindow: (event) =>
-    !!mainWindow &&
-    !mainWindow.isDestroyed() &&
-    event.sender.id === mainWindow.webContents.id,
+  isMainWindow: (event) => mainWindowFor(event) !== null,
 });
 
 function openExternalUrl(value: string): void {
@@ -2212,7 +2179,7 @@ registerWindowControlHandlers<BrowserWindow>({
 });
 
 ipcMain.handle("app:setMenuCommands", (event, commandIds: unknown) => {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;
+  if (!mainWindowFor(event)) return false;
   const next = parseMenuCommandIds(commandIds);
   if (!next) return false;
   const current = applicationMenuAvailable;
