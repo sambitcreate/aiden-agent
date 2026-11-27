@@ -1490,18 +1490,45 @@ function browserQuery(query: string): { location: string; cursor?: string } {
   return { location, ...(cursor ? { cursor } : {}) };
 }
 
-function chatsQuery(query: string): { workspaceId?: string } {
-  if (!query) return {};
+function singleRawQueryValue(
+  query: string,
+  key: string,
+  message: string,
+): string | undefined {
+  if (!query) return undefined;
   const separator = query.indexOf("=");
   if (
     separator <= 0 ||
-    query.slice(0, separator) !== "workspaceId" ||
-    query.indexOf("&") >= 0 ||
-    !/^[A-Za-z0-9._:-]{1,128}$/u.test(query.slice(separator + 1))
+    query.slice(0, separator) !== key ||
+    query.indexOf("&") >= 0
   ) {
+    throw new AidenRemoteServiceError("invalid_request", message, 400);
+  }
+  return query.slice(separator + 1);
+}
+
+function strictQueryParams(
+  query: string,
+  allowedKeys: readonly string[],
+  message: string,
+): URLSearchParams {
+  const params = new URLSearchParams(query);
+  const allowed = new Set(allowedKeys);
+  for (const key of params.keys()) {
+    if (!allowed.has(key) || params.getAll(key).length !== 1) {
+      throw new AidenRemoteServiceError("invalid_request", message, 400);
+    }
+  }
+  return params;
+}
+
+function chatsQuery(query: string): { workspaceId?: string } {
+  const workspaceId = singleRawQueryValue(query, "workspaceId", "The chats query is invalid.");
+  if (workspaceId === undefined) return {};
+  if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(workspaceId)) {
     throw new AidenRemoteServiceError("invalid_request", "The chats query is invalid.", 400);
   }
-  return { workspaceId: query.slice(separator + 1) };
+  return { workspaceId };
 }
 
 function chatAgentsQuery(query: string): { turnId?: string } {
@@ -1602,17 +1629,12 @@ function usageQuery(query: string): UsageDateRange {
 }
 
 function scheduledNotificationsQuery(query: string): { since?: number } {
-  if (!query) return {};
-  const separator = query.indexOf("=");
-  if (
-    separator <= 0 ||
-    query.slice(0, separator) !== "since" ||
-    query.indexOf("&") >= 0 ||
-    !/^(?:0|[1-9]\d{0,15})$/u.test(query.slice(separator + 1))
-  ) {
+  const raw = singleRawQueryValue(query, "since", "The scheduled-notification query is invalid.");
+  if (raw === undefined) return {};
+  if (!/^(?:0|[1-9]\d{0,15})$/u.test(raw)) {
     throw new AidenRemoteServiceError("invalid_request", "The scheduled-notification query is invalid.", 400);
   }
-  const parsed = Number(query.slice(separator + 1));
+  const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed)) {
     throw new AidenRemoteServiceError("invalid_request", "The scheduled-notification query is invalid.", 400);
   }
@@ -1620,32 +1642,16 @@ function scheduledNotificationsQuery(query: string): { since?: number } {
 }
 
 function scheduledScriptsQuery(query: string): { workspaceId?: string } {
-  if (!query) return {};
-  const separator = query.indexOf("=");
-  if (
-    separator <= 0 ||
-    query.slice(0, separator) !== "workspaceId" ||
-    query.indexOf("&") >= 0 ||
-    !/^[A-Za-z0-9_-]{1,128}$/u.test(query.slice(separator + 1))
-  ) {
+  const workspaceId = singleRawQueryValue(query, "workspaceId", "The scheduled-script query is invalid.");
+  if (workspaceId === undefined) return {};
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(workspaceId)) {
     throw new AidenRemoteServiceError("invalid_request", "The scheduled-script query is invalid.", 400);
   }
-  return { workspaceId: query.slice(separator + 1) };
+  return { workspaceId };
 }
 
 function streamAfter(request: IncomingMessage, query: string): number {
-  let after: string | undefined;
-  if (query) {
-    const separator = query.indexOf("=");
-    if (
-      separator <= 0 ||
-      query.slice(0, separator) !== "after" ||
-      query.indexOf("&") >= 0
-    ) {
-      throw new AidenRemoteServiceError("invalid_request", "The stream cursor is invalid.", 400);
-    }
-    after = query.slice(separator + 1);
-  }
+  const after = singleRawQueryValue(query, "after", "The stream cursor is invalid.");
   const lastEventId = request.headers["last-event-id"];
   if (Array.isArray(lastEventId) || (lastEventId !== undefined && typeof lastEventId !== "string")) {
     throw new AidenRemoteServiceError("invalid_request", "Last-Event-ID is invalid.", 400);
@@ -2153,9 +2159,7 @@ function holdsBotAllowed(device: AidenRemoteRouterAuthenticatedDevice, dependenc
   return device.capabilities.has("bot:allowed") && botAllowedWired(dependencies);
 }
 function botAllowedCursorQuery(query: string): string | undefined {
-  const params = new URLSearchParams(query);
-  if ([...params.keys()].some(key => key !== "cursor") || params.getAll("cursor").length > 1) throw new AidenRemoteServiceError("invalid_request", "The allow list query is invalid.", 400);
-  const cursor = params.get("cursor");
+  const cursor = strictQueryParams(query, ["cursor"], "The allow list query is invalid.").get("cursor");
   if (cursor === null) return undefined;
   try { return parseAidenRemoteBotAllowedCursor(cursor); } catch { throw new AidenRemoteServiceError("invalid_request", "The allow list cursor is invalid. Refresh the list.", 400, true); }
 }
@@ -2475,23 +2479,9 @@ function advertisedServerCapabilities(
 }
 
 function botCapabilityCatalogQuery(query: string): string | undefined {
-  if (!query) return undefined;
-  const components = query.split("&");
-  if (components.length !== 1) {
-    throw new AidenRemoteServiceError(
-      "invalid_request",
-      "The Bot capability catalog query is invalid.",
-      400,
-    );
-  }
-  const component = components[0]!;
-  const separator = component.indexOf("=");
-  const botId = separator < 0 ? "" : component.slice(separator + 1);
-  if (
-    component.slice(0, separator) !== "botId" ||
-    botId.includes("=") ||
-    !/^[A-Za-z0-9._:-]{1,160}$/u.test(botId)
-  ) {
+  const botId = singleRawQueryValue(query, "botId", "The Bot capability catalog query is invalid.");
+  if (botId === undefined) return undefined;
+  if (!/^[A-Za-z0-9._:-]{1,160}$/u.test(botId)) {
     throw new AidenRemoteServiceError(
       "invalid_request",
       "The Bot capability catalog query is invalid.",
@@ -2503,17 +2493,11 @@ function botCapabilityCatalogQuery(query: string): string | undefined {
 
 function botConversationsQuery(query: string): AidenRemoteBotConversationQuery {
   if (!query) return {};
-  const params = new URLSearchParams(query);
-  const allowed = new Set(["cursor", "query", "botId", "limit"]);
-  for (const key of params.keys()) {
-    if (!allowed.has(key) || params.getAll(key).length !== 1) {
-      throw new AidenRemoteServiceError(
-        "invalid_request",
-        "The Bot inbox query is invalid.",
-        400,
-      );
-    }
-  }
+  const params = strictQueryParams(
+    query,
+    ["cursor", "query", "botId", "limit"],
+    "The Bot inbox query is invalid.",
+  );
   const value: Record<string, unknown> = {};
   const cursor = params.get("cursor");
   const search = params.get("query");
