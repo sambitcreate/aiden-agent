@@ -456,6 +456,8 @@ function reactRouterSegments(path: string): string[] | null {
   return segments;
 }
 
+const STATEMENT_STARTS = new Set(["export", "import", "const", "let", "var", "function", "class", "type", "interface", "declare"]);
+
 class ConfigReader {
   routes: string[] = [];
   flat = false;
@@ -494,6 +496,29 @@ class ConfigReader {
       if (depth > READER_DEPTH) return false;
     }
     return false;
+  }
+
+  /** `[await] flatRoutes()` as the default export itself; options (another folder) aren't read. */
+  flatDefault(): boolean {
+    this.take("await", "id");
+    return this.take("flatRoutes", "id") && this.take("(", "punct") && this.take(")", "punct");
+  }
+
+  /** A type after `satisfies` or `as`: `Name`, `A.B`, `Name[]`. */
+  private typeName(): boolean {
+    if (this.peek()?.kind !== "id") return false;
+    this.position += 1;
+    while (this.peek()?.value === "." && this.peek(1)?.kind === "id") this.position += 2;
+    while (this.peek()?.value === "[" && this.peek(1)?.value === "]") this.position += 2;
+    return true;
+  }
+
+  /** After the default export's value: an optional `satisfies`/`as` type, then `;`, the end, or the next statement. Anything else chains code onto it. */
+  endsExport(): boolean {
+    if ((this.take("satisfies", "id") || this.take("as", "id")) && !this.typeName()) return false;
+    const next = this.peek();
+    if (!next || this.take(";", "punct")) return true;
+    return next.kind === "id" && STATEMENT_STARTS.has(next.value);
   }
 
   private flatCall(): boolean {
@@ -598,13 +623,9 @@ export function parseReactRouterConfig(text: string): { routes: string[] } | { f
   if (start < 0) return null;
   const reader = new ConfigReader(tokens);
   reader.position = start;
-  if (tokens[start]?.value === "flatRoutes") return readFlatDefault(tokens, start) ? { flat: true } : null;
-  if (!reader.array([], 0)) return null;
+  if (tokens[start]?.value !== "[") return reader.flatDefault() && reader.endsExport() ? { flat: true } : null;
+  if (!reader.array([], 0) || !reader.endsExport()) return null;
   return reader.flat ? { flat: true } : { routes: reader.routes };
-}
-
-function readFlatDefault(tokens: TsToken[], start: number): boolean {
-  return tokens[start]?.value === "flatRoutes" && tokens[start + 1]?.value === "(" && tokens[start + 2]?.value === ")";
 }
 
 // ---- The merge with canvas.json (S81) ----

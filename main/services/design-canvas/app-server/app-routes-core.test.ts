@@ -223,6 +223,23 @@ test("parseReactRouterConfig: depth cap, flat routes and code it can't read", ()
   assert.equal(parseReactRouterConfig('export default [route(name, "x.tsx")];'), null);
 });
 
+test("parseReactRouterConfig: code after the default export's literal makes it unreadable, so discovery falls back", () => {
+  for (const config of [
+    'export default [index("routes/home.tsx")].concat(adminRoutes) satisfies RouteConfig;',
+    'export default [index("a.tsx")].map(wrap);',
+    'export default [index("a.tsx")] satisfies RouteConfig ? x : y;',
+    'export default [index("a.tsx")] + other;',
+    "export default flatRoutes().concat(extraRoutes);",
+    'export default flatRoutes({ rootDirectory: "pages" });',
+  ]) {
+    assert.equal(parseReactRouterConfig(config), null, config);
+  }
+  // A type annotation, a semicolon or nothing, and the next statement are all fine.
+  assert.deepEqual(parseReactRouterConfig('export default [index("a.tsx")] as RouteConfig'), { routes: ["/"] });
+  assert.deepEqual(parseReactRouterConfig('export default [index("a.tsx")] satisfies Route.Config[]\nexport const x = 1;'), { routes: ["/"] });
+  assert.deepEqual(parseReactRouterConfig("export default await flatRoutes() satisfies RouteConfig;"), { flat: true });
+});
+
 test("mergeRouteList: / first, then static, then by depth and name", () => {
   const list = mergeRouteList({ appRoot: ".", framework: "next", discovered: { patterns: ["/blog/[slug]", "/about", "/", "/a/b"], truncated: false } });
   assert.equal(list.source, "discovered");
