@@ -1290,6 +1290,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         if (doc.frames.filter((entry) => entry.pageId === pageId).length + adding > DESIGN_CANVAS_LIMITS.framesPerPage) {
           throw new CanvasToolError(`That page is full (${DESIGN_CANVAS_LIMITS.framesPerPage} frames).`);
         }
+        // The new group counts too, or the store would drop it on save.
+        if (doc.frames.length + adding > DESIGN_CANVAS_LIMITS.frames) {
+          throw new CanvasToolError(
+            `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
+          );
+        }
       }
       const namedGroup = original ? original.groupId : p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
       const groupId = original ? original.groupId : groupOf(doc, namedGroup, pageId);

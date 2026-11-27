@@ -2371,6 +2371,41 @@ test("3b: variantOf must name an app frame of the same root; locked originals an
   void store;
 });
 
+test("3b: a variant that needs a new group is refused when the whole canvas is one frame from full, and nothing is written", async (t) => {
+  const full = await setup(t, { designLive: true, apps: liveApps() });
+  const first = await full.call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing" });
+  // The original's page has room; the rest of the canvas holds all but one of its frames.
+  const others = DESIGN_CANVAS_LIMITS.frames - 2;
+  const pageCount = Math.ceil(others / DESIGN_CANVAS_LIMITS.framesPerPage);
+  await full.store.update("chat-1", (doc) => ({
+    ...doc,
+    pages: [...doc.pages, ...Array.from({ length: pageCount }, (_, index) => ({ id: `p-${index}`, name: `P${index}` }))],
+    frames: [
+      ...doc.frames,
+      ...Array.from({ length: others }, (_, index) => ({
+        id: `n-${index}`,
+        kind: "note" as const,
+        title: "n",
+        text: "n",
+        pageId: `p-${Math.floor(index / DESIGN_CANVAS_LIMITS.framesPerPage)}`,
+        x: (index % 40) * 20,
+        y: Math.floor((index % DESIGN_CANVAS_LIMITS.framesPerPage) / 40) * 20,
+        w: 10,
+        h: 10,
+        createdBy: "person" as const,
+      })),
+    ],
+  }));
+  const before = await full.store.get("chat-1");
+  assert.equal(before.frames.length, DESIGN_CANVAS_LIMITS.frames - 1);
+  const refused = await full.call("canvas_place_frame", { kind: "app", title: "v2", route: "/pricing-v2", variantOf: first.frame.id });
+  assert.equal(refused.status, "error");
+  assert.match(String(refused.message), /canvas is full/u);
+  const after = await full.store.get("chat-1");
+  assert.equal(after.frames.length, before.frames.length, "nothing is written");
+  assert.equal(after.frames.find((entry) => entry.id === first.frame.id)?.groupId, undefined, "the original stays ungrouped");
+});
+
 test("3b: onAppFrameAdded reports each new or copied app frame's viewport width, never a reuse or a refusal", async (t) => {
   const widths: number[] = [];
   const { call } = await setup(t, { designLive: true, apps: liveApps(), onAppFrameAdded: (width) => widths.push(width) });
