@@ -1163,7 +1163,6 @@ export function resolveThemeTokens(
     ),
     "--theme-canvas": background,
     "--theme-sidebar": sidebar,
-    "--theme-raised": raised,
   };
 }
 

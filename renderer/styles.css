@@ -240,8 +240,6 @@
   --color-accent-text: var(--accent-text);
   --color-match: var(--text-match);
   --color-accent-foreground: var(--accent-foreground);
-  --color-accent-hover: var(--accent-hover);
-  --color-accent-active: var(--accent-active);
   --color-fill-accent: var(--fill-accent);
   --color-fill-accent-foreground: var(--fill-accent-foreground);
   --color-fill-accent-hover: var(--fill-accent-hover);
@@ -252,9 +250,7 @@
   --color-fill-danger-active: var(--fill-danger-active);
   --color-focus-ring: var(--focus-ring);
   --color-red: var(--support-red);
-  --color-red-foreground: var(--support-red-foreground);
   --color-green: var(--support-green);
-  --color-green-foreground: var(--support-green-foreground);
   --color-support-red: var(--support-red);
   --color-support-red-foreground: var(--support-red-foreground);
   --color-support-green: var(--support-green);
@@ -274,7 +270,6 @@
   --shadow-control-hover: var(--elevation-control-hover);
   --shadow-control-pressed: var(--elevation-control-pressed);
   --shadow-popover: var(--elevation-popover);
-  --shadow-toast: var(--elevation-toast);
   --shadow-dialog: var(--elevation-dialog);
   --shadow-modal: var(--elevation-modal);
   --shadow-onboarding: var(--elevation-onboarding);
