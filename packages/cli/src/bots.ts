@@ -101,6 +101,8 @@ function parseAcknowledgement(value: string | undefined): BotNoticeAcknowledgeme
 
 /** The CLI host owner's Bot capability audience (`aiden bots …`, remote Bot Files). */
 export const CLI_BOT_OWNER_AUDIENCE_ID = "cli:local";
+/** The notice refusal on `aiden serve`, where the notice is acknowledged with these commands. */
+export const CLI_BOT_NOTICE_REQUIRED_MESSAGE = "This Bot can't act until the Bot access notice is accepted on this server. Run `aiden bots notice`, then `aiden bots acknowledge`, or give the Bot Custom access.";
 
 export async function createCliBots(agentDir: string, daemon: ReturnType<typeof createDaemonChats>) {
   const settings = new JsonStore<AppSettings>(join(agentDir, "aiden.json"), {});
@@ -205,7 +207,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     },
   });
   await application.initialize();
-  const authority = createBotRuntimeAuthorityResolver({ botStore, chatStore: daemon.chatStore, capabilityStore: capabilities, catalog, managedWorkspace, inventoryLeases });
+  const authority = createBotRuntimeAuthorityResolver({ botStore, chatStore: daemon.chatStore, capabilityStore: capabilities, catalog, managedWorkspace, inventoryLeases, noticeRequiredMessage: CLI_BOT_NOTICE_REQUIRED_MESSAGE });
   let rootFingerprint = JSON.stringify(approvedRoots());
   const watcher = watch(agentDir, (_event, filename) => {
     if (["auth.json", "models.json", "aiden-mcp.json", "web-search.json"].includes(String(filename))) inventoryLeases.invalidate("inventory_changed");
@@ -319,8 +321,15 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
         defaultTimezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone, notifyChanged: () => {},
       });
     },
-    /** False once durable Bot sessions are on or being enabled: legacy Bot chats are then history only. */
-    legacyChatsAllowed: () => !durable && !cliDurableBotMarker(agentDir),
+    /**
+     * False once durable Bot sessions are on or being enabled: legacy Bot chats
+     * are then history only. An unreadable marker counts as enabled, so it
+     * fails closed for Bot chats and never throws into a caller.
+     */
+    legacyChatsAllowed: () => {
+      if (durable) return false;
+      try { return !cliDurableBotMarker(agentDir); } catch { return false; }
+    },
     assertLegacyChatAllowed() { if (durable || cliDurableBotMarker(agentDir)) throw new Error("This Bot uses durable sessions. Restart the daemon after migration and use bots send or the Bot session endpoint."); },
     async instructions(admission: BotRuntimeAuthorityAdmission) {
       await admission.revalidateBeforeEffect();

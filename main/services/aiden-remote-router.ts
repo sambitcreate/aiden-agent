@@ -1842,18 +1842,48 @@ export function progressCapabilitySupported(
 }
 
 /**
+ * Bot opt-ins: `serverCapabilities` lists each only for a Bot-aware device
+ * while its routes are wired, so negotiation and the grant projection check
+ * them against that same list rather than predicates of their own.
+ */
+const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES: readonly string[] = [
+  ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PLAN_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
+];
+
+/**
  * A device's grants as this host projects them: a progress grant the host
  * does not serve (a host that stopped advertising skills, or one granted
- * before pairing was filtered) is left out, so `capabilities` stays within
+ * before pairing was filtered) and a Bot opt-in the host does not advertise
+ * to this device are left out, so `capabilities` stays within
  * `serverCapabilities`, which iOS and Android require. Routes still refuse it.
  */
 function servedDeviceCapabilities(
+  device: AidenRemoteRouterAuthenticatedDevice,
   capabilities: Iterable<AidenRemoteCapability>,
   dependencies: AidenRemoteRouterDependencies,
 ): AidenRemoteCapability[] {
+  const advertised = new Set<string>(advertisedServerCapabilities(device, dependencies));
   return [...capabilities].filter((capability) =>
-    !(AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability) ||
-    progressCapabilitySupported(dependencies, capability as AidenRemoteProgressCapability));
+    ((AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability)
+      ? progressCapabilitySupported(dependencies, capability as AidenRemoteProgressCapability)
+      : true) &&
+    (!AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES.includes(capability) || advertised.has(capability)));
 }
 
 function hostCapabilitySupported(
@@ -2790,7 +2820,7 @@ export function createAidenRemoteRequestHandler(
           name: dependencies.displayName(),
           appVersion: dependencies.appVersion,
           ...(peerRoutes === undefined ? {} : { peerRoutes }),
-          capabilities: servedDeviceCapabilities(device.capabilities, dependencies),
+          capabilities: servedDeviceCapabilities(device, device.capabilities, dependencies),
           ...(device.name ? { deviceName: device.name } : {}),
           ...(device.acceptsBotCapabilities === true ||
             device.acceptsProgressCapabilities === true
@@ -2894,6 +2924,7 @@ export function createAidenRemoteRequestHandler(
             400,
           );
         }
+        const advertised = new Set<string>(advertisedServerCapabilities(device, dependencies));
         for (const capability of input.accepts) {
           if (capability.startsWith("app-controls:") && !await dependencies.appControls?.enabled()) throw new AidenRemoteServiceError("capability_denied", "Allow paired-device chat controls in Aiden Agent on your computer first.", 403);
           if ((AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
@@ -3022,12 +3053,20 @@ export function createAidenRemoteRequestHandler(
                 404,
               );
             }
+          } else if (AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES.includes(capability)) {
+            // Watches, open work, routine models and peers: the advertised
+            // list below is their only check.
           } else if (!progressCapabilitySupported(dependencies, capability as AidenRemoteProgressCapability)) {
             throw new AidenRemoteServiceError(
               "not_found",
               "This progress capability is unavailable on this Aiden installation.",
               404,
             );
+          }
+          // A Bot opt-in is granted only where `/server` advertises it to this
+          // device, so its grants never exceed `serverCapabilities`.
+          if (AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES.includes(capability) && !advertised.has(capability)) {
+            throw new AidenRemoteServiceError("not_found", "This Bot capability is unavailable on this Aiden installation.", 404);
           }
         }
         const updated = await dependencies.devices.upgradeDeviceCapabilities(
@@ -3041,7 +3080,7 @@ export function createAidenRemoteRequestHandler(
             403,
           );
         }
-        writeJson(response, 200, { capabilities: servedDeviceCapabilities(updated.capabilities, dependencies) });
+        writeJson(response, 200, { capabilities: servedDeviceCapabilities(device, updated.capabilities, dependencies) });
         return;
       }
       if (path === "/bots/messaging" && request.method === "PUT") {

@@ -1,7 +1,7 @@
 import type { AidenRemoteDesktopPairing } from "../../../main/services/aiden-remote-pairing.js";
 import type { CliPairingStatus } from "./remote.ts";
 import { reportServerRejection, serverAnalyticsContext, showServerNoticeInTerminal, startServerAnalytics } from "./server-analytics.ts";
-import { remoteDaemonCommand } from "./daemon-control.ts";
+import { assertDaemonSocketPathFits, remoteDaemonCommand } from "./daemon-control.ts";
 
 export const SERVE_USAGE = "Usage: aiden serve [--no-remote] [--pair lan|tailscale | --no-pair] [--daemon] | serve stop | serve status";
 
@@ -147,6 +147,8 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
     return;
   }
   const flags = parseServeFlags(args);
+  // Before the analytics notice or client: a server that cannot bind its socket never starts.
+  assertDaemonSocketPathFits(agentDir);
   const analyticsContext = serverAnalyticsContext(agentDir);
   if (flags.daemon) {
     // The detached child has no terminal, so the notice belongs here, before it starts.

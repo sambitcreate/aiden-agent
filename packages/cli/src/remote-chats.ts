@@ -118,7 +118,11 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
       ? false
       : bots.application.authorizeRetainedChat({ ...input, audienceId: botAudience(input.deviceId) }),
     botAudience,
-    // A turn sent to a durable Bot's old chat gets the desktop's refusal.
+    // A second guard: the authorizer above already refuses a turn on a durable
+    // Bot's old chat (404) before the service runs. The service consults this
+    // on every turn and checks the chat's botId only when it is true, so it
+    // must stay cheap and never throw: a corrupt marker reads as durable,
+    // which refuses Bot chats and leaves ordinary chats untouched.
     durableBotSessions: () => !bots.legacyChatsAllowed(),
     botTurnAuthorityPreflight: (input) => bots.preflight(input),
     // Refused before the ledger records anything, so the same key runs after `aiden bots unpause`.

@@ -324,6 +324,10 @@ async function fixture(options: {
               capability !== "chat:continue-in-new-chat" &&
               capability !== "stream:snapshot-reasons" &&
               capability !== "bot:needs-you" &&
+              capability !== "bot:watches" &&
+              capability !== "bot:open-work" &&
+              capability !== "bot:routine-models" &&
+              capability !== "bot:peers" &&
               capability !== "chat:agent-slider",
           )
         ) {
@@ -2711,6 +2715,39 @@ test("a device opts into Bot session cards with bot:cards, and only then is serv
     assert.equal(server.serverCapabilities.includes("bot:cards"), false);
   } finally {
     await unwired.close();
+  }
+});
+
+test("a Bot opt-in the host does not advertise is neither granted nor projected, so capabilities stay within serverCapabilities", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = (accepts: string[]) => ({ method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts }) });
+  // Chat progress is served, but no watch, open-work, routine-model or peer routes are wired.
+  const host = await fixture({ capabilities: ["server:read", "bot:read", "chat:read"], acceptsBotCapabilities: true, deviceType: "mac" });
+  try {
+    for (const capability of ["bot:watches", "bot:open-work", "bot:routine-models", "bot:peers"]) {
+      assert.equal((await fetch(`${host.base}/device/capabilities`, negotiate([capability]))).status, 404, capability);
+    }
+    assert.equal(host.calls.some((call) => call.startsWith("device-capabilities:")), false, "nothing was granted");
+  } finally {
+    await host.close();
+  }
+  // A grant held from earlier is left out of `/server` where it is not advertised.
+  const holder = await fixture({ capabilities: ["server:read", "bot:read", "chat:read", "bot:watches"], acceptsBotCapabilities: true, deviceType: "mac" });
+  try {
+    const server = await (await fetch(`${holder.base}/server`, { headers })).json();
+    assert.equal(server.capabilities.includes("bot:watches"), false);
+    assert.ok(server.capabilities.every((capability: string) => server.serverCapabilities.includes(capability)), JSON.stringify(server));
+  } finally {
+    await holder.close();
+  }
+  // A device paired without Bot capabilities is offered no Bot opt-in, even where Bot sessions are served.
+  const plain = await fixture({ capabilities: ["server:read", "tasks:read"], acceptsProgressCapabilities: true, deviceType: "iphone", botSessions: recordingRevision27Sessions([], { memory: true, proactive: true }) });
+  try {
+    assert.equal((await fetch(`${plain.base}/device/capabilities`, negotiate(["bot:cards"]))).status, 404);
+    const server = await (await fetch(`${plain.base}/server`, { headers })).json();
+    assert.ok(server.capabilities.every((capability: string) => server.serverCapabilities.includes(capability)), JSON.stringify(server));
+  } finally {
+    await plain.close();
   }
 });
 

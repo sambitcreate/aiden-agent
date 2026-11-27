@@ -318,6 +318,7 @@ function fixture(input: {
   omitModelAuthority?: boolean;
   fullWebSearchEnabled?: boolean;
   skillsEnabled?: boolean;
+  noticeRequiredMessage?: string;
 } = {}) {
   const inventoryLeases = new BotRuntimeInventoryLeaseRegistry();
   let currentSnapshot = input.currentSnapshot ?? snapshot();
@@ -455,6 +456,7 @@ function fixture(input: {
     },
     inventoryLeases,
     skillsEnabled: async () => skillsEnabled,
+    ...(input.noticeRequiredMessage ? { noticeRequiredMessage: input.noticeRequiredMessage } : {}),
   };
   return {
     resolver: createBotRuntimeAuthorityResolver(deps),
@@ -719,6 +721,16 @@ test("the sole store admission gate prevents Full authority before audience noti
     app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
     "access_unavailable",
     BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE,
+  );
+  // The default text names no host's commands: the desktop and phones show it as is.
+  assert.doesNotMatch(BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE, /aiden bots|`/u);
+  // A host with its own fix replaces the text; the classification is unchanged.
+  const cli = fixture({ noticeRequiredMessage: "Run `aiden bots acknowledge` on this server." });
+  cli.requireNotice();
+  await expectFailure(
+    cli.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
+    "access_unavailable",
+    "Run `aiden bots acknowledge` on this server.",
   );
 });
 

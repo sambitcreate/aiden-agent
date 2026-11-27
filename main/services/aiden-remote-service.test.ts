@@ -923,7 +923,7 @@ test("a paired profile fails closed with typed remediation instead of moving its
     portCandidates: [pairedPort, alternatePort],
   });
   try {
-    await app.state.issueDevice({ name: "Previous iPhone", type: "iphone", clientVersion: "1" });
+    const issued = await app.state.issueDevice({ name: "Previous iPhone", type: "iphone", clientVersion: "1" });
     await assert.rejects(
       app.service.setEnabled(true),
       (error: unknown) => error instanceof AidenRemotePortInUseError
@@ -938,6 +938,12 @@ test("a paired profile fails closed with typed remediation instead of moving its
     assert.equal(app.persisted().lanPortCommitted, false);
     assert.equal(app.bonjour.starts, 0);
     assert.equal(await canBind(alternatePort), true);
+    // A removed device stays listed but strands nothing, so the profile is fresh again and moves.
+    assert.equal(await app.state.revokeDevice(issued.device.id), true);
+    await app.service.setEnabled(true);
+    assert.equal(app.persisted().lanPort, alternatePort);
+    assert.equal(app.persisted().lanPortCommitted, true);
+    assert.deepEqual(app.bonjour.inputs.map((input) => input.port), [alternatePort]);
   } finally {
     await app.cleanup();
     await closeReservedPort(blocker);
