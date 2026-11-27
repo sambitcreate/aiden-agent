@@ -3264,12 +3264,6 @@ class AidenRemoteClient(
     )
 
     @Serializable
-    private data class DeviceIdentityRequest(val name: String)
-
-    @Serializable
-    private data class DeviceIdentityResponse(val name: String)
-
-    @Serializable
     private data class WorkspaceListResponse(val workspaces: List<AidenWorkspace>)
 
     @Serializable
@@ -3345,19 +3339,6 @@ class AidenRemoteClient(
         val notifications: List<AidenScheduledRunNotification>,
         val now: Long
     )
-
-    @Serializable
-    private data class ScheduledScriptListResponse(val scripts: List<AidenScheduledScript>)
-
-    @Serializable
-    private data class ScheduledMcpServerListResponse(val servers: List<AidenScheduledMcpServer>)
-
-    @Serializable
-    private data class ScheduledPreviewRequest(
-        val cron: String,
-        val timezone: String,
-        val count: Int
-    )
 }
 
 @Serializable
@@ -3405,12 +3386,6 @@ data class AidenGitPushRequest(
 @Serializable
 data class AidenGitCompareRequest(
     val baseRef: String
-)
-
-@Serializable
-data class AidenGitComparisonDiffRequest(
-    val comparisonId: String,
-    val fileId: String
 )
 
 @Serializable
