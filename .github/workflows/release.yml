@@ -49,16 +49,7 @@ jobs:
           if [[ -n "$base_tag_match" ]]; then
             base_tag_exists=true
           fi
-          selection="$(node scripts/prepare-ci-release.mjs "$base_tag_exists")"
-          release_version="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$selection")"
-          release_tag="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tag)' "$selection")"
-          should_publish="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).publish))' "$selection")"
-          echo "version=$release_version" >> "$GITHUB_OUTPUT"
-          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "publish=$should_publish" >> "$GITHUB_OUTPUT"
-          if [[ "$should_publish" != true ]]; then
-            echo "$release_tag already exists; skipping release without changing its version."
-          fi
+          node scripts/prepare-ci-release.mjs "$base_tag_exists" --github-output --announce-existing
 
       - name: Require the analytics project key
         if: ${{ steps.version.outputs.publish == 'true' }}
@@ -231,13 +222,7 @@ jobs:
           if [[ -n "$base_tag_match" ]]; then
             base_tag_exists=true
           fi
-          selection="$(node scripts/prepare-ci-release.mjs "$base_tag_exists")"
-          release_version="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$selection")"
-          release_tag="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tag)' "$selection")"
-          should_publish="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).publish))' "$selection")"
-          echo "version=$release_version" >> "$GITHUB_OUTPUT"
-          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "publish=$should_publish" >> "$GITHUB_OUTPUT"
+          node scripts/prepare-ci-release.mjs "$base_tag_exists" --github-output
 
       - name: Require the analytics project key
         if: ${{ steps.version.outputs.publish == 'true' }}
@@ -362,13 +347,7 @@ jobs:
           if [[ -n "$base_tag_match" ]]; then
             base_tag_exists=true
           fi
-          selection="$(node scripts/prepare-ci-release.mjs "$base_tag_exists")"
-          release_version="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$selection")"
-          release_tag="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tag)' "$selection")"
-          should_publish="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).publish))' "$selection")"
-          echo "version=$release_version" >> "$GITHUB_OUTPUT"
-          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "publish=$should_publish" >> "$GITHUB_OUTPUT"
+          node scripts/prepare-ci-release.mjs "$base_tag_exists" --github-output
 
       - name: Download verified desktop assets
         if: ${{ steps.version.outputs.publish == 'true' }}
