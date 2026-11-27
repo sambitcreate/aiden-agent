@@ -50,7 +50,7 @@ import { providerModelInfo } from "../services/provider-model-info.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
 import { registerProviderCatalogHandlers } from "./provider-catalog-handlers.js";
 import { asProviderId, asString, createProviderPayloadParser } from "./provider-payload.js";
-import type { StoredProvider } from "../services/types.js";
+import type { AppSettings, StoredProvider } from "../services/types.js";
 import { MAX_CONFIG_ID_LENGTH } from "../services/types.js";
 import {
   normalizeAppearanceConfig,
@@ -404,11 +404,21 @@ export function registerProviderHandlers(): void {
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;
-    const next: Partial<import("../services/types.js").AppSettings> = {};
-    if (p.remoteAppControlsEnabled !== undefined) {
-      if (typeof p.remoteAppControlsEnabled !== "boolean") throw new Error("Invalid paired controls setting.");
-      next.remoteAppControlsEnabled = p.remoteAppControlsEnabled;
+    const next: Partial<AppSettings> = {};
+    type BooleanSettingKey = {
+      [K in keyof AppSettings]-?: NonNullable<AppSettings[K]> extends boolean
+        ? boolean extends NonNullable<AppSettings[K]>
+          ? K
+          : never
+        : never;
+    }[keyof AppSettings];
+    function applyBoolean<K extends BooleanSettingKey>(key: K, message: string): void {
+      const value = p[key];
+      if (value === undefined) return;
+      if (typeof value !== "boolean") throw new Error(message);
+      next[key] = value;
     }
+    applyBoolean("remoteAppControlsEnabled", "Invalid paired controls setting.");
     if (p.appControlPolicy !== undefined) {
       if (!["disabled", "ask", "safe"].includes(p.appControlPolicy as string)) throw new Error("Invalid app controls policy.");
       next.appControlPolicy = p.appControlPolicy as import("../../renderer/shared/app-controls.js").AppControlPolicy;
@@ -445,14 +455,8 @@ export function registerProviderHandlers(): void {
       next.compactionEngine = p.compactionEngine;
     }
     if (p.compactionModelOverrides !== undefined) next.compactionModelOverrides = parseCompactionModelOverrides(p.compactionModelOverrides);
-    if (p.longPromptCacheRetention !== undefined) {
-      if (typeof p.longPromptCacheRetention !== "boolean") throw new Error("Invalid prompt cache lifetime setting.");
-      next.longPromptCacheRetention = p.longPromptCacheRetention;
-    }
-    if (p.cacheWarmingEnabled !== undefined) {
-      if (typeof p.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
-      next.cacheWarmingEnabled = p.cacheWarmingEnabled;
-    }
+    applyBoolean("longPromptCacheRetention", "Invalid prompt cache lifetime setting.");
+    applyBoolean("cacheWarmingEnabled", "Invalid cache warming setting.");
     if (p.usageLimitWaitHours !== undefined) {
       if (!isUsageLimitWaitHours(p.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
       next.usageLimitWaitHours = p.usageLimitWaitHours;
@@ -465,50 +469,29 @@ export function registerProviderHandlers(): void {
     const approval = parseApprovalSettingsPatch(p);
     Object.assign(next, approval);
     const approvalModeBefore = approval.approvalMode !== undefined ? (await configStore.getSettings()).approvalMode : undefined;
-    if (p.botMessaging !== undefined) {
-      if (typeof p.botMessaging !== "boolean") throw new Error("Invalid Bot messaging setting.");
-      next.botMessaging = p.botMessaging;
-    }
-    if (p.childChats !== undefined) {
-      if (typeof p.childChats !== "boolean") throw new Error("Invalid started chats setting.");
-      next.childChats = p.childChats;
-    }
+    applyBoolean("botMessaging", "Invalid Bot messaging setting.");
+    applyBoolean("childChats", "Invalid started chats setting.");
     if (p.spendingLimits !== undefined) {
       const limits = parseSpendingLimitsSettings(p.spendingLimits);
       if (limits === undefined) throw new Error("Invalid spending limits.");
       next.spendingLimits = limits;
     }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
-    if (p.computerUseAlwaysAllow !== undefined) {
-      if (typeof p.computerUseAlwaysAllow !== "boolean") throw new Error("Invalid Computer Use setting.");
-      next.computerUseAlwaysAllow = p.computerUseAlwaysAllow;
-    }
+    applyBoolean("computerUseAlwaysAllow", "Invalid Computer Use setting.");
     for (const key of ["aidenLiveEnabled", "aidenLiveButtonVisible"] as const) {
-      if (p[key] === undefined) continue;
-      if (typeof p[key] !== "boolean") throw new Error("Invalid Aiden Live setting.");
-      next[key] = p[key];
+      applyBoolean(key, "Invalid Aiden Live setting.");
     }
     if (p.quickChatDefaultPersistence !== undefined) {
       const parsed = parseQuickChatDefaultPersistence(p.quickChatDefaultPersistence);
       if (!parsed) throw new Error("Invalid Quick Chat default mode.");
       next.quickChatDefaultPersistence = parsed;
     }
-    if (p.quickChatKeepOpenOnBlur !== undefined) {
-      if (typeof p.quickChatKeepOpenOnBlur !== "boolean") {
-        throw new Error("Invalid Quick Chat blur setting.");
-      }
-      next.quickChatKeepOpenOnBlur = p.quickChatKeepOpenOnBlur;
-    }
+    applyBoolean("quickChatKeepOpenOnBlur", "Invalid Quick Chat blur setting.");
     for (const key of ["botBubblesEnabled", "botBubblesFloatOverApps"] as const) {
-      if (p[key] === undefined) continue;
-      if (typeof p[key] !== "boolean") throw new Error("Invalid Bot bubbles setting.");
-      next[key] = p[key];
+      applyBoolean(key, "Invalid Bot bubbles setting.");
     }
     Object.assign(next, parseAidenLiveSettingsPatch(p as Record<string, unknown>));
-    if (p.skillsEnabled !== undefined) {
-      if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
-      next.skillsEnabled = p.skillsEnabled;
-    }
+    applyBoolean("skillsEnabled", "Invalid skills enabled setting.");
     if (typeof p.dictationAccelerator === "string")
       next.dictationAccelerator = p.dictationAccelerator;
     if (
@@ -527,7 +510,7 @@ export function registerProviderHandlers(): void {
     if (pendingWorkspaceToken !== undefined) {
       ipcMain.broadcast("settings:controls-changed", {});
     }
-    let saved: import("../services/types.js").AppSettings;
+    let saved: AppSettings;
     try {
       saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
         ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
