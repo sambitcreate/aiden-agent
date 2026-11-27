@@ -293,6 +293,35 @@ test("design_app_started is sent without manager", async (t) => {
   assert.deepEqual(events, [{ event: "design_app_started", props: { framework: "astro", outcome: "failed" } }]);
 });
 
+test("design_app_frame_added is sent with its source and device bucket", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  reportAnalyticsEvent("design_app_frame_added", { source: "person", device_bucket: "phone" });
+  reportAnalyticsEvent("design_app_frame_added", { source: "aiden", device_bucket: "desktop" });
+  await analyticsSettled();
+  assert.deepEqual(events, [
+    { event: "design_app_frame_added", props: { source: "person", device_bucket: "phone" } },
+    { event: "design_app_frame_added", props: { source: "aiden", device_bucket: "desktop" } },
+  ]);
+});
+
+test("design_app_frame_added drops the payload for a source or device outside its lists", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  reportAnalyticsEvent("design_app_frame_added", { source: "bot", device_bucket: "phone" } as never);
+  reportAnalyticsEvent("design_app_frame_added", { source: "person", device_bucket: "watch" } as never);
+  await analyticsSettled();
+  assert.deepEqual(events, [
+    { event: "design_app_frame_added", props: undefined },
+    { event: "design_app_frame_added", props: undefined },
+  ]);
+});
+
+test("design_app_frame_added never carries the route, app or framework", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  reportAnalyticsEvent("design_app_frame_added", { source: "aiden", device_bucket: "laptop", route: "/x", appRoot: "apps/web", framework: "next" } as never);
+  await analyticsSettled();
+  assert.deepEqual(events, [{ event: "design_app_frame_added", props: { source: "aiden", device_bucket: "laptop" } }]);
+});
+
 test("design_app_started drops an unknown framework, manager or outcome, and any other property", async (t) => {
   const events = captureAnalyticsEvents(t);
   // A framework, manager or outcome outside the registry's lists is never kept.
