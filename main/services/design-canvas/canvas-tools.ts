@@ -113,9 +113,11 @@ import {
   isAppScale,
   isAppViewportSide,
   roundAppScale,
+  withAppViewport,
 } from "../../../renderer/shared/design-canvas/app-frame.js";
 import type { DesignAppCandidate, DesignAppStatus } from "../../../renderer/shared/design-app.js";
 import { APP_DEVICE_NAMES, APP_DEVICES, isAppDevice } from "../../../renderer/shared/design-canvas/app-devices.js";
+import { placeAppVariant } from "../../../renderer/shared/design-canvas/app-variants.js";
 import { isConcreteRoute } from "../../../renderer/shared/design-canvas/app-routes.js";
 import { designPageTweakNames } from "./inspect.js";
 import { claimWithRoom } from "./lazy-claim.js";
@@ -1265,8 +1267,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             width: given(p.width) || device ? viewport.width : own.width,
             height: given(p.height) || device ? viewport.height : own.height,
           };
-          const mergedScale = fitAppScale(merged, given(p.scale) ? appScale(p.scale) : (adopted.scale ?? APP_DEFAULT_SCALE), DESIGN_CANVAS_LIMITS.maxSize);
-          resize = { viewport: merged, scale: mergedScale, ...appFrameBox(merged, mergedScale) };
+          // An explicit scale wins over the frame's own; the shared rule keeps it unless the box can't fit (S92).
+          resize = withAppViewport({ ...adopted, scale: given(p.scale) ? appScale(p.scale) : adopted.scale }, merged, DESIGN_CANVAS_LIMITS.maxSize);
         }
         const frames = doc.frames.map((entry) => (entry.id === adopted.id ? applyStyle({ ...entry, title, ...resize, ...(label ? { label } : {}) }, style) : entry));
         const next = refitGroups(syncConnectors({ ...doc, frames }), [adopted.groupId]);
@@ -1283,30 +1285,39 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         };
       }
       if (original) {
-        if (original.locked) throw new CanvasToolError(LOCKED_MESSAGE);
-        // A variant joins its original's group or artboard (refused when locked), or a new group made around both.
-        if (original.groupId) groupOf(doc, original.groupId, pageId);
-        const adding = original.groupId ? 1 : 2;
-        if (doc.frames.filter((entry) => entry.pageId === pageId).length + adding > DESIGN_CANVAS_LIMITS.framesPerPage) {
-          throw new CanvasToolError(`That page is full (${DESIGN_CANVAS_LIMITS.framesPerPage} frames).`);
-        }
-        // The new group counts too, or the store would drop it on save.
-        if (doc.frames.length + adding > DESIGN_CANVAS_LIMITS.frames) {
+        // A variant joins its original's group or artboard (refused when locked), or a new group made around both (S93).
+        const variant = placeAppVariant(doc, original, {
+          id,
+          groupId: variantGroupId!,
+          title,
+          route,
+          viewport,
+          scale,
+          ...(label ? { label } : {}),
+          createdBy: "aiden",
+          style: style.set,
+        });
+        if ("error" in variant) {
+          if (variant.error === "locked") throw new CanvasToolError(LOCKED_MESSAGE);
+          if (variant.error === "locked-group") groupOf(doc, original.groupId, pageId);
+          if (variant.error === "page-full") throw new CanvasToolError(`That page is full (${DESIGN_CANVAS_LIMITS.framesPerPage} frames).`);
           throw new CanvasToolError(
             `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
           );
         }
+        const frame = variant.doc.frames.find((entry) => entry.id === id)!;
+        return {
+          doc: variant.doc,
+          value: { status: "placed", placed: same.length > 0 ? "copy" : "new", units: "canvas", frame: summarizeFrame(frame) },
+        };
       }
-      const namedGroup = original ? original.groupId : p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
-      const groupId = original ? original.groupId : groupOf(doc, namedGroup, pageId);
-      const variants = original ? doc.frames.filter((entry) => entry.pageId === pageId && (entry.id === original.id || entry.variantOf === original.id)) : [];
-      const at = original
-        ? { x: Math.max(...variants.map((entry) => entry.x + entry.w)) + DESIGN_FRAME_GAP, y: original.y }
-        : anchor
-          ? besideBox(anchor, box, side!, blockersOn(doc, pageId, new Set([anchor.id, groupId])))
-          : x !== undefined && y !== undefined
-            ? { x, y }
-            : undefined;
+      const namedGroup = p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
+      const groupId = groupOf(doc, namedGroup, pageId);
+      const at = anchor
+        ? besideBox(anchor, box, side!, blockersOn(doc, pageId, new Set([anchor.id, groupId])))
+        : x !== undefined && y !== undefined
+          ? { x, y }
+          : undefined;
       const input: PlaceFrameInput = {
         kind: "app",
         title,
@@ -1318,7 +1329,6 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         viewport,
         scale,
         ...(label ? { label } : {}),
-        ...(original ? { variantOf: original.id } : {}),
         ...(at ?? {}),
         ...(groupId ? { groupId } : {}),
         ...style.set,
@@ -1329,30 +1339,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
         );
       }
-      let placedDoc = refitGroups(placed.doc, [groupId]);
-      if (original && !original.groupId && variantGroupId) {
-        const grouped = new Set([original.id, id]);
-        placedDoc = fitGroupToMembers(
-          {
-            ...placedDoc,
-            frames: [
-              ...placedDoc.frames.map((entry) => (grouped.has(entry.id) ? { ...entry, groupId: variantGroupId } : entry)),
-              {
-                id: variantGroupId,
-                kind: "group",
-                title: (original.route ?? "/").slice(0, DESIGN_CANVAS_LIMITS.titleChars),
-                pageId,
-                x: original.x,
-                y: original.y,
-                w: DEFAULT_BOX.group.w,
-                h: DEFAULT_BOX.group.h,
-                createdBy: "aiden",
-              },
-            ],
-          },
-          variantGroupId,
-        );
-      }
+      const placedDoc = refitGroups(placed.doc, [groupId]);
       const frame = placedDoc.frames.find((entry) => entry.id === id)!;
       return {
         doc: placedDoc,
@@ -1858,8 +1845,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 // The frame keeps its scale, refitted so the box stays within the canvas's limits (S85, M1).
                 const own = current.viewport ?? APP_DEFAULT_VIEWPORT;
                 const viewport = { width: appWidth ?? appPreset?.width ?? own.width, height: appHeight ?? appPreset?.height ?? own.height };
-                const scale = fitAppScale(viewport, current.scale ?? APP_DEFAULT_SCALE, DESIGN_CANVAS_LIMITS.maxSize);
-                next = { ...next, viewport, scale, ...appFrameBox(viewport, scale) };
+                next = { ...next, ...withAppViewport(current, viewport, DESIGN_CANVAS_LIMITS.maxSize) };
               }
               if (current.kind === "app" && appRouteTo !== undefined) {
                 next = { ...next, route: appRouteTo, ...(title === undefined && current.title === current.route ? { title: appRouteTo.slice(0, DESIGN_CANVAS_LIMITS.titleChars) } : {}) };

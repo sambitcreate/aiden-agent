@@ -147,6 +147,82 @@ export function appResizeScale(
   return fitAppScale(shown, scale, maxSize);
 }
 
+/** The scale an app frame draws at when it names none. */
+export const APP_DEFAULT_SCALE = 0.5;
+
+/** A side of an app frame an edge drag moves (3c, S89). */
+export type AppResizeSide = "left" | "right" | "top" | "bottom";
+/** What a resize of an app frame changes: a corner keeps the viewport and scales (D15), an edge reflows (S89). */
+export type AppResizeMode = "corner" | AppResizeSide;
+
+/** The largest viewport side, from `limit` down, whose box side fits `room` at `scale`. */
+function largestSide(scale: number, room: number, limit: number): number {
+  let side = Math.min(limit, Math.floor(room / scale));
+  while (side > APP_FRAME_LIMITS.minViewport && Math.round(side * scale) > room) side -= 1;
+  return Math.max(APP_FRAME_LIMITS.minViewport, side);
+}
+
+function viewportSide(raw: number, scale: number, room: number): number {
+  const rounded = Number.isFinite(raw) ? Math.round(raw) : APP_FRAME_LIMITS.minViewport;
+  return Math.min(largestSide(scale, room, APP_FRAME_LIMITS.maxViewport), Math.max(APP_FRAME_LIMITS.minViewport, rounded));
+}
+
+/**
+ * An app frame after an edge drag (3c, S89): the dragged side's viewport
+ * length follows the box at the frame's own scale, kept to 200–4000 and to
+ * `maxSize`; the box is then recomputed (S62), and a left or top drag keeps
+ * the opposite edge where it was, even when the drag went past the clamp.
+ */
+export function appEdgeResize(
+  frame: { x: number; y: number; w: number; h: number; viewport?: { width: number; height: number }; scale?: number },
+  side: AppResizeSide,
+  drag: { x?: number; y?: number; w?: number; h?: number },
+  maxSize: number,
+): { x: number; y: number; w: number; h: number; viewport: { width: number; height: number } } {
+  const scale = frame.scale ?? APP_DEFAULT_SCALE;
+  const own = frame.viewport ?? APP_DEFAULT_VIEWPORT;
+  const viewport =
+    side === "left" || side === "right"
+      ? { width: viewportSide((drag.w ?? frame.w) / scale, scale, maxSize), height: own.height }
+      : { width: own.width, height: viewportSide(((drag.h ?? frame.h) - DESIGN_FRAME_HEADER_PX) / scale, scale, maxSize - DESIGN_FRAME_HEADER_PX) };
+  const box = appFrameBox(viewport, scale);
+  return {
+    x: side === "left" ? frame.x + frame.w - box.w : frame.x,
+    y: side === "top" ? frame.y + frame.h - box.h : frame.y,
+    ...box,
+    viewport,
+  };
+}
+
+/** The box bounds an edge control gives xyflow, so its own values never pass the viewport's limits (S89). */
+export function appEdgeBounds(
+  scale: number,
+  minSize: number,
+  maxSize: number,
+): { minWidth: number; maxWidth: number; minHeight: number; maxHeight: number } {
+  const min = Math.round(APP_FRAME_LIMITS.minViewport * scale);
+  const max = Math.round(APP_FRAME_LIMITS.maxViewport * scale);
+  return {
+    minWidth: Math.max(minSize, min),
+    maxWidth: Math.min(maxSize, max),
+    minHeight: Math.max(minSize, min + DESIGN_FRAME_HEADER_PX),
+    maxHeight: Math.min(maxSize, max + DESIGN_FRAME_HEADER_PX),
+  };
+}
+
+/**
+ * An app frame shown at another viewport (S85, S92): it keeps its scale,
+ * lowered only as far as its box needs to fit `maxSize`.
+ */
+export function withAppViewport(
+  frame: { viewport?: { width: number; height: number }; scale?: number },
+  viewport: { width: number; height: number },
+  maxSize: number,
+): { viewport: { width: number; height: number }; scale: number; w: number; h: number } {
+  const scale = fitAppScale(viewport, frame.scale ?? APP_DEFAULT_SCALE, maxSize);
+  return { viewport: { width: viewport.width, height: viewport.height }, scale, ...appFrameBox(viewport, scale) };
+}
+
 /** The iframe's `name`: the frame id and a one-use mount token (D2). Throws for an id it can't carry. */
 export function appFrameName(frameId: string, mountToken: string): string {
   if (!FRAME_ID.test(frameId)) throw new Error("This frame id can't name a live app frame.");
