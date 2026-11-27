@@ -410,10 +410,21 @@ export class TerminalInputOrder {
     });
     return { previous, done };
   }
+
+  /** Settles once every write of the session that has entered so far has. */
+  settled(sessionId: string): Promise<void> {
+    return this.tails.get(sessionId) ?? Promise.resolve();
+  }
 }
 
 export class TerminalService {
   private outputObserver?: (workspaceId: string, data: string) => void;
+  /**
+   * The order of each session's writes. `terminal:write` takes its place here
+   * when the IPC arrives, before its access check, so a close check can wait
+   * for every keystroke sent ahead of it.
+   */
+  readonly input = new TerminalInputOrder();
 
   setOutputObserver(observer: (workspaceId: string, data: string) => void): void {
     this.outputObserver = observer;
@@ -667,6 +678,12 @@ export class TerminalService {
    */
   async foregroundCommand(id: string, owner: RendererDocumentOwner): Promise<string | null> {
     const session = this.getOwned(id, owner);
+    const open = () => this.sessions.get(id) === session && !owner.isDestroyed();
+    // Enter and then Close: the close must see that Enter, or it would take
+    // the shell for one nobody has typed in. Waiting does not hold back later
+    // keystrokes, which take places of their own.
+    await this.input.settled(id);
+    if (!open()) return null;
     const command = this.readForegroundCommand(session);
     if (command !== null) return command;
     // A script run by the shell's own interpreter (`./deploy.sh` under bash)
@@ -676,7 +693,6 @@ export class TerminalService {
     const shellPid = session.pty.pid;
     const shellName = commandBaseName(session.resolvedShell);
     const read = this.options.readForegroundState ?? readForegroundState;
-    const open = () => this.sessions.get(id) === session && !owner.isDestroyed();
     const first = await read(shellPid);
     if (first === null || !open()) return null;
     if (first.group !== shellPid) return shellName;

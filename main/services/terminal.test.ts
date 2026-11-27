@@ -1207,6 +1207,39 @@ test("closing notices a script that runs under the shell's own name", async (t) 
   assert.equal(await check(), null);
 });
 
+test("a close check waits for keystrokes sent before it, so Enter then Close asks", async (t) => {
+  const { service, session, owner, startCheck, foreground, shellState } = await foregroundHarness(t);
+  // Once the Enter lands, the shell starts `x=$(sleep 30)` in its own group.
+  foreground.queue.push(shellState(), shellState({ children: 1 }));
+  // terminal:write took its place, and its access check is still running.
+  const enter = service.input.enter(session.id);
+  const { result } = await startCheck();
+  assert.equal(foreground.reads, 0, "the check read the shell before the Enter reached it");
+  service.write(session.id, "x=$(sleep 30)\r", owner.owner);
+  enter.done();
+  await flushAsync();
+  t.mock.timers.tick(FOREGROUND_CONFIRM_MS);
+  assert.equal(await result, "zsh");
+});
+
+test("a write refused before it reached the shell does not count as typing for a close check", async (t) => {
+  const { service, session, owner, startCheck, foreground, shellState } = await foregroundHarness(t);
+  foreground.state = shellState({ running: true });
+  const refused = service.input.enter(session.id);
+  const { result } = await startCheck();
+  refused.done();
+  assert.equal(await result, null);
+  assert.equal(foreground.reads, 1);
+
+  // Refused because access was lost, which closed the terminal: nothing to ask.
+  const closing = service.input.enter(session.id);
+  const { result: afterClose } = await startCheck();
+  service.close(session.id, owner.owner);
+  closing.done();
+  assert.equal(await afterClose, null);
+  assert.equal(foreground.reads, 1);
+});
+
 test("a terminal nobody has typed in closes without asking while its shell starts", async (t) => {
   const { child, service, session, owner, check, foreground, shellState, typed } = await foregroundHarness(t);
   // Startup files keep the shell busy in its own group: on a CPU, with a
