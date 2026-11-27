@@ -1,5 +1,7 @@
 package sbtbiswas.AidenOnTheGo
 
+import androidx.compose.ui.res.stringResource
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -82,6 +84,7 @@ fun ContentView(
                         }
                         Text(issue.message, style = MaterialTheme.typography.bodySmall)
                         if (issue.canRetry) TextButton(onClick = { coordinator.refreshClient() }) { Text("Retry connection") }
+                        if (issue.pairAgain) TextButton(onClick = onOpenInstallations) { Text(stringResource(R.string.connection_pair_again)) }
                     }
                 }
             }

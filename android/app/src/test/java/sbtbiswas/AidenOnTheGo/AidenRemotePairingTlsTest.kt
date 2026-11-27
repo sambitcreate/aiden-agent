@@ -274,12 +274,15 @@ class AidenRemotePairingTlsTest {
     @Test
     fun onlyARevokedCredentialForgetsThePairing() = runBlocking {
         fun envelope(code: String) = """{"error":{"code":"$code","message":"Nope.","requestId":"req_1","retryable":false}}"""
+        // Each answer, whether the pairing stays, and whether the banner offers Pair again.
         val cases = listOf(
-            MockResponse().setResponseCode(403).setBody(envelope("capability_denied")) to true,
-            MockResponse().setResponseCode(401).setBody("not json") to true,
-            MockResponse().setResponseCode(403).setBody(envelope("credential_revoked")) to false
+            Triple(MockResponse().setResponseCode(403).setBody(envelope("capability_denied")), true, false),
+            Triple(MockResponse().setResponseCode(401).setBody("not json"), true, false),
+            // The computer forgot this device: the pairing stays, retrying can't help, Pair again can.
+            Triple(MockResponse().setResponseCode(401).setBody(envelope("authentication_required")), true, true),
+            Triple(MockResponse().setResponseCode(403).setBody(envelope("credential_revoked")), false, false)
         )
-        for ((response, kept) in cases) {
+        for ((response, kept, pairAgain) in cases) {
             val leaf = leaf("localhost")
             val server = httpsServer(leaf)
             server.enqueue(response)
@@ -304,6 +307,11 @@ class AidenRemotePairingTlsTest {
                 assertEquals(label, if (kept) AidenConnectionState.OFFLINE else AidenConnectionState.NEEDS_PAIRING, coordinator.connectionState.value)
                 assertEquals(label, kept, store.installations.value.any { it.instanceId == "desktop_lan" })
                 assertEquals(label, kept, secure.getCredential("desktop_lan:device_phone") != null)
+                if (kept) {
+                    val issue = coordinator.connectionIssue.value!!
+                    assertEquals(label, pairAgain, issue.pairAgain)
+                    assertEquals(label, !pairAgain, issue.canRetry)
+                }
             } finally {
                 scope.cancel()
             }

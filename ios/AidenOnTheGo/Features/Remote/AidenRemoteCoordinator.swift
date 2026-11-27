@@ -6,6 +6,9 @@ struct AidenConnectionIssue: Equatable {
     let title: String
     let message: String
     let canRetry: Bool
+    /// Offers Pair again, because the computer no longer knows this device
+    /// although the saved installation is kept.
+    var pairAgain = false
 
     static func classify(_ error: Error) -> Self {
         let url = error as? URLError
@@ -22,6 +25,9 @@ struct AidenConnectionIssue: Equatable {
             switch remote {
             case .missingCredential, .missingTrustConfiguration:
                 return Self(title: "Pairing required", message: "Open Connections on the computer and pair this device again.", canRetry: false)
+            case .server(401, let body) where body.code.rawValue == "authentication_required":
+                // The computer forgot this device: retrying can't succeed.
+                return Self(title: "Pairing required", message: "Open Connections on the computer and pair this device again.", canRetry: false, pairAgain: true)
             case .server(_, let body) where body.code.rawValue == "unsupported_protocol" || body.code.rawValue == "client_upgrade_required":
                 return Self(title: "Update required", message: "Update Aiden on both devices, then retry.", canRetry: true)
             default: break

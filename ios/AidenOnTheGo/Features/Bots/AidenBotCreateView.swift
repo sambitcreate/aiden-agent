@@ -467,14 +467,15 @@ final class AidenBotCreateFlow {
         return task
     }
 
-    /// 401 or 403, or a credential that's gone: this phone can no longer make Bots on this
-    /// Mac. A pairing that merely stopped being the active one is not access loss; its ask
-    /// stays for when it is active again.
+    /// A revoked or missing credential: this phone can no longer make Bots on this Mac.
+    /// Any other 401 or 403, such as `capability_denied`, is a refusal and the ask stays.
+    /// A pairing that merely stopped being the active one is not access loss either; its
+    /// ask stays for when it is active again.
     private static func isAccessLoss(_ error: Error) -> Bool {
         guard let error = error as? AidenRemoteClientError else { return false }
         switch error {
-        case let .server(status, _), let .unexpectedStatus(status):
-            return status == 401 || status == 403
+        case .server:
+            return error.isCredentialRevoked
         case .missingCredential:
             return true
         default:

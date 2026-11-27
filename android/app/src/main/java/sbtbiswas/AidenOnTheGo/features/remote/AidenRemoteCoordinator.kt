@@ -36,13 +36,27 @@ import okhttp3.OkHttpClient
 import java.io.File
 import java.util.UUID
 
-data class AidenConnectionIssue(val title: String, val message: String, val canRetry: Boolean) {
+/**
+ * Why the active computer can't be reached. [pairAgain] offers the pairing screen: the pairing is
+ * kept, but only a new one can reach this computer again.
+ */
+data class AidenConnectionIssue(val title: String, val message: String, val canRetry: Boolean, val pairAgain: Boolean = false) {
     companion object {
-        fun classify(error: Throwable): AidenConnectionIssue = when (error) {
-            is javax.net.ssl.SSLException, AidenRemoteClientException.MissingTrustConfiguration ->
+        private val pairingRequired =
+            AidenConnectionIssue("Pairing required", "Open Connections on the computer and pair this device again.", canRetry = false, pairAgain = true)
+
+        fun classify(error: Throwable): AidenConnectionIssue = when {
+            error is javax.net.ssl.SSLException || error === AidenRemoteClientException.MissingTrustConfiguration ->
                 AidenConnectionIssue("Verify this computer", "The computer's secure identity could not be verified. Check it on the desktop and pair again if its identity changed.", false)
-            AidenRemoteClientException.MissingCredential ->
-                AidenConnectionIssue("Pairing required", "Open Connections on the computer and pair this device again.", false)
+            error === AidenRemoteClientException.MissingCredential -> pairingRequired
+            // The computer no longer knows this device (its records were reset or pruned). Retrying
+            // can't help, and only a decoded answer says so: an unreadable 401 stays retryable.
+            error is AidenRemoteClientException.Server && error.statusCode == 401 && error.isDecodedEnvelope &&
+                error.body.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.AUTHENTICATION_REQUIRED -> pairingRequired
+            else -> classifyTransport(error)
+        }
+
+        private fun classifyTransport(error: Throwable): AidenConnectionIssue = when (error) {
             is sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException ->
                 AidenConnectionIssue("Update required", "The computer returned data this app cannot use. Update Aiden on both devices, then retry.", true)
             is java.net.SocketTimeoutException ->

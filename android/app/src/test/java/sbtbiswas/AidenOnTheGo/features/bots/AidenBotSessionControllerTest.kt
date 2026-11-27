@@ -2247,6 +2247,30 @@ class AidenBotSessionControllerTest {
 
     // F15: a refusal of this Bot chat, while the pairing stands, keeps what's unsent. Only a revoked
     // credential (above) discards it.
+    // An unreadable 403 on a send may hide a request the Mac took: the message keeps its key
+    // (CACHED_REJECTION_LEDGER), and nothing is discarded.
+    @Test
+    fun anUnreadable403OnASendKeepsTheMessageAndItsKey() = runTest {
+        val unreadable = AidenRemoteClientException.Server(
+            403, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.INTERNAL_ERROR, "Aiden Agent returned HTTP status 403.", "", false),
+            isDecodedEnvelope = false
+        )
+        val transport = FakeTransport(runningSession)
+        transport.sendFailures += unreadable
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = store(tempFolder.newFolder(), { started }), nowMs = { started })
+        controller.refetch()
+        runCurrent()
+        assertTrue(controller.send("Plan lunch"))
+        runCurrent()
+
+        val kept = controller.state.value.outbox.single()
+        assertEquals(1, transport.sends.size)
+        assertEquals("Plan lunch", kept.text)
+        assertTrue("its key stays for the retry", kept.keepsKey)
+        assertFalse(controller.state.value.accessLost)
+        assertNotEquals(AidenBotSessionNotice.ACCESS_LOST, controller.state.value.notice)
+    }
+
     @Test
     fun aCapabilityDeniedRefusalKeepsTheUnsentMessageAsFailed() = runTest {
         val denied = serverError(403, AidenRemoteErrorCode.CAPABILITY_DENIED)
@@ -2264,8 +2288,10 @@ class AidenBotSessionControllerTest {
         runCurrent()
 
         val kept = controller.state.value.outbox.single()
+        assertEquals("the send itself was refused", 1, transport.sends.size)
         assertEquals("Plan lunch", kept.text)
         assertEquals(AidenBotOutgoingStatus.FAILED, kept.status)
+        assertFalse("a decoded refusal settles the key: Try again is a new request", kept.keepsKey)
         assertTrue("the refusal shows the access hint", controller.state.value.accessLost)
         assertNotEquals(AidenBotSessionNotice.ACCESS_LOST, controller.state.value.notice)
         assertTrue("the unsent message stays on disk", root.walkTopDown().any { it.isFile })

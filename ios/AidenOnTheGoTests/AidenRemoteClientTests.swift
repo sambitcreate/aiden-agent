@@ -4640,6 +4640,33 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
+    func testAComputerThatForgotThisDeviceAsksToPairAgainAndKeepsThePairing() async throws {
+        for (status, body, pairAgain) in [
+            (401, #"{"error":{"code":"authentication_required","message":"Pair this device.","requestId":"r","retryable":false}}"#, true),
+            (401, "not json", false),
+        ] {
+            let store = AidenInstallationStore(keychain: AidenRemoteMemoryKeychain())
+            _ = try store.savePairing(
+                makeExchange(instanceId: "forgot", deviceId: "device", credential: "credential"),
+                trust: makeSystemTrust(), name: "Studio Mac"
+            )
+            let session = makeSession()
+            AidenRemoteMockURLProtocol.handler = { request in Self.response(for: request, status: status, json: body) }
+            let coordinator = AidenRemoteCoordinator(installationStore: store, clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            })
+
+            await coordinator.connectActiveInstallation()
+
+            let issue = try XCTUnwrap(coordinator.connectionIssue, body)
+            XCTAssertEqual(issue.pairAgain, pairAgain, body)
+            XCTAssertEqual(issue.canRetry, !pairAgain, "retrying a forgotten device can never succeed: \(body)")
+            XCTAssertEqual(issue.title, pairAgain ? "Pairing required" : "Computer unavailable", body)
+            XCTAssertEqual(store.installations.map(\.id), ["forgot"], "only a revoked credential forgets the pairing: \(body)")
+        }
+    }
+
+    @MainActor
     func testInstallationStoreKeepsCredentialsScopedAndSwitchesWithoutLeakage() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)

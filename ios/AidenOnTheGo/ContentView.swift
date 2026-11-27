@@ -512,6 +512,10 @@ struct AidenConnectionRecoveryView: View {
         if issue.canRetry {
             Button("Retry connection") { Task { await coordinator.connectActiveInstallation() } }
         }
+        if issue.pairAgain {
+            Button("Pair again", action: switchConnection)
+                .accessibilityHint("Opens Computers, to pair this device with the computer again.")
+        }
         Button("Switch connection", action: switchConnection)
             .accessibilityHint("Opens Computers, to choose another computer or pair one.")
     }

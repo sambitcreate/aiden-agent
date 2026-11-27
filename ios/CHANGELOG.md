@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-27 — Pair again when the computer forgot this phone; the New Bot ask and refused messages stay.** A decoded 401 `authentication_required` (the Mac or `aiden serve` no longer knows this device) now keeps the pairing and shows "Pairing required" with **Pair again**, which opens Computers, instead of offering Retry connection forever. A 401 whose body can't be read still reads "Computer unavailable" and can be retried. A New Bot create refused with `capability_denied`, or another 401/403 that isn't `credential_revoked`, now keeps its answers for Try again, as on Android; only a revoked or missing credential discards them. A Bot chat message refused with a 401/403 whose body can't be read keeps its idempotency key and is tried again on it, following the cached-rejection-ledger rule; a decoded refusal such as `capability_denied` still reads "Couldn’t send · Try again" on a new key. No Remote wire or revision change.
+
 - **2026-11-27 — A Bot chat refusal keeps unsent messages.** A 403 `capability_denied` (or another 401/403 that isn't `credential_revoked`) on a Bot chat's read, feed or send no longer discards its unsent messages: a refused message stays as "Couldn’t send · Try again" and the refusal is shown. Only a revoked or missing credential, or another active installation, still clears them. No Remote wire or revision change.
 
 - **2026-11-25 — Agent Slider moves to Remote revision 70.** Commands in plain words (`approval:plain-words`) took revision 69 on `main` first, so `chat:agent-slider` is now contract revision 70. The phone still asks for `approval:plain-words` alone after `approval:cards`, and for `chat:agent-slider` alone when the Mac lists it. No behavior change.

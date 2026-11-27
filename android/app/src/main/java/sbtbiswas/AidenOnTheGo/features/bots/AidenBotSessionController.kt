@@ -393,11 +393,13 @@ fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
 }
 
 /**
- * The Mac refused this phone this Bot chat (a 403 `capability_denied`, or another 401/403) while
- * the pairing stands. Unsent messages stay, marked failed, so they can go once access is back.
+ * The Mac refused this phone this Bot chat (a decoded 403 `capability_denied`, or another decoded
+ * 401/403) while the pairing stands. The chat says it has no access; nothing unsent is discarded.
+ * An unreadable 401/403 is an ordinary failure. A send's refusal is settled by
+ * [aidenBotMessageFailureIsAmbiguous], which keeps the key of an unreadable one.
  */
 fun aidenBotAccessDenied(error: Exception): Boolean =
-    error is AidenRemoteClientException.Server && error.isUnauthorized && !error.isCredentialRevoked
+    error is AidenRemoteClientException.Server && error.isDecodedEnvelope && error.isUnauthorized && !error.isCredentialRevoked
 
 /**
  * The audience-shaping Bot session grants [installation] holds. The Mac shapes a
@@ -1530,15 +1532,6 @@ class AidenBotSessionController(
             val latest = _state.value.outbox.firstOrNull { it.key == key } ?: return
             if (aidenBotLostAccess(error)) {
                 purgeForAccessLoss()
-                return
-            }
-            if (aidenBotAccessDenied(error)) {
-                // Refused before it ran: it stays as "Couldn't send · Try again", body intact,
-                // and Try again is a new request.
-                latest.echoEntryId?.let { claimedEntries -= it }
-                updateMessage(key) {
-                    it.copy(status = AidenBotOutgoingStatus.FAILED, keepsKey = false, echoed = false, echoEntryId = null, echoSubmissionId = null)
-                }
                 return
             }
             val attempts = latest.connectionAttempts + 1

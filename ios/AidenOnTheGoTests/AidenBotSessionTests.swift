@@ -3668,6 +3668,37 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         try await stored(store, key, count: 1)
     }
 
+    func testOnlyARefusalTheMacSpelledOutSendsTryAgainOnANewKey() async throws {
+        // A decoded capability_denied answered this key without running it: Try again is new.
+        let refused = FakeBotSessionTransport()
+        let refusedModel = await loaded(refused, try session(.idle))
+        refused.failNextSend(with: try serverError(status: 403, code: "capability_denied"))
+        _ = await refusedModel.send("Plan my week.")
+        let failed = try XCTUnwrap(refusedModel.outgoing.first)
+        XCTAssertEqual(failed.status, .failed)
+        let retried = await refusedModel.retrySend(failed.id)
+        XCTAssertTrue(retried)
+        guard refused.sendKeys.count == 2 else { return XCTFail("Try again sends once: \(refused.sendKeys.count)") }
+        XCTAssertNotEqual(refused.sendKeys[1], refused.sendKeys[0], "the Mac settled the refused key")
+
+        // An unreadable 403 may not be the Mac's answer: the message stays and keeps its key.
+        let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
+        let (store, _) = temporaryStore()
+        let unreadable = FakeBotSessionTransport()
+        unreadable.queueSession(.success(try session(.idle)))
+        let model = model(unreadable, key: key, store: store)
+        await model.load()
+        unreadable.failNextSend(with: AidenRemoteClientError.unexpectedStatus(403))
+        _ = await model.send("Plan my week.")
+        XCTAssertEqual(model.outgoing.map(\.text), ["Plan my week."])
+        XCTAssertEqual(model.look(of: try XCTUnwrap(model.outgoing.first)), .sending, "not Couldn't send")
+        try await stored(store, key, count: 1)
+        unreadable.queueSession(.success(try session(.idle, seq: 5)))
+        await model.load()
+        guard unreadable.sendKeys.count == 2 else { return XCTFail("the next load sends it again: \(unreadable.sendKeys.count)") }
+        XCTAssertEqual(unreadable.sendKeys[0], unreadable.sendKeys[1], "the same message, the same key")
+    }
+
     func testAStreamThatLosesAccessPurgesAndSaysSoWithoutTheRefreshOverwritingIt() async throws {
         let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
         let (store, _) = temporaryStore()
