@@ -77,6 +77,16 @@ test("the export window sets zoom 1 on each commit, opens nothing and goes nowhe
   assert.equal(f.navigate("will-frame-navigate", `${ORIGIN}/again`), "prevented", "after the load, nothing more");
 });
 
+test("the export window answers a Bluetooth chooser with no device, so Electron never picks the first one", () => {
+  const f = fakeContents();
+  guardAppExportContents(f.contents as never, ORIGIN);
+  let prevented = false;
+  let chosen: string | undefined;
+  f.contents.emit("select-bluetooth-device", { preventDefault: () => (prevented = true) }, [{ deviceId: "d1", deviceName: "Keyboard" }], (id: string) => (chosen = id));
+  assert.equal(prevented, true);
+  assert.equal(chosen, "");
+});
+
 test("the export window is registered for the render's life and unregistered on success, failure and timeout", async () => {
   const registry = new AppFrameRegistry({ mainContents: () => ({}), liveIds: () => new Set() });
   const seen: boolean[] = [];

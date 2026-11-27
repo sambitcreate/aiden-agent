@@ -58,6 +58,7 @@ type NavigationDetails = { url: string; isMainFrame: boolean; preventDefault(): 
 type ExportContents = {
   on(event: "did-navigate", listener: () => void): unknown;
   on(event: "will-navigate" | "will-redirect" | "will-frame-navigate", listener: (details: NavigationDetails) => void): unknown;
+  on(event: "select-bluetooth-device", listener: (event: { preventDefault(): void }, devices: unknown[], callback: (deviceId: string) => void) => void): unknown;
   setZoomFactor(factor: number): void;
   setWindowOpenHandler(handler: () => { action: "deny" }): void;
   setWebRTCIPHandlingPolicy(policy: "disable_non_proxied_udp"): void;
@@ -73,7 +74,7 @@ function originOf(url: string): string | null {
 
 /**
  * The export window's navigation rules: zoom 1 on every commit; the page may
- * not navigate itself or open windows; a main-frame redirect may land only on
+ * not navigate itself, open windows or pick a Bluetooth device; a main-frame redirect may land only on
  * the app's own origin; the first main-frame load is the only one allowed,
  * and frames inside the app draw empty (S65).
  */
@@ -81,6 +82,12 @@ export function guardAppExportContents(contents: ExportContents, appOrigin: stri
   let loaded = false;
   contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // A web contents event, not the session's: without preventDefault Electron
+  // picks the first device. The main window does the same (D8).
+  contents.on("select-bluetooth-device", (event, _devices, callback) => {
+    event.preventDefault();
+    callback("");
+  });
   // The default session keeps zoom per host, and in development the app's
   // host is also the main window's, so the zoom is set again on each commit.
   contents.on("did-navigate", () => contents.setZoomFactor(1));
