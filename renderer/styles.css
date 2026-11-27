@@ -2716,7 +2716,7 @@ textarea {
 }
 .aiden-live-mark > .aiden-mark { width: 100% !important; height: 100% !important; animation: aiden-live-mark-in 280ms ease both; }
 @keyframes aiden-live-mark-in { from { opacity: 0; } to { opacity: 1; } }
-:root[data-reduce-motion="true"] .aiden-live-mark { transition: none; }
+:root[data-reduce-motion="true"] .aiden-live-mark { transform: none; transition: none; }
 :root[data-reduce-motion="true"] .aiden-live-mark > .aiden-mark { animation: none; }
 
 /* ───────── Activity marks ─────────
@@ -2982,10 +2982,6 @@ textarea {
 .gemini-live-hud-error {
   margin: 0 0.75rem 0.75rem;
   padding: 0.625rem 0.75rem;
-}
-:root[data-reduce-motion="true"] .aiden-live-mark {
-  transform: none;
-  transition: none;
 }
 
 /* Aiden Live's floating ribbon: a dark glass pill above the chat composer.
