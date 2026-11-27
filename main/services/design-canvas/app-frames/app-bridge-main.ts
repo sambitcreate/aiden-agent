@@ -3,9 +3,10 @@
 //
 // A frame gets the bridge only if it is itself an admitted app frame (not a
 // frame nested inside one) and its current origin is a running app's. It is
-// injected at the frame's `dom-ready` and again at `did-frame-finish-load`
-// with the same per-document nonce, so the bridge's once-guard installs it
-// once; `did-frame-navigate` starts a new document and a new nonce.
+// injected at each of the frame's `dom-ready`s and again at
+// `did-frame-finish-load` with the same per-document nonce, so the bridge's
+// once-guard installs it once per document; `did-frame-navigate` starts a new
+// document and a new nonce.
 //
 // `executeJavaScript` runs with `userGesture` false, so injection never grants
 // the page user activation, and main never waits on what the page returns.
@@ -20,7 +21,7 @@ export type AppBridgeFrame = {
   readonly frameTreeNodeId: number;
   readonly origin: string;
   executeJavaScript(code: string, userGesture?: boolean): unknown;
-  once?(event: "dom-ready", listener: () => void): unknown;
+  on?(event: "dom-ready", listener: () => void): unknown;
   isDestroyed?(): boolean;
 };
 
@@ -52,9 +53,10 @@ export function installAppBridge(contents: Contents, deps: AppBridgeDeps): () =>
     return nonce;
   };
 
+  let disposed = false;
   const inject = (frame: AppBridgeFrame | null | undefined): void => {
     try {
-      if (!frame || frame.isDestroyed?.()) return;
+      if (disposed || !frame || frame.isDestroyed?.()) return;
       const registry = deps.registry();
       if (!registry?.isAppFrame(frame.frameTreeNodeId) || !deps.isAppOrigin(frame.origin)) return;
       const pending = frame.executeJavaScript(appBridgeInjection(nonceFor(frame.frameTreeNodeId)), false);
@@ -65,9 +67,12 @@ export function installAppBridge(contents: Contents, deps: AppBridgeDeps): () =>
     }
   };
 
+  // Every document the frame loads, so a reload or full navigation is bridged
+  // before its load event too. Main keeps no list of frames: the listener
+  // lives as long as the frame and does nothing once the bridge is removed.
   const onCreated = (_event: unknown, details: { frame?: AppBridgeFrame | null }) => {
     const frame = details?.frame;
-    frame?.once?.("dom-ready", () => inject(frame));
+    frame?.on?.("dom-ready", () => inject(frame));
   };
   const onFinished = (_event: unknown, isMainFrame: boolean, processId: number, routingId: number) => {
     if (!isMainFrame) inject(deps.fromId(processId, routingId));
@@ -85,6 +90,7 @@ export function installAppBridge(contents: Contents, deps: AppBridgeDeps): () =>
     contents.removeListener("frame-created", onCreated as never);
     contents.removeListener("did-frame-finish-load", onFinished as never);
     contents.removeListener("did-frame-navigate", onNavigated as never);
+    disposed = true;
     nonces.clear();
   };
 }

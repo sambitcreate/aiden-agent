@@ -72,6 +72,20 @@ test("did-frame-finish-load in the same document reuses the nonce; after did-fra
   assert.deepEqual(frame.nonces(), ["nonce-1", "nonce-1", "nonce-2"]);
 });
 
+test("after a full navigation, the next dom-ready injects again with the new document's nonce, until the bridge is removed", () => {
+  const s = setup();
+  const frame = s.add(new FakeFrame(7, ORIGIN));
+  s.created(frame);
+  frame.emit("dom-ready");
+  s.navigated(frame);
+  frame.emit("dom-ready");
+  assert.deepEqual(frame.nonces(), ["nonce-1", "nonce-2"], "a reload is bridged before its load event");
+  s.remove();
+  s.navigated(frame);
+  frame.emit("dom-ready");
+  assert.deepEqual(frame.nonces(), ["nonce-1", "nonce-2"], "nothing once removed");
+});
+
 test("a nested frame, a frame on another origin, and file, genui, backstop or main frames get nothing", () => {
   const s = setup({ members: [7, 8] });
   const nested = s.add(new FakeFrame(9, ORIGIN));
