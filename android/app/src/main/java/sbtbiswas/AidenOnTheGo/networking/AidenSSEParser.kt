@@ -101,18 +101,18 @@ data class AidenRemoteStreamEvent(
 
 typealias AidenRemoteEvent = AidenRemoteStreamEvent
 
-class AidenSSEParser {
-    enum class ExpectedChannel {
-        PARENT_STREAM,
-        CHAT_PROGRESS
-    }
-
+internal class AidenSSEFrameReader<T>(
+    private val minSequence: Int,
+    private val decode: (ByteArray) -> T,
+    private val sequenceOf: (T) -> Int,
+    private val wireTypeOf: (T) -> String
+) {
     private var eventID: String? = null
     private var eventName: String? = null
     private val dataLines = mutableListOf<String>()
     private var frameBytes = 0
 
-    fun consume(line: String): AidenRemoteStreamEvent? {
+    fun consume(line: String): T? {
         frameBytes += line.toByteArray(Charsets.UTF_8).size + 1
         if (frameBytes > AidenRemoteProtocol.MAX_SSE_FRAME_BYTES) {
             throw AidenSSEParserException.FrameTooLarge
@@ -147,39 +147,39 @@ class AidenSSEParser {
         return null
     }
 
-    fun finish(): AidenRemoteStreamEvent? {
-        // EOF is not a frame delimiter. Discard pending fields so a truncated
-        // transport frame cannot apply state or advance the replay cursor.
+    /**
+     * EOF is not a frame delimiter. Discard pending fields so a truncated
+     * transport frame cannot apply state or advance the replay cursor.
+     */
+    fun finish(): T? {
         reset()
         return null
     }
 
-    private fun finishFrame(): AidenRemoteStreamEvent? {
+    private fun finishFrame(): T? {
         try {
             if (dataLines.isEmpty()) {
                 if (eventID == null && eventName == null) return null
                 throw AidenSSEParserException.MissingData
             }
-            val currentId = eventID
-            val sequence = currentId?.toIntOrNull()
-            if (sequence == null || sequence <= 0) {
+            val sequence = eventID?.toIntOrNull()
+            if (sequence == null || sequence < minSequence) {
                 throw AidenSSEParserException.InvalidEventID
             }
 
-            val rawJson = dataLines.joinToString("\n")
-            val rawBytes = rawJson.toByteArray(Charsets.UTF_8)
+            val rawBytes = dataLines.joinToString("\n").toByteArray(Charsets.UTF_8)
             if (rawBytes.size > AidenRemoteProtocol.MAX_SSE_FRAME_BYTES) {
                 throw AidenRemoteContractException.PayloadTooLarge
             }
 
             AidenRawJsonDuplicateKeyScanner.validate(rawBytes)
 
-            val event = decodeStreamEvent(rawBytes)
+            val event = decode(rawBytes)
 
-            if (event.sequence != sequence) {
+            if (sequenceOf(event) != sequence) {
                 throw AidenSSEParserException.EventIDMismatch
             }
-            if (eventName != null && eventName != event.type.rawValue) {
+            if (eventName != null && eventName != wireTypeOf(event)) {
                 throw AidenSSEParserException.EventNameMismatch
             }
             return event
@@ -194,6 +194,24 @@ class AidenSSEParser {
         dataLines.clear()
         frameBytes = 0
     }
+}
+
+class AidenSSEParser {
+    enum class ExpectedChannel {
+        PARENT_STREAM,
+        CHAT_PROGRESS
+    }
+
+    private val frameReader = AidenSSEFrameReader(
+        minSequence = 1,
+        decode = ::decodeStreamEvent,
+        sequenceOf = { it.sequence },
+        wireTypeOf = { it.type.rawValue }
+    )
+
+    fun consume(line: String): AidenRemoteStreamEvent? = frameReader.consume(line)
+
+    fun finish(): AidenRemoteStreamEvent? = frameReader.finish()
 
     companion object {
         private val json = Json {
