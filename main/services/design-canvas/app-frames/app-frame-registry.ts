@@ -167,6 +167,12 @@ export class AppFrameRegistry {
     return member ? { frameId: member.frameId, mountToken: member.mountToken } : null;
   }
 
+  /** The origin a frame's registered frame (itself or an ancestor) was admitted on. */
+  admittedOrigin(frame: AppFrameRef | null): string | null {
+    const id = this.registeredAncestor(frame);
+    return id === null ? null : (this.members.get(id)?.origin ?? null);
+  }
+
   /** The registered frame a frame belongs to: itself or its nearest registered ancestor. */
   registeredAncestor(frame: AppFrameRef | null): number | null {
     let current: AppFrameRef | null = frame;

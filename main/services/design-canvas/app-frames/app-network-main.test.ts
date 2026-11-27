@@ -4,6 +4,9 @@
 
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import type { DesignAppFrameEvent } from "../../../../renderer/shared/design-canvas/app-frame-events.ts";
@@ -14,7 +17,7 @@ import {
   type GeminiLiveDisplayMediaBinding,
 } from "../../gemini-live/display-media-contract.ts";
 import { installAppNetwork, type AppNetworkDeps, type MainContentsLike } from "./app-network-main.ts";
-import type { AppServiceWorkerOrigins } from "./app-sw-origins.ts";
+import { createAppServiceWorkerOrigins, type AppServiceWorkerOrigins } from "./app-sw-origins.ts";
 
 const ORIGIN = "http://127.0.0.1:5173";
 const TOKEN = "abcdefghijklmnop";
@@ -489,6 +492,65 @@ test("an admitted origin is remembered, forgetting a workspace clears its origin
   await s.network!.forgetWorkspace("ws-1");
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(s.workers.calls, ["clear all", `remember ${ORIGIN}`, `clear ${ORIGIN}`]);
+});
+
+test("every loopback page an admitted frame reaches is remembered and cleared with its workspace, not only the admitted one", async () => {
+  const s = setup({ appForOrigin: (origin) => (origin === ORIGIN ? { workspaceId: "ws-1", appRoot: "." } : undefined) });
+  const app = s.admit();
+  const OTHER = "http://127.0.0.1:4321";
+  // G5: the frame itself goes to another local server, and a page inside it frames a third.
+  assert.equal(s.request({ url: `${OTHER}/login`, frame: app, webContentsId: 1, resourceType: "subFrame" }), "pass");
+  const inner = s.window().child(60, `${OTHER}/login`, "", app);
+  assert.equal(s.request({ url: "http://localhost:6006/iframe.html", frame: inner, webContentsId: 1, resourceType: "subFrame" }), "pass");
+  // A fetch isn't a page: nothing there can register a worker for that origin.
+  s.request({ url: "http://127.0.0.1:7070/api", frame: app, webContentsId: 1, resourceType: "xhr" });
+  await new Promise((resolve) => setImmediate(resolve));
+  await s.network!.forgetWorkspace("ws-1");
+  await new Promise((resolve) => setImmediate(resolve));
+  const cleared = s.workers.calls.find((call) => call.startsWith("clear http"));
+  assert.deepEqual(new Set(cleared?.slice("clear ".length).split(",")), new Set([ORIGIN, OTHER, "http://localhost:6006"]));
+  for (const origin of [ORIGIN, OTHER, "http://localhost:6006"]) assert.ok(s.workers.calls.includes(`remember ${origin}`), origin);
+  assert.equal(s.workers.calls.some((call) => call.includes("7070")), false);
+});
+
+test("a local server two workspaces' frames both reach keeps its worker and its record until the last of them ends", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-sw-shared-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const cleared: string[] = [];
+  const service = createAppServiceWorkerOrigins({
+    file: path.join(dir, "origins.json"),
+    session: { clearStorageData: async ({ origin }) => void cleared.push(origin) },
+  });
+  const SECOND = "http://127.0.0.1:5174";
+  const SHARED = "http://127.0.0.1:4321";
+  const workspaceOf: Record<string, string> = { [ORIGIN]: "ws-1", [SECOND]: "ws-2" };
+  const s = setup({
+    serviceWorkers: service,
+    isAppOrigin: (origin) => origin in workspaceOf,
+    appForOrigin: (origin) => (workspaceOf[origin] ? { workspaceId: workspaceOf[origin]!, appRoot: "." } : undefined),
+  });
+  const one = s.admit(7, "f1", ORIGIN);
+  const two = s.admit(8, "f2", SECOND);
+  const settle = async () => {
+    await service.list();
+  };
+  await settle();
+  cleared.length = 0; // the startup clear
+  // Both apps send the person to the same local sign-in server (G5).
+  s.request({ url: `${SHARED}/login`, frame: one, webContentsId: 1, resourceType: "subFrame" });
+  s.request({ url: `${SHARED}/login`, frame: two, webContentsId: 1, resourceType: "subFrame" });
+  await settle();
+
+  await s.network!.forgetWorkspace("ws-1");
+  assert.deepEqual(cleared, [ORIGIN], "ws-2's page on the shared server keeps its worker");
+  assert.deepEqual(new Set(await service.list()), new Set([SECOND, SHARED]), "and its record, for the next start or ws-2's end");
+
+  // ws-2's page there is still live and registers again; ws-2's end clears it.
+  s.request({ url: `${SHARED}/account`, frame: two, webContentsId: 1, resourceType: "subFrame" });
+  await settle();
+  await s.network!.forgetWorkspace("ws-2");
+  assert.deepEqual(new Set(cleared), new Set([ORIGIN, SECOND, SHARED]));
+  assert.deepEqual(await service.list(), []);
 });
 
 test("disposing removes every subscriber, so the session has no listener left", () => {

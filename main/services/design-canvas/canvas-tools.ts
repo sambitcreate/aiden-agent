@@ -1013,6 +1013,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
    * the page of the frames it touched, else the turn's page. `landed: null`
    * says it landed on no page (a delete). `answer` builds the value from the
    * saved document, so it sees that claim.
+   *
+   * `checkedIn` names the workspace a change was checked against before an
+   * await (an app frame's roots): a chat that has moved since is refused
+   * rather than written into the other workspace's canvas.
    */
   const edit = async <T>(
     change: (
@@ -1025,6 +1029,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       landed?: null;
       answer?: (saved: DesignCanvas) => T;
     },
+    checkedIn?: string,
   ): Promise<T> => {
     let value: T | undefined;
     let answer: ((saved: DesignCanvas) => T) | undefined;
@@ -1034,6 +1039,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     let touched = new Set<string>();
     await deps.pendingEntry?.();
     const { workspaceId, viewOf } = await turnFor();
+    if (checkedIn !== undefined && checkedIn !== workspaceId) {
+      throw new CanvasToolError("This chat moved to another workspace while the frame was being placed. Place it again.");
+    }
     const { doc: saved } = await deps.store.update(
       deps.chatId,
       (doc) => {
@@ -1215,7 +1223,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         doc: placedDoc,
         value: { status: "placed", placed: same.length > 0 ? "copy" : "new", units: "canvas", frame: summarizeFrame(frame) },
       };
-    });
+    }, workspaceId);
   };
 
   /** canvas_read's app frames, each with whether its app runs now. */

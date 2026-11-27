@@ -41,12 +41,30 @@ test("remember keeps loopback origins only, canonical and without paths, newest 
   assert.deepEqual(JSON.parse(await readFile(s.file, "utf8")), { origins: ["http://[::1]:3000", "http://127.0.0.1:5173"] });
 });
 
-test(`at most ${APP_SW_ORIGINS_MAX} origins are kept, dropping the oldest`, async (t) => {
+test("a loopback page on the default port is remembered and cleared, written with or without :80", async (t) => {
   const s = await setup(t);
-  for (let port = 5000; port < 5000 + APP_SW_ORIGINS_MAX + 6; port++) await s.origins.remember(`http://127.0.0.1:${port}`);
+  await s.origins.remember("http://localhost/");
+  await s.origins.remember("http://127.0.0.1:80/index.html");
+  await s.origins.remember("http://[::1]/");
+  assert.deepEqual(await s.origins.list(), ["http://localhost", "http://127.0.0.1", "http://[::1]"]);
+  await s.origins.remember("http://localhost:80");
+  assert.deepEqual(await s.origins.list(), ["http://127.0.0.1", "http://[::1]", "http://localhost"], "the same origin, so it isn't listed twice");
+  await s.origins.clear();
+  assert.deepEqual(s.cleared, ["http://127.0.0.1", "http://[::1]", "http://localhost"]);
+  assert.deepEqual(await s.origins.list(), []);
+});
+
+test(`past ${APP_SW_ORIGINS_MAX} origins, the oldest are cleared before they are dropped; one that fails to clear stays for the next try`, async (t) => {
+  const s = await setup(t, { failFor: "http://127.0.0.1:5001" });
+  for (let port = 5000; port < 5000 + APP_SW_ORIGINS_MAX + 3; port++) await s.origins.remember(`http://127.0.0.1:${port}`);
+  assert.deepEqual(s.cleared, ["http://127.0.0.1:5000", "http://127.0.0.1:5002"], "evicted origins are cleared first");
   const list = await s.origins.list();
-  assert.equal(list.length, APP_SW_ORIGINS_MAX);
-  assert.equal(list[0], "http://127.0.0.1:5006");
+  assert.equal(list[0], "http://127.0.0.1:5001", "the one that failed is still listed");
+  assert.equal(list.includes("http://127.0.0.1:5000"), false);
+  assert.equal(list.length, APP_SW_ORIGINS_MAX + 1);
+  await s.origins.clear();
+  assert.equal(s.cleared.length, 2 + APP_SW_ORIGINS_MAX, "the next clear covers every origin except the one that fails again");
+  assert.deepEqual(await s.origins.list(), ["http://127.0.0.1:5001"]);
 });
 
 test("clear clears each origin's service workers and empties the list; a subset clears only those", async (t) => {
@@ -62,14 +80,16 @@ test("clear clears each origin's service workers and empties the list; a subset 
   assert.deepEqual(await s.origins.list(), []);
 });
 
-test("one origin failing to clear doesn't stop the rest, and the list is still emptied", async (t) => {
+test("one origin failing to clear doesn't stop the rest, and it stays listed so the next clear tries again", async (t) => {
   const s = await setup(t, { failFor: "http://127.0.0.1:5173" });
   await s.origins.remember("http://127.0.0.1:5173");
   await s.origins.remember("http://127.0.0.1:5174");
   await s.origins.clear();
   assert.deepEqual(s.cleared, ["http://127.0.0.1:5174"]);
   assert.deepEqual(s.logs, ["design-live-sw-clear-failed"]);
-  assert.deepEqual(await s.origins.list(), []);
+  assert.deepEqual(await s.origins.list(), ["http://127.0.0.1:5173"]);
+  await s.origins.clear(["http://127.0.0.1:5173"]);
+  assert.deepEqual(s.logs, ["design-live-sw-clear-failed", "design-live-sw-clear-failed"], "tried again");
 });
 
 test("a corrupt file clears nothing and is reset", async (t) => {
