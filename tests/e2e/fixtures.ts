@@ -1187,6 +1187,8 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           // retain Playwright's worker transport after Electron main exits.
           // E2E still verifies the owned main PID directly during teardown.
           AIDEN_E2E_DISABLE_CRASH_REPORTER: "1",
+          // The default session's webRequest has one owner; observers subscribe through it.
+          AIDEN_E2E_WEB_REQUEST_OBSERVER: "1",
           // The production candidate stays acceptance-gated. E2E opts in only
           // to exercise its local setup/UI contract; it never connects Google.
           AIDEN_EXPERIMENTAL_GEMINI_LIVE: "1",

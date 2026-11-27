@@ -2460,6 +2460,11 @@ if (!ownsSingleInstanceLock) {
           }),
       });
       const defaultPermissions = claimDefaultSessionPermissions(session.defaultSession, { guardSetters: !isPackagedRuntime() });
+      // E2E observers subscribe through the dispatcher like any other owner,
+      // because the stubbed setters refuse them (unpackaged builds only).
+      if (!isPackagedRuntime() && process.env.AIDEN_E2E_WEB_REQUEST_OBSERVER === "1") {
+        (globalThis as { __aidenE2eWebRequest?: typeof defaultWebRequest }).__aidenE2eWebRequest = defaultWebRequest;
+      }
       // Live app frames' subscribers on both (D3–D8), before any window. With
       // live apps off nothing is subscribed; app service workers from earlier
       // runs are still cleared (S76).
