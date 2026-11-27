@@ -841,6 +841,22 @@ test("terminal teardown is scoped by workspace and renderer web contents", async
   });
 });
 
+test("shellPids lists each open session's shell pid and drops it when the session closes", async () => {
+  const owner = ownerState("document-1", 41);
+  const children = [fakePty(4_101), fakePty(4_102)];
+  let spawnIndex = 0;
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => children[spawnIndex++]!.pty) as typeof spawn,
+  });
+  assert.deepEqual(service.shellPids(), []);
+  const first = await service.create("workspace-a", "/tmp", owner.owner);
+  await service.create("workspace-b", "/tmp", owner.owner);
+  assert.deepEqual([...service.shellPids()].sort(), [4_101, 4_102]);
+  service.close(first.id, owner.owner);
+  assert.deepEqual(service.shellPids(), [4_102]);
+});
+
 test("managed worktree removal waits for owned terminal exit and reports a stuck shell", async () => {
   const owner = ownerState();
   const child = fakePty();

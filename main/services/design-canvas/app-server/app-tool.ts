@@ -6,6 +6,10 @@
 // turn stops the waiting, never the server. It runs only an app's own dev
 // script, so the approval gate lets its calls through without a per-call card
 // (`REVIEWED_CARDLESS_TOOLS`).
+//
+// 2c (D11): a root with a url in `.aiden/canvas.json` is a server the person
+// runs. `start` connects to it after the attach card, `stop` disconnects, and
+// `logs` is refused: Aiden never starts, stops or reads that server.
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
@@ -116,8 +120,10 @@ function trouble(app: DesignAppStatus): Json {
 function describeApp(app: DesignAppStatus): Json {
   return {
     root: app.appRoot,
+    ...(app.source === "attached" ? { source: "attached" } : {}),
     framework: app.frameworkLabel,
     ...(app.script ? { script: app.script } : {}),
+    ...(app.source === "attached" && app.url ? { configUrl: app.url } : {}),
     phase: app.phase,
     ...(app.startedBy ? { startedBy: app.startedBy } : {}),
     ...(app.phase === "running" && app.origin ? { url: app.origin } : {}),
@@ -129,7 +135,9 @@ function describeApp(app: DesignAppStatus): Json {
 function attemptResult(app: DesignAppStatus): Json {
   const consent = app.problem ? CONSENT_OUTCOMES[app.problem.problem] : undefined;
   if (consent) return { ...consent, root: app.appRoot };
-  if (app.phase === "running" && app.origin) return { status: "running", root: app.appRoot, url: app.origin };
+  if (app.phase === "running" && app.origin) {
+    return { status: "running", root: app.appRoot, ...(app.source === "attached" ? { source: "attached" } : {}), url: app.origin };
+  }
   if (app.phase === "consent") {
     return {
       status: "consent",
@@ -252,8 +260,15 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
       );
     }
 
-    if (action === "stop") return result(attemptResult(await deps.servers.stop(deps.workspaceId, appRoot!)));
+    const current = snapshot.apps.find((app) => app.appRoot === appRoot);
+    if (action === "stop") {
+      const stopped = await deps.servers.stop(deps.workspaceId, appRoot!);
+      // Stopping an attached app only disconnects it: the person's server keeps running (D9).
+      const disconnected = current?.source === "attached" && current.phase === "running" && stopped.phase === "stopped";
+      return result({ ...attemptResult(stopped), ...(disconnected ? { next: "Disconnected. The server keeps running." } : {}) });
+    }
     if (action === "logs") {
+      if (current?.source === "attached") return error("Aiden doesn't read the output of a server it didn't start.");
       // The newest output: find where the run's log ends, then read that run's last window.
       const probe = await deps.servers.logs(deps.workspaceId, appRoot!, { after: 0, maxBytes: 0 });
       const read = await deps.servers.logs(deps.workspaceId, appRoot!, {
@@ -302,7 +317,7 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
         name: DESIGN_APP_TOOL_NAME,
         label: "Design app",
         description:
-          "Run this workspace's web app for design mode: status, start, stop, restart, logs, or choose which app in a monorepo. The first start asks the person on a card. It runs only the app's own dev script, never other commands; use run_command for those.",
+          "Run this workspace's web app for design mode: status, start, stop, restart, logs, or choose which app in a monorepo. The first start asks the person on a card. It runs only the app's own dev script, never other commands; use run_command for those. A root with a url in .aiden/canvas.json is a server the person runs: start connects to it after the person approves, stop disconnects, and Aiden never starts, stops or reads the output of that server.",
         parameters: Type.Object({
           action: Type.Union(ACTIONS.map((name) => Type.Literal(name))),
           root: Type.Optional(Type.String({ maxLength: 200, description: 'An app root from status, such as "." or "apps/web".' })),

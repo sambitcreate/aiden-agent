@@ -1097,6 +1097,50 @@ test("readDesignLog returns the bytes after a cursor and the next cursor", { ski
   await assert.rejects(jobs.readDesignLog("job_00000000", { after: 0, maxBytes: 10 }));
 });
 
+test("while a design job runs, readDesignLog never splits a UTF-8 character", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const flag = path.join(dir, "more");
+  // "a", then the first two bytes of "€" (E2 82 AC); the third byte and a newline follow once the test asks.
+  const job = startNode(
+    `process.stdout.write(Buffer.from([0x61, 0xe2, 0x82]));
+     const timer = setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(flag)})) { clearInterval(timer); process.stdout.write(Buffer.from([0xac, 0x0a])); } }, 10);
+     setInterval(() => {}, 1000);`,
+  );
+  await eventually(() => (jobs.getDesign(job.id)?.outputBytes ?? 0) === 3, "the half character");
+  await eventually(async () => (await jobs.readDesignLog(job.id, { after: 0, maxBytes: 4096 })).text === "a", "the flushed bytes");
+  const half = await jobs.readDesignLog(job.id, { after: 0, maxBytes: 4096 });
+  assert.equal(half.next, 1, "the cursor stops before the incomplete character");
+  assert.equal(half.end, 3);
+  assert.equal(half.text.includes("�"), false);
+  await fs.writeFile(flag, "");
+  await eventually(() => (jobs.getDesign(job.id)?.outputBytes ?? 0) === 5, "the rest of the character");
+  await eventually(async () => (await jobs.readDesignLog(job.id, { after: half.next, maxBytes: 4096 })).next === 5, "the flushed rest");
+  const rest = await jobs.readDesignLog(job.id, { after: half.next, maxBytes: 4096 });
+  assert.equal(rest.text, "€\n", "the next read returns the whole character");
+  // A cursor on a continuation byte starts at the next character.
+  const inside = await jobs.readDesignLog(job.id, { after: 2, maxBytes: 4096 });
+  assert.equal(inside.from, 4);
+  assert.equal(inside.text, "\n");
+  // A read cut short by maxBytes also ends on a character boundary.
+  const short = await jobs.readDesignLog(job.id, { after: 0, maxBytes: 3 });
+  assert.equal(short.text, "a");
+  assert.equal(short.next, 1);
+});
+
+test("a design job that ended mid-character returns every byte, so next reaches end", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const job = startNode("process.stdout.write(Buffer.from([0x61, 0xe2, 0x82]))");
+  await eventually(() => jobs.getDesign(job.id)?.state === "exited", "the job to end");
+  await eventually(async () => (await jobs.readDesignLog(job.id, { after: 0, maxBytes: 4096 })).end === 3, "the log to flush");
+  const read = await jobs.readDesignLog(job.id, { after: 0, maxBytes: 4096 });
+  assert.equal(read.next, read.end);
+  assert.equal(read.text.startsWith("a"), true);
+});
+
 test("stopDesign ends the group, children included", { skip }, async (t) => {
   const dir = await tempDir();
   const { jobs, startNode } = designHarness(dir);
@@ -1162,6 +1206,63 @@ test("designTail gives a design job's in-memory tail, and nothing for a chat job
   const chatJob = jobs.start({ chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "echo hi", description: "Say hi", env: process.env });
   assert.equal(jobs.designTail(chatJob.id), "");
   assert.equal(jobs.designTail("job_00000000"), "");
+});
+
+// ── 2c: attached servers share the tick, and Aiden's own processes are known ──
+
+test("designSockets passes attach roots through, and without roots asks exactly as before", { skip }, async (t) => {
+  const dir = await tempDir();
+  const calls: Array<{ groups: string[]; roots?: string[] }> = [];
+  const { jobs, startNode } = designHarness(dir, {
+    jobSockets: async (groups, roots) => {
+      calls.push({ groups: [...groups.keys()], ...(roots ? { roots: [...roots.keys()] } : {}) });
+      const answers = new Map<string, { ok: true; sockets: [] }>();
+      for (const key of [...groups.keys(), ...(roots?.keys() ?? [])]) answers.set(key, { ok: true, sockets: [] });
+      return answers;
+    },
+  });
+  t.after(() => cleanUp(jobs, dir));
+  const job = startNode("setInterval(() => {}, 1000)");
+  const withRoots = await jobs.designSockets([job.id], new Map([["attach:ws\0docs", 4242]]));
+  assert.deepEqual(calls, [{ groups: [job.id], roots: ["attach:ws\0docs"] }]);
+  assert.deepEqual(withRoots.get("attach:ws\0docs"), { ok: true, sockets: [] });
+  assert.deepEqual(withRoots.get(job.id), { ok: true, sockets: [] });
+  calls.length = 0;
+  await jobs.designSockets([job.id]);
+  assert.deepEqual(calls, [{ groups: [job.id] }], "no roots: one look for the jobs, as before");
+  calls.length = 0;
+  const rootsOnly = await jobs.designSockets([], new Map([["attach:r", 4242]]));
+  assert.deepEqual(calls, [{ groups: [], roots: ["attach:r"] }]);
+  assert.equal(rootsOnly.get("attach:r")?.ok, true);
+});
+
+test("ownedPids is every running job's tree, design, chat and adopted alike, and nothing else", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir, { listeningPorts: null });
+  t.after(() => cleanUp(jobs, dir));
+  const design = startNode("setInterval(() => {}, 1000)");
+  const chat = jobs.start({ chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "sleep 30", description: "Wait", env: process.env });
+  const ended = jobs.start({ chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "exit 0", description: "Quick", env: process.env });
+  await eventually(() => jobs.get("chat-1", ended.id)?.state === "exited", "the quick job to end");
+  const id = newBackgroundJobId();
+  const portFile = path.join(dir, "port");
+  const left = await leaveServerRunning(dir, id, server(portFile));
+  const adopted = await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "node server.cjs &", processGroup: left.leftoverProcessGroup! });
+  assert.ok(adopted);
+  const group = left.leftoverProcessGroup!;
+  const rows = [
+    { pid: design.pid!, ppid: process.pid, pgid: design.pid!, uid: 501 },
+    { pid: 900_001, ppid: design.pid!, pgid: 900_001, uid: 501 }, // a setsid child of the design job
+    { pid: chat.pid!, ppid: process.pid, pgid: chat.pid!, uid: 501 },
+    { pid: ended.pid!, ppid: process.pid, pgid: ended.pid!, uid: 501 }, // an ended job's pid, reused or not
+    { pid: group, ppid: 1, pgid: group, uid: 501 },
+    { pid: 900_002, ppid: group, pgid: group, uid: 501 },
+    { pid: 900_003, ppid: 1, pgid: 900_003, uid: 501 }, // a stranger
+  ];
+  assert.deepEqual(
+    [...jobs.ownedPids(rows)].sort((a, b) => a - b),
+    [design.pid!, 900_001, chat.pid!, group, 900_002].sort((a, b) => a - b),
+  );
 });
 
 test("an adoption racing with shutdown never registers a job or writes it after close", { skip }, async (t) => {

@@ -111,3 +111,74 @@ test("caps evict the oldest workspace and app root", async (t) => {
   assert.equal(await records.portOf(`ws-${DESIGN_APP_RECORD_CAPS.workspaces}`, "."), 5000);
   assert.deepEqual(DESIGN_APP_RECORD_CAPS, { workspaces: 256, appRoots: 16 });
 });
+
+// ── 2c: attach approvals (D10) ──
+
+const ATTACH = { origin: "http://127.0.0.1:4321", configUrl: "http://localhost:4321", workspaceReal: "/Users/me/site" };
+
+test("approveAttach then attachOf round-trips the origin, config url and workspace realpath", async (t) => {
+  const file = await recordsFile(t);
+  const records = createDesignAppRecords(() => file);
+  assert.equal(await records.attachOf("ws", "docs"), undefined);
+  await records.approveAttach("ws", "docs", ATTACH);
+  const reread = await createDesignAppRecords(() => file).attachOf("ws", "docs");
+  assert.deepEqual({ ...reread!, at: 0 }, { ...ATTACH, at: 0 });
+  assert.equal(typeof reread?.at, "number");
+  assert.equal(await records.attachOf("ws", "web"), undefined, "keyed by app root");
+});
+
+test("a 2b-shaped file with no attaches keeps its consent, install and port", async (t) => {
+  const file = await recordsFile(t);
+  await writeFile(
+    file,
+    JSON.stringify({
+      version: 1,
+      workspaces: {
+        ws: {
+          at: 1,
+          consents: { ".": { fingerprint: "F", script: "dev", installShown: false, at: 1 } },
+          installs: { ".": { state: "done", manager: "npm", lockHash: "L", at: 1 } },
+          ports: { ".": { port: 5173, at: 1 } },
+        },
+      },
+    }),
+  );
+  const records = createDesignAppRecords(() => file);
+  assert.equal((await records.consentOf("ws", "."))?.fingerprint, "F");
+  assert.equal((await records.installOf("ws", "."))?.lockHash, "L");
+  assert.equal(await records.portOf("ws", "."), 5173);
+  assert.equal(await records.attachOf("ws", "."), undefined);
+});
+
+test("an invalid attaches value, or an entry missing workspaceReal, reads as none and keeps the rest", async (t) => {
+  for (const attaches of ["nope", [ATTACH], { docs: { origin: "http://127.0.0.1:4321", configUrl: "x", at: 1 } }]) {
+    const file = await recordsFile(t);
+    await writeFile(
+      file,
+      JSON.stringify({ version: 1, workspaces: { ws: { at: 1, consents: {}, installs: {}, ports: { ".": { port: 3000, at: 1 } }, attaches } } }),
+    );
+    const records = createDesignAppRecords(() => file);
+    assert.equal(await records.attachOf("ws", "docs"), undefined, JSON.stringify(attaches));
+    assert.equal(await records.portOf("ws", "."), 3000);
+  }
+});
+
+test("forgetWorkspace drops attach approvals", async (t) => {
+  const records = createDesignAppRecords(await recordsFile(t).then((file) => () => file));
+  await records.approveAttach("a", "docs", ATTACH);
+  await records.approveAttach("b", "docs", ATTACH);
+  await records.forgetWorkspace("a");
+  assert.equal(await records.attachOf("a", "docs"), undefined);
+  assert.equal((await records.attachOf("b", "docs"))?.origin, ATTACH.origin);
+});
+
+test("a 17th approved root drops the oldest attach and no consent", async (t) => {
+  const file = await recordsFile(t);
+  let clock = 0;
+  const records = createDesignAppRecords(() => file, { now: () => (clock += 1) });
+  await records.approveShown("ws", "apps/a0", { script: "dev", installShown: false }, "F", "F");
+  for (let index = 0; index <= DESIGN_APP_RECORD_CAPS.appRoots; index += 1) await records.approveAttach("ws", `apps/a${index}`, ATTACH);
+  assert.equal(await records.attachOf("ws", "apps/a0"), undefined, "the oldest attach is evicted");
+  assert.ok(await records.attachOf("ws", `apps/a${DESIGN_APP_RECORD_CAPS.appRoots}`));
+  assert.equal((await records.consentOf("ws", "apps/a0"))?.fingerprint, "F", "consents are capped on their own");
+});

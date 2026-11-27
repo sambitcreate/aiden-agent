@@ -63,6 +63,8 @@ import {
   DESIGN_FRAME_HEADER_PX,
   type DesignNodeContextValue,
 } from "./nodes/design-node-context";
+import { DesignAppStatusChip } from "./design-app-chip";
+import { DesignAppLogsDrawer } from "./design-app-logs";
 import { designNodeTypes } from "./nodes/registry";
 import { useDesignCanvas } from "./use-design-canvas";
 import { useDesignView, type DesignViewHandle } from "./use-design-view";
@@ -199,6 +201,10 @@ function LoadedDesignCanvas({
   const [live, setLive] = React.useState<ReadonlySet<string>>(() => new Set());
   const [presentation, setPresentation] = React.useState<DesignPresentation | null>(null);
   const [panel, setPanel] = React.useState(readPanelState);
+  // The app whose output the logs drawer shows, from the chip's Show logs.
+  const [logsRoot, setLogsRoot] = React.useState<string | null>(null);
+  const closeLogs = React.useCallback(() => setLogsRoot(null), []);
+  const chipTrigger = React.useCallback(() => document.querySelector<HTMLElement>("[data-design-app-chip]"), []);
   React.useEffect(() => writePanelState(panel), [panel]);
   const presentingRef = React.useRef(false);
   presentingRef.current = presentation !== null;
@@ -1305,31 +1311,44 @@ function LoadedDesignCanvas({
             resolveKey={resolveKey}
             presenting={presentation !== null}
             actions={
-              <div
-                role="toolbar"
-                aria-label="Canvas view"
-                className="glass-surface flex items-center gap-0.5 rounded-button p-1 shadow-control"
-              >
-                <DesignPresentButton onPresent={() => present(null)} />
-                <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
-                <DesignExpandButton />
-                <DesignPanelButton
-                  open={panel.open}
-                  onToggle={() => setPanel((current) => ({ ...current, open: !current.open }))}
-                />
+              <div className="flex items-center gap-2">
+                <DesignAppStatusChip chatId={chatId} onShowLogs={setLogsRoot} />
+                <div
+                  role="toolbar"
+                  aria-label="Canvas view"
+                  className="glass-surface flex items-center gap-0.5 rounded-button p-1 shadow-control"
+                >
+                  <DesignPresentButton onPresent={() => present(null)} />
+                  <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
+                  <DesignExpandButton />
+                  <DesignPanelButton
+                    open={panel.open}
+                    onToggle={() => setPanel((current) => ({ ...current, open: !current.open }))}
+                  />
+                </div>
               </div>
             }
             overlay={
-              presentation ? (
-                <DesignPresentBar
-                  presentation={presentation}
-                  title={doc.frames.find((frame) => frame.id === presentation.ids[presentation.index])?.title ?? ""}
-                  onStep={step}
-                  onExit={stopPresenting}
-                />
-              ) : enteredPage && !panelShowsTweaks ? (
-                <DesignTweaksFloat key={enteredPage.id} frame={enteredPage} readSource={readSource} versionOf={versionOf} ops={tweakOps} />
-              ) : null
+              <>
+                {presentation ? null : (
+                  <DesignAppLogsDrawer
+                    chatId={chatId}
+                    appRoot={logsRoot}
+                    onClose={closeLogs}
+                    returnFocus={chipTrigger}
+                  />
+                )}
+                {presentation ? (
+                  <DesignPresentBar
+                    presentation={presentation}
+                    title={doc.frames.find((frame) => frame.id === presentation.ids[presentation.index])?.title ?? ""}
+                    onStep={step}
+                    onExit={stopPresenting}
+                  />
+                ) : enteredPage && !panelShowsTweaks ? (
+                  <DesignTweaksFloat key={enteredPage.id} frame={enteredPage} readSource={readSource} versionOf={versionOf} ops={tweakOps} />
+                ) : null}
+              </>
             }
             emptyState={<DesignCanvasEmpty />}
             toolbar={

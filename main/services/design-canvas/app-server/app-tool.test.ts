@@ -350,3 +350,72 @@ test("a read-only or no-access turn can read status and logs, but start, restart
     assert.equal(servers.serviceCalls().length, 0, permission);
   }
 });
+
+// ── 2c: url roots and attached apps (D11) ──
+
+const attached = (overrides: Partial<DesignAppStatus> = {}) =>
+  status({ appRoot: "docs", source: "attached", frameworkLabel: "App", url: "http://localhost:4321", ...overrides });
+
+test("status lists an attached app with source attached, its config url and the origin it runs at", async () => {
+  const { servers, run } = harness();
+  servers.snap = { ...servers.snap, apps: [status(), attached({ phase: "running", origin: "http://127.0.0.1:4321", port: 4321, startedBy: "person" })] };
+  const apps = (await run({ action: "status" })).apps as Array<Record<string, unknown>>;
+  assert.equal(apps[0]!.source, undefined, "a started app keeps 2b's shape");
+  assert.equal(apps[1]!.source, "attached");
+  assert.equal(apps[1]!.configUrl, "http://localhost:4321");
+  assert.equal(apps[1]!.url, "http://127.0.0.1:4321");
+});
+
+test("start on a url root returns running attached after the card", async () => {
+  const { servers, run } = harness();
+  servers.snap = { ...servers.snap, apps: [status(), attached()] };
+  servers.answer = async () => attached({ phase: "running", origin: "http://127.0.0.1:4321", port: 4321 });
+  assert.deepEqual(await run({ action: "start", root: "docs" }), { status: "running", root: "docs", source: "attached", url: "http://127.0.0.1:4321" });
+});
+
+test("restart and choose on a live attachment answer already-running with its message", async () => {
+  const { servers, run } = harness();
+  servers.snap = { ...servers.snap, apps: [attached({ appRoot: ".", phase: "running", origin: "http://127.0.0.1:5173", port: 5173 })] };
+  servers.answer = async () => attached({ appRoot: ".", phase: "running", problem: { problem: "already-running" } });
+  for (const action of ["restart", "choose"]) {
+    const result = await run({ action, root: "." });
+    assert.equal(result.status, "failed", action);
+    assert.equal(result.problem, "already-running", action);
+    assert.match(String(result.message), /never restarts or replaces a server it didn't start/u, action);
+  }
+});
+
+test('stop on an attached app answers stopped with "Disconnected. The server keeps running."', async () => {
+  const { servers, run } = harness();
+  servers.snap = { ...servers.snap, apps: [attached({ phase: "running", origin: "http://127.0.0.1:4321", port: 4321 })] };
+  const result = await run({ action: "stop", root: "docs" });
+  assert.equal(result.status, "stopped");
+  assert.equal(result.next, "Disconnected. The server keeps running.");
+  servers.snap = { ...servers.snap, apps: [status({ phase: "running", origin: "http://127.0.0.1:5173", port: 5173 })] };
+  assert.equal((await run({ action: "stop", root: "." })).next, undefined, "a started app's stop says nothing more");
+});
+
+test("logs on an attached app is an error result naming why, and reads nothing", async () => {
+  const { servers, run } = harness();
+  servers.snap = { ...servers.snap, apps: [attached({ phase: "running", origin: "http://127.0.0.1:4321", port: 4321 })] };
+  const result = await run({ action: "logs", root: "docs" });
+  assert.equal(result.status, "error");
+  assert.equal(result.message, "Aiden doesn't read the output of a server it didn't start.");
+  assert.equal(servers.serviceCalls("logs").length, 0);
+});
+
+test("an attach start counts toward the 4-per-turn budget", async () => {
+  const { servers, run } = harness();
+  servers.snap = { ...servers.snap, apps: [status(), attached()] };
+  servers.answer = async () => attached({ phase: "running", origin: "http://127.0.0.1:4321", port: 4321 });
+  for (let index = 0; index < 4; index += 1) assert.equal((await run({ action: "start", root: "docs" })).status, "running");
+  const refused = await run({ action: "start", root: "docs" });
+  assert.equal(refused.status, "error");
+  assert.equal(servers.serviceCalls("start").length, 4);
+});
+
+test("the description names url roots once, and what Aiden never does to them", () => {
+  const { tool } = harness();
+  assert.equal(tool.description.match(/\burl\b/gu)?.length, 1);
+  assert.match(tool.description, /never starts, stops or reads the output of that server/u);
+});

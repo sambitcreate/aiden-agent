@@ -1,10 +1,12 @@
 // A dev server stand-in for design mode's process tests: plain Node, no
 // dependencies. It listens on --host/--port (or HOST/PORT), prints a
 // Vite-style URL and answers 200. The --fake-* flags make it misbehave the
-// ways real dev servers do.
+// ways real dev servers do. --respawn-child runs the server as a child and
+// starts a new child whenever it exits, as watch-mode tools do.
 import { spawn } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import http from "node:http";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 function option(name) {
@@ -45,7 +47,16 @@ function flood(bytes) {
 }
 
 const inUseOnce = option("fake-in-use-once");
-if (inUseOnce && !existsSync(inUseOnce)) {
+if (has("respawn-child")) {
+  const rest = args.filter((arg) => arg !== "--respawn-child");
+  const start = () => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...rest], { stdio: "inherit" });
+    console.log(`child pid ${child.pid}`);
+    child.on("exit", () => setTimeout(start, 50));
+  };
+  start();
+  keepAlive();
+} else if (inUseOnce && !existsSync(inUseOnce)) {
   writeFileSync(inUseOnce, "");
   console.error(`Something is already running on port ${port}.`);
   process.exit(1);
@@ -74,6 +85,11 @@ if (inUseOnce && !existsSync(inUseOnce)) {
     if (has("fake-child")) {
       const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
       console.log(`child pid ${child.pid}`);
+    }
+    if (has("fake-child-wildcard")) {
+      // A child in the same group that listens beyond loopback, as some dev tools' helpers do.
+      const child = spawn(process.execPath, ["-e", "require('node:net').createServer().listen(0, '0.0.0.0'); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      console.log(`wildcard child pid ${child.pid}`);
     }
     if (has("fake-setsid-loopback-child")) {
       // A setsid child that stays on loopback, so only a crash or a stop can end it.

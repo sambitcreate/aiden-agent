@@ -468,7 +468,8 @@
         "main/services/design-canvas/app-server/app-consent.test.ts",
         "main/services/design-canvas/app-server/app-server-main.test.ts",
         "main/services/design-canvas/app-server/app-tool.test.ts",
-        "main/handlers/design-app.test.ts"
+        "main/handlers/design-app.test.ts",
+        "main/services/design-canvas/app-server/app-attach.test.ts"
       ],
       "preserved": [
         "browser"
@@ -1604,6 +1605,9 @@
         "renderer/shared/bot-messages.test.ts",
         "renderer/components/settings/storage-settings.test.ts",
         "renderer/shared/design-app.test.ts",
+        "renderer/design/design-app-sheets.test.tsx",
+        "renderer/design/design-app-chip.test.tsx",
+        "renderer/design/design-app-logs.test.tsx",
         "renderer/shared/browser-element-grab.test.ts",
         "renderer/components/grabbed-element-chip.test.tsx",
         "renderer/components/composer-browser-grab.test.tsx",
@@ -1655,7 +1659,8 @@
         "scripts/prepare-macos-dev-runtime.test.mjs",
         "scripts/run-macos-distribution.test.mjs",
         "scripts/worktree-file-io.test.mjs",
-        "main/services/design-canvas/app-server/app-server-process.test.ts"
+        "main/services/design-canvas/app-server/app-server-process.test.ts",
+        "main/services/design-canvas/app-server/app-attach-process.test.ts"
       ],
       "preserved": [
         "terminal-coverage",

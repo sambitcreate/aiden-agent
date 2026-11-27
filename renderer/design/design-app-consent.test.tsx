@@ -192,11 +192,10 @@ test("Allow and Not now answer with the request id, and the card closes on conse
   assert.ok(screen.getByText("No card for chat-1"));
 });
 
-test("a request for another chat waits until that chat is shown, and attach requests are left to 2c", async () => {
+test("a request for another chat waits until that chat is shown", async () => {
   installBotTestIpc();
   const view = render(<ChatSlot chatId="chat-1" />);
   ask(launch({ chatId: "chat-2" }));
-  ask({ kind: "attach", requestId: "a1", chatId: "chat-1", workspaceId: "ws", appRoot: ".", url: "http://127.0.0.1:3000" });
   assert.ok(screen.getByText("No card for chat-1"));
   view.rerender(<ChatSlot chatId="chat-2" />);
   assert.ok(await card());
@@ -260,4 +259,123 @@ test("a problem status from a person-started attempt shows one toast with the fi
   assert.equal(screen.queryByText(/stopped beyond this computer/u), null);
   assert.equal(document.body.textContent?.includes("Error: boom"), false);
   assert.equal(screen.queryByText("The app wasn't started: running it wasn't approved."), null);
+});
+
+// ── 2c: the attach card (D10) ──
+
+type AttachRequest = Extract<DesignAppConsentRequest, { kind: "attach" }>;
+
+function attach(overrides: Partial<AttachRequest> = {}): AttachRequest {
+  return {
+    kind: "attach",
+    requestId: "a1",
+    chatId: "chat-1",
+    workspaceId: "ws",
+    appRoot: "docs",
+    url: "http://127.0.0.1:4321",
+    configUrl: "http://localhost:4321",
+    processName: "astro",
+    folder: "docs/site",
+    ...overrides,
+  };
+}
+
+const attachCard = () => screen.findByRole("group", { name: /^Connect to /u });
+
+test("an attach card shows the address, the config url, the process and its folder escaped, and the attach scope sentence", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask(attach({ processName: "ast\u202Ero", folder: "docs/\u2066site" }));
+  const shown = await attachCard();
+  const text = shown.textContent ?? "";
+  assert.ok(within(shown).getByText("Connect to ast\\u{202E}ro at 127.0.0.1:4321?"));
+  for (const expected of [
+    ".aiden/canvas.json asks for http://localhost:4321",
+    "Folder: docs/\\u{2066}site",
+    "docs",
+    "Aiden will show this server's pages in design mode. It never starts, stops or restarts it, and approving doesn't cover what the server does.",
+  ]) {
+    assert.ok(text.includes(expected), expected);
+  }
+  for (const hidden of ["\u202E", "\u2066"]) assert.equal(text.includes(hidden), false);
+});
+
+test("an attach card names the workspace's own folder as the workspace folder, never '.'", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask(attach({ appRoot: ".", folder: "." }));
+  const text = (await attachCard()).textContent ?? "";
+  assert.ok(text.includes("Folder: workspace folder"), text);
+  assert.ok(text.includes("App workspace folder"), text);
+  assert.equal(/Folder: \.|App \./u.test(text), false);
+});
+
+test("Allow and Not now on an attach card answer with its request id", async () => {
+  const calls = installBotTestIpc({ "designApp:consentAnswer": () => true });
+  render(<ChatSlot chatId="chat-1" />);
+  ask(attach({ requestId: "a1" }));
+  fireEvent.click(within(await attachCard()).getByRole("button", { name: "Allow" }));
+  await waitFor(() => assert.ok(screen.getByText("No card for chat-1")));
+  ask(attach({ requestId: "a2" }));
+  fireEvent.click(within(await attachCard()).getByRole("button", { name: "Not now" }));
+  await waitFor(() => assert.ok(screen.getByText("No card for chat-1")));
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "designApp:consentAnswer").map((call) => call.args),
+    [
+      ["a1", "allow"],
+      ["a2", "decline"],
+    ],
+  );
+});
+
+test("an attach card's focus starts on Not now, and Escape answers Not now", async () => {
+  const calls = installBotTestIpc({ "designApp:consentAnswer": () => true });
+  render(<ChatSlot chatId="chat-1" />);
+  ask(attach());
+  const notNow = within(await attachCard()).getByRole("button", { name: "Not now" });
+  await waitFor(() => assert.equal(document.activeElement, notNow));
+  fireEvent.keyDown(notNow, { key: "Escape" });
+  await waitFor(() => assert.ok(screen.getByText("No card for chat-1")));
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "designApp:consentAnswer").map((call) => call.args),
+    [["a1", "decline"]],
+  );
+});
+
+test("a launch and an attach card for one chat both show, oldest first", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask(launch({ requestId: "r1", appRoot: "apps/web" }));
+  ask(attach({ requestId: "a1" }));
+  await attachCard();
+  const groups = screen.getAllByRole("group", { name: /^(Run|Connect to) /u });
+  assert.equal(groups.length, 2);
+  assert.match(groups[0]!.getAttribute("aria-label") ?? "", /^Run Vite app/u);
+  assert.match(groups[1]!.getAttribute("aria-label") ?? "", /^Connect to astro/u);
+});
+
+test("a malformed attach card never shows", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask({ ...attach(), processName: 5 } as unknown as DesignAppConsentRequest);
+  ask({ ...attach({ requestId: "a2" }), url: undefined } as unknown as DesignAppConsentRequest);
+  assert.ok(screen.getByText("No card for chat-1"));
+});
+
+test("attach problems and already-running never toast", async () => {
+  installBotTestIpc();
+  render(
+    <>
+      <Toaster />
+      <DesignAppProblemToasts />
+    </>,
+  );
+  const quiet = ["attach-not-loopback", "attach-unreachable", "attach-not-in-app", "attach-url-invalid", "already-running"] as const;
+  quiet.forEach((problem, index) => broadcast([status({ appRoot: `apps/${problem}`, revision: 10 + index, problem: { problem } })]));
+  // A loud one afterwards proves toasts still work in this render.
+  broadcast([status({ appRoot: "apps/loud", revision: 20, problem: { problem: "not-ready", tail: "SECRET-TAIL" } })]);
+  await screen.findByText("The app's dev server didn't start listening in time, so Aiden stopped it.");
+  for (const text of [/listens on this computer alone/u, /couldn't find a server of yours/u, /doesn't belong to this workspace/u, /can't be connected/u, /Disconnect it first/u]) {
+    assert.equal(screen.queryByText(text), null, String(text));
+  }
 });

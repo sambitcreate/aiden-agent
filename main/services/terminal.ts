@@ -589,6 +589,11 @@ export class TerminalService {
     }
   }
 
+  /** The open terminal shells' pids: their subtrees are the person's own processes, not Aiden's (design mode 2c, D6). */
+  shellPids(): number[] {
+    return [...this.sessions.values()].map((session) => session.pty.pid);
+  }
+
   /** Whether a shell is open in this workspace, so removing it would end that shell. */
   hasOpenSession(workspaceId: string): boolean {
     return [...this.sessions.values()].some((session) => session.workspaceId === workspaceId);

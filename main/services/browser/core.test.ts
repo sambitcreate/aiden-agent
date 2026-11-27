@@ -14,6 +14,7 @@ import {
   browserDeadline,
   browserResult,
   browserLocalServers,
+  mergeBrowserServers,
   BrowserActionQueue,
   savedLinkOpening,
   externalUrl,
@@ -299,6 +300,44 @@ test("terminal server discovery recognizes only printed loopback URLs without pr
     ["http://localhost:5173/", "http://localhost:3000/", "http://[::1]:8080/test"],
   );
   assert.deepEqual(browserLocalServers("localhost password=secret 3000"), []);
+});
+
+test("mergeBrowserServers puts design-mode servers first, then the terminal's", () => {
+  const design = [{ url: "http://127.0.0.1:5173/", label: "Vite · . · design mode" }];
+  const terminal = [
+    { url: "http://localhost:3000/", label: "localhost:3000" },
+    { url: "http://[::1]:8080/", label: "[::1]:8080" },
+  ];
+  assert.deepEqual(mergeBrowserServers(design, terminal), [...design, ...terminal]);
+  assert.deepEqual(mergeBrowserServers([], terminal), terminal);
+});
+
+test("mergeBrowserServers keeps one entry per URL, with the design label", () => {
+  const merged = mergeBrowserServers(
+    [{ url: "http://127.0.0.1:5173/", label: "Vite · apps/web · design mode" }],
+    [
+      { url: "http://127.0.0.1:5173/", label: "127.0.0.1:5173" },
+      { url: "http://localhost:3000/", label: "localhost:3000" },
+      { url: "http://localhost:3000/", label: "localhost:3000" },
+    ],
+  );
+  assert.deepEqual(merged.map((server) => server.label), ["Vite · apps/web · design mode", "localhost:3000"]);
+});
+
+test("mergeBrowserServers caps the list at 12, design servers kept first", () => {
+  const design = Array.from({ length: 3 }, (_, index) => ({ url: `http://127.0.0.1:${5_000 + index}/`, label: `design ${index}` }));
+  const terminal = Array.from({ length: 20 }, (_, index) => ({ url: `http://localhost:${6_000 + index}/`, label: `terminal ${index}` }));
+  const merged = mergeBrowserServers(design, terminal);
+  assert.equal(merged.length, 12);
+  assert.deepEqual(merged.slice(0, 3), design);
+  assert.equal(merged[11]!.label, "terminal 8");
+});
+
+test("a design server that stopped is gone at the next merge, and the terminal's entries stay", () => {
+  const terminal = [{ url: "http://127.0.0.1:5173/", label: "127.0.0.1:5173" }, { url: "http://localhost:3000/", label: "localhost:3000" }];
+  const running = mergeBrowserServers([{ url: "http://127.0.0.1:4321/", label: "Astro · docs · design mode" }], terminal);
+  assert.equal(running.length, 3);
+  assert.deepEqual(mergeBrowserServers([], terminal), terminal);
 });
 
 test("saved link opening keeps a valid choice and migrates the legacy target", () => {

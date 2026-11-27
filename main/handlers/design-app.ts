@@ -2,7 +2,8 @@
 // controls for a chat's workspace apps (2c's chip and 3a's overlay call
 // these), and the answer to a run-app card. Every request must come from a
 // window's current main frame, for an attended desktop chat whose workspace
-// has a folder, while the live flag is on. Production wiring is in
+// has a folder, while the live flag is on. 2c adds running (the Connect
+// sheet's scan), connect (a pick from it) and retry. Production wiring is in
 // design-canvas-main.ts.
 
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -30,7 +31,7 @@ export interface DesignAppHandlerDeps<Event> {
   owner(event: Event): DesignAppConsentOwner;
   getChat(chatId: string): Promise<DesignAppChat | null>;
   workspace(workspaceId: string): Promise<{ id: string; folderPath?: string; permission: WorkspaceGatePermission } | null | undefined>;
-  servers: Pick<DesignAppServers, "snapshot" | "start" | "stop" | "restart" | "choose" | "logs">;
+  servers: Pick<DesignAppServers, "snapshot" | "start" | "stop" | "restart" | "choose" | "logs" | "running" | "connect" | "retry">;
   consent: Pick<DesignAppConsent, "answer">;
 }
 
@@ -50,6 +51,15 @@ function optionsOf(value: unknown): Record<string, unknown> {
   if (value === undefined) return {};
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected an options object.");
   return value as Record<string, unknown>;
+}
+
+/** A Connect pick: the row's port and pid. Main checks the pid again; it only selects (D8). */
+function pickOf(value: unknown): { port: number; pid: number } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a running server to connect.");
+  const { port, pid } = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(port) || (port as number) < 1 || (port as number) > 65_535) throw new Error('Expected a port from 1 to 65535 for "port".');
+  if (!Number.isSafeInteger(pid) || (pid as number) < 1) throw new Error('Expected a process id for "pid".');
+  return { port: port as number, pid: pid as number };
 }
 
 export function registerDesignAppHandlers<Event>(deps: DesignAppHandlerDeps<Event>): void {
@@ -118,6 +128,24 @@ export function registerDesignAppHandlers<Event>(deps: DesignAppHandlerDeps<Even
       ...(run !== undefined ? { run: run as string } : {}),
       maxBytes: DESIGN_APP_LOG_MAX_BYTES,
     });
+  });
+
+  // 2c (D6): the person opened Connect running server… or pressed Refresh in it.
+  deps.handle(DESIGN_APP_CHANNELS.running, async (event, chatId) => {
+    const { base } = await person(event, chatId);
+    return deps.servers.running({ workspaceId: base.workspaceId, owner: base.owner, permission: base.permission });
+  });
+
+  deps.handle(DESIGN_APP_CHANNELS.connect, async (event, chatId, pick) => {
+    const { port, pid } = pickOf(pick);
+    const { base } = await person(event, chatId);
+    return deps.servers.connect({ ...base, port, pid });
+  });
+
+  deps.handle(DESIGN_APP_CHANNELS.retry, async (event, chatId, appRoot) => {
+    const root = appRootOf(appRoot);
+    const { base } = await person(event, chatId);
+    return deps.servers.retry({ ...base, appRoot: root });
   });
 
   // The person's answer on a run-app card; only the window that shows the card may answer it.

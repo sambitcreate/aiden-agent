@@ -2,18 +2,22 @@
 // handlers are tested directly. Constructing the store does no I/O, so
 // workspace cleanup can remove a canvas even while the design-mode flag is off.
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { findEnvKeys, getProviders } from "@earendil-works/pi-ai/compat";
 import { persistedChatWorkspaceId } from "../../../renderer/shared/chat-workspace.js";
+import { designBrowserServers } from "../../../renderer/shared/design-app.js";
 import { app, ipcMain, logger } from "../../platform.js";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
+import { browserService } from "../browser/service.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import { DesignCanvasSnapshots } from "./canvas-snapshots.js";
 import { createDesignCanvasCarry } from "./carry.js";
 import { createDesignChatCleanup, createDesignWorkspaceCleanup } from "./cleanup.js";
 import { DesignModeConsent } from "./design-mode-tool.js";
+import { ATTACH_EXCLUDED_PORTS, designAppAttachDeps, type DesignAppAttachDeps } from "./app-server/app-attach.js";
 import { DesignAppConsent } from "./app-server/app-consent.js";
 import { detectWebApp } from "./app-server/app-detect.js";
 import { launchDirsUnchanged, readLaunchSurface } from "./app-server/app-fingerprint.js";
@@ -21,9 +25,10 @@ import { providerKeyNames } from "./app-server/app-launch-core.js";
 import { chooseAppPort, defaultOsPort } from "./app-server/app-ports.js";
 import { createDesignAppRecords } from "./app-server/app-records.js";
 import { DESIGN_APP_PRESENCE_GRACE_MS, DesignAppServers, type DesignAppJobs } from "./app-server/app-server-main.js";
-import { defaultAppToolchainDeps, resolveAppToolchain } from "./app-server/app-toolchain.js";
+import { clearAppToolchainCache, defaultAppToolchainDeps, resolveAppToolchain } from "./app-server/app-toolchain.js";
 import { readCanvasConfig, saveCanvasConfigApp } from "./canvas-config.js";
 import type { DesignJobView } from "../follow-through/background-jobs.js";
+import { defaultSocketReaderDeps, type ProcessRow } from "../follow-through/listening-ports.js";
 import { agentShellCommandEnvironment } from "../agent-command-environment.js";
 import { workspaceMutationGate } from "../workspace-mutation-gate.js";
 import { designLiveEnabled } from "../studio/feature-flags.js";
@@ -199,6 +204,8 @@ export const designAppConsent = new DesignAppConsent();
  * lazily, so this file must not import it.
  */
 let connectedJobs: DesignAppJobs | undefined;
+/** 2c: whose processes are Aiden's (D6), connected with the jobs so this file imports neither service. */
+let connectedOwners: { ownedPids(rows: readonly ProcessRow[]): ReadonlySet<number>; terminalShellPids(): readonly number[] } | undefined;
 const designJobListeners = new Set<(view: DesignJobView) => void>();
 let settleRecovery: (ready: boolean) => void = () => undefined;
 const designAppRecovery = new Promise<boolean>((resolve) => {
@@ -208,9 +215,12 @@ const designAppRecovery = new Promise<boolean>((resolve) => {
 export function connectDesignAppJobs(source: {
   jobs: DesignAppJobs;
   onJobChange(listener: (view: DesignJobView) => void): () => void;
+  ownedPids(rows: readonly ProcessRow[]): ReadonlySet<number>;
+  terminalShellPids(): readonly number[];
 }): void {
   if (connectedJobs) return;
   connectedJobs = source.jobs;
+  connectedOwners = { ownedPids: (rows) => source.ownedPids(rows), terminalShellPids: () => source.terminalShellPids() };
   source.onJobChange((view) => {
     for (const listener of designJobListeners) listener(view);
   });
@@ -237,6 +247,48 @@ function presenceGraceMs(): number {
   return Number.isFinite(value) ? Math.min(DESIGN_APP_PRESENCE_GRACE_MS, Math.max(1_000, Math.floor(value))) : DESIGN_APP_PRESENCE_GRACE_MS;
 }
 
+/** D6: ports never listed or attached: the fixed list, plus the dev renderer's port when one is set. */
+function attachExcludedPorts(): ReadonlySet<number> {
+  const ports = new Set(ATTACH_EXCLUDED_PORTS);
+  const renderer = process.env.AIDEN_RENDERER_URL;
+  if (renderer) {
+    try {
+      const port = Number(new URL(renderer).port);
+      if (port > 0) ports.add(port);
+    } catch {
+      // Not a URL: there is no renderer port to keep out.
+    }
+  }
+  return ports;
+}
+
+/**
+ * The person's own servers (2c D6–D9). Building it reads nothing; the process
+ * and socket tables are read only when the person opens Connect, picks a row,
+ * or an attached server is watched. Without a uid (Windows) nothing attaches.
+ */
+function attachDeps(): DesignAppAttachDeps | undefined {
+  const uid = process.getuid?.();
+  if (uid === undefined) return undefined;
+  const owners = () => {
+    // Fail closed: until main connects the jobs, Aiden can't tell its own processes apart.
+    if (!connectedOwners) throw new Error("Background jobs are not ready yet.");
+    return connectedOwners;
+  };
+  return designAppAttachDeps({
+    reader: defaultSocketReaderDeps(),
+    uid,
+    self: process.pid,
+    realpath: (target) => fs.realpath(target),
+    lstat: (target) => fs.lstat(target),
+    excludedPorts: attachExcludedPorts,
+    ownedPids: (rows) => owners().ownedPids(rows),
+    terminalShellPids: () => owners().terminalShellPids(),
+  });
+}
+
+const designAppAttach = attachDeps();
+
 /** Every workspace's design-mode dev servers. Construction does no I/O and starts nothing. */
 export const designAppServers = new DesignAppServers({
   jobs: {
@@ -244,7 +296,7 @@ export const designAppServers = new DesignAppServers({
     stopDesign: (jobId) => jobs().stopDesign(jobId),
     getDesign: (jobId) => connectedJobs?.getDesign(jobId),
     designTail: (jobId) => connectedJobs?.designTail(jobId) ?? "",
-    designSockets: (jobIds) => jobs().designSockets(jobIds),
+    designSockets: (jobIds, roots) => (roots ? jobs().designSockets(jobIds, roots) : jobs().designSockets(jobIds)),
     readDesignLog: (jobId, options) => jobs().readDesignLog(jobId, options),
   },
   onJobChange: (listener) => {
@@ -279,7 +331,11 @@ export const designAppServers = new DesignAppServers({
   enabled: () => designLiveEnabled(),
   log: (event, detail) => logger.warn("design", event, detail),
   limits: { graceMs: presenceGraceMs() },
+  ...(designAppAttach ? { attach: designAppAttach } : {}),
+  clearToolchainCache: clearAppToolchainCache,
 });
 
 // Every window hears each workspace's app status; it carries no output beyond a crash's bounded tail.
 designAppServers.onStatus((snapshot) => ipcMain.broadcast("designApp:status", snapshot));
+// D12: running design apps, started and attached, lead the browser panel's Local servers.
+designAppServers.onStatus((snapshot) => browserService.setDesignServers(snapshot.workspaceId, designBrowserServers(snapshot)));

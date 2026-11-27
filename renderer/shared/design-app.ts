@@ -71,14 +71,23 @@ export type DesignAppProblem =
   // 2c's Connect running server, defined now so 2c adds no type:
   | { problem: "attach-not-loopback" }
   | { problem: "attach-unreachable" }
-  | { problem: "attach-not-in-app" };
+  | { problem: "attach-not-in-app" }
+  /**
+   * 2c: a server is already live for this root. Without `started`, design mode is
+   * connected to a server it didn't start (D1); with it, Aiden runs this app.
+   */
+  | { problem: "already-running"; started?: true }
+  /** 2c: `.aiden/canvas.json`'s `apps[].url` for this root isn't a loopback http origin. */
+  | { problem: "attach-url-invalid" };
 
 export interface DesignAppStatus {
   workspaceId: string;
   /** POSIX, relative, "." for the workspace root. */
   appRoot: string;
-  /** 2b only makes "started"; 2c attaches running servers. */
+  /** "attached": a server the person runs, which Aiden never starts, stops or signals (2c). */
   source: "started" | "attached";
+  /** 2c: an `apps[].url` root's url from `.aiden/canvas.json`, as display text. The real origin comes from sockets. */
+  url?: string;
   framework?: FrameworkId;
   /** "Vite", or "App" with no framework. */
   frameworkLabel: string;
@@ -140,8 +149,46 @@ export type DesignAppConsentRequest =
       /** Reason "choose": Allow writes the choice to .aiden/canvas.json. */
       savesChoice: boolean;
     }
-  /** 2c renders these. */
-  | { kind: "attach"; requestId: string; chatId: string; workspaceId: string; appRoot: string; url: string };
+  /** 2c: an `apps[].url` root asks before Aiden connects to the person's server (S15). */
+  | {
+      kind: "attach";
+      requestId: string;
+      chatId: string;
+      workspaceId: string;
+      appRoot: string;
+      /** The canonical origin Aiden will register: "http://127.0.0.1:4321" or "http://[::1]:4321". */
+      url: string;
+      /** What .aiden/canvas.json says, as written; untrusted text. */
+      configUrl: string;
+      /** The holder's process name (ps comm, at most 64 characters); untrusted text. */
+      processName: string;
+      /** The holder's folder relative to the workspace, POSIX, at most 200 characters. */
+      folder: string;
+    };
+
+/** One row of Connect running server… (2c D6). */
+export interface DesignAppRunningServer {
+  port: number;
+  pid: number;
+  /** "http://127.0.0.1:5173" or "http://[::1]:5173"; only when connectable. */
+  origin?: string;
+  /** The deepest app root holding the process's folder, or that folder itself. */
+  appRoot: string;
+  /** The process's folder relative to the workspace, POSIX, at most 200 characters. Untrusted text. */
+  folder: string;
+  /** At most 64 characters. Untrusted text. */
+  processName: string;
+  connectable: boolean;
+  why?: "beyond-loopback" | "other-address" | "other-user" | "already-running";
+}
+
+export interface DesignAppRunningScan {
+  workspaceId: string;
+  ok: boolean;
+  /** Part of the process table couldn't be read, so some servers may be missing. */
+  incomplete: boolean;
+  servers: DesignAppRunningServer[];
+}
 
 export interface DesignAppConsentClosed {
   requestId: string;
@@ -172,6 +219,12 @@ export const DESIGN_APP_CHANNELS = {
   status: "designApp:status",
   consent: "designApp:consent",
   consentClosed: "designApp:consentClosed",
+  /** (chatId) → DesignAppRunningScan. */
+  running: "designApp:running",
+  /** (chatId, { port, pid }) → DesignAppStatus. */
+  connect: "designApp:connect",
+  /** (chatId, appRoot) → DesignAppStatus. */
+  retry: "designApp:retry",
 } as const;
 
 /**
@@ -189,6 +242,9 @@ export const DESIGN_APP_CONSENT_SCOPE =
   "This approves the commands above. The dev server then runs this app's own code, and approving doesn't cover what that code does.";
 export const DESIGN_APP_INSTALL_NOTE = "Installing runs your dependencies' install scripts.";
 export const DESIGN_APP_SAVES_CHOICE = "Allow also saves this choice in .aiden/canvas.json.";
+/** The sentence every attach card ends with (2c S50). */
+export const DESIGN_APP_ATTACH_SCOPE =
+  "Aiden will show this server's pages in design mode. It never starts, stops or restarts it, and approving doesn't cover what the server does.";
 
 function listNames(names: readonly string[]): string {
   if (names.length <= 1) return names.join("");
@@ -265,11 +321,17 @@ export function designAppProblemMessage(problem: DesignAppProblem): string {
     case "not-web":
       return "That folder isn't a web app design mode can run.";
     case "attach-not-loopback":
-      return "Only a server on this computer, at 127.0.0.1, can be connected.";
+      return "Design mode connects only to a server that listens on this computer alone. Restart it bound to 127.0.0.1 (for example with --host 127.0.0.1 or --hostname 127.0.0.1), then connect again.";
     case "attach-unreachable":
-      return "Nothing answered at that address.";
+      return "Design mode couldn't find a server of yours listening on that port.";
     case "attach-not-in-app":
       return "That server doesn't belong to this workspace's apps.";
+    case "already-running":
+      return problem.started
+        ? "Aiden already runs this app. Stop it first, then connect."
+        : "Design mode is already connected to a server for this app, and Aiden never restarts or replaces a server it didn't start. Disconnect it first.";
+    case "attach-url-invalid":
+      return "The url for this app in .aiden/canvas.json can't be connected. Use http://127.0.0.1:<port>, http://localhost:<port> or http://[::1]:<port>, with no path.";
   }
 }
 
@@ -287,6 +349,265 @@ export function consentDisplayText(text: string): string {
   return text.replace(HIDDEN_CHARACTERS, (character) =>
     character === "\n" ? character : `\\u{${character.codePointAt(0)!.toString(16).toUpperCase()}}`,
   );
+}
+
+/**
+ * An app root or folder as the chip's menu, the logs drawer, the attach card
+ * and the Connect sheet show it: the workspace's own folder (`.`) as
+ * "workspace folder", anything else escaped (B8). Main's values keep `.`.
+ */
+export function designAppRootText(root: string): string {
+  return root === "." ? "workspace folder" : consentDisplayText(root);
+}
+
+/** Paths show in monospace; the workspace folder's name is words. */
+export const designAppRootClass = (root: string): string | undefined => (root === "." ? undefined : "font-mono");
+
+// ---- 2c: the logs drawer's text (D4) ----
+
+/** What one log chunk leaves for the next: an unfinished sequence, the line's length so far, and its dropped characters. */
+export interface LogCarry {
+  pending: string;
+  column: number;
+  dropped: number;
+}
+
+export const EMPTY_LOG_CARRY: LogCarry = Object.freeze({ pending: "", column: 0, dropped: 0 });
+
+/** A line longer than this shows its first characters and a count of the rest. */
+const LOG_LINE_MAX = 4096;
+/** An escape sequence longer than this without its end shows escaped instead (A-m4). */
+const LOG_PENDING_MAX = 4096;
+const ESC = "\u001B";
+
+/** Log text keeps tabs and newlines; every other hidden character shows as `\u{…}`. */
+function logEscapeHidden(text: string): string {
+  return text.replace(HIDDEN_CHARACTERS, (character) =>
+    character === "\n" || character === "\t" ? character : `\\u{${character.codePointAt(0)!.toString(16).toUpperCase()}}`,
+  );
+}
+
+/**
+ * Where the escape sequence that starts at `at` (an ESC) ends: the index after
+ * it, "incomplete" when the text ends first, or "lone" when the ESC starts no
+ * sequence it can finish (it then shows escaped, and what follows shows as
+ * text). A sequence still unfinished after 4 KiB is "lone", whether or not
+ * the text ends there, so the answer doesn't depend on how the log was read.
+ */
+function escapeEnd(text: string, at: number): number | "incomplete" | "lone" {
+  const limit = at + LOG_PENDING_MAX;
+  const unfinished = () => (text.length > limit ? "lone" : "incomplete");
+  const end = Math.min(text.length, limit);
+  const introducer = text[at + 1];
+  if (introducer === undefined) return "incomplete";
+  if (introducer === "[") {
+    // CSI: parameter bytes, intermediate bytes, then one final byte.
+    let index = at + 2;
+    while (index < end && text.charCodeAt(index) >= 0x30 && text.charCodeAt(index) <= 0x3f) index++;
+    while (index < end && text.charCodeAt(index) >= 0x20 && text.charCodeAt(index) <= 0x2f) index++;
+    if (index >= end) return unfinished();
+    const final = text.charCodeAt(index);
+    // A malformed CSI ends where it breaks; the breaking character is shown.
+    return final >= 0x40 && final <= 0x7e ? index + 1 : index;
+  }
+  if (introducer === "]" || introducer === "P" || introducer === "X" || introducer === "^" || introducer === "_") {
+    // OSC ends at BEL or ST; DCS, SOS, PM and APC at ST (BEL accepted too). CAN and SUB cancel it.
+    // A line break ends it unfinished (the newline policy), so one never hides the lines after it.
+    for (let index = at + 2; index < end; index++) {
+      const character = text[index];
+      if (character === "\u0007" || character === "\u0018" || character === "\u001A") return index + 1;
+      if (character === "\n" || character === "\r") return "lone";
+      if (character === ESC) {
+        if (index + 1 >= text.length) return unfinished();
+        if (text[index + 1] === "\\") return index + 2;
+      }
+    }
+    return unfinished();
+  }
+  // Two-byte (or intermediate-prefixed) sequences: ESC, intermediates, a final byte.
+  let index = at + 1;
+  while (index < end && text.charCodeAt(index) >= 0x20 && text.charCodeAt(index) <= 0x2f) index++;
+  if (index >= end) return unfinished();
+  const final = text.charCodeAt(index);
+  return final >= 0x30 && final <= 0x7e ? index + 1 : "lone";
+}
+
+/**
+ * One chunk of a dev server's output as the logs drawer shows it (D4): escape
+ * sequences removed (an unfinished one waits in the carry for the next chunk),
+ * `\r\n` and lone `\r` as `\n`, lines capped at 4 KiB with the rest counted,
+ * and every hidden character but tab shown as `\u{…}`.
+ */
+export function logDisplayChunk(text: string, carry: LogCarry): { text: string; carry: LogCarry } {
+  const input = carry.pending + text;
+  let column = carry.column;
+  let dropped = carry.dropped;
+  let pending = "";
+  const out: string[] = [];
+  let run = "";
+  const flushRun = () => {
+    if (run) out.push(run);
+    run = "";
+  };
+  const newline = () => {
+    flushRun();
+    if (dropped > 0) out.push(` [${dropped} more characters]`);
+    out.push("\n");
+    column = 0;
+    dropped = 0;
+  };
+  const emit = (character: string) => {
+    if (column < LOG_LINE_MAX) {
+      run += character;
+      column++;
+    } else dropped++;
+  };
+  let index = 0;
+  while (index < input.length) {
+    const character = input[index]!;
+    if (character === ESC) {
+      const end = escapeEnd(input, index);
+      if (end === "incomplete") {
+        pending = input.slice(index);
+        break;
+      }
+      if (end === "lone") {
+        emit(character);
+        index++;
+      } else index = end;
+      continue;
+    }
+    if (character === "\r") {
+      if (index + 1 >= input.length) {
+        pending = "\r";
+        break;
+      }
+      if (input[index + 1] === "\n") index++;
+      newline();
+      index++;
+      continue;
+    }
+    if (character === "\n") {
+      newline();
+      index++;
+      continue;
+    }
+    const code = input.codePointAt(index)!;
+    const width = code > 0xffff ? 2 : 1;
+    emit(input.slice(index, index + width));
+    index += width;
+  }
+  flushRun();
+  return { text: logEscapeHidden(out.join("")), carry: { pending, column, dropped } };
+}
+
+/** One-off log text: `logDisplayChunk` from an empty carry, with anything left unfinished shown escaped. */
+export function logDisplayText(text: string): string {
+  const { text: shown, carry } = logDisplayChunk(text, EMPTY_LOG_CARRY);
+  const rest = carry.pending === "\r" ? "\n" : logEscapeHidden(carry.pending);
+  return `${shown}${carry.dropped > 0 ? ` [${carry.dropped} more characters]` : ""}${rest}`;
+}
+
+// ---- 2c: the status chip, Retry, announcements and the browser listing ----
+
+export interface DesignAppChip {
+  label: string;
+  tone: "neutral" | "busy" | "running" | "problem";
+  apps: DesignAppStatus[];
+  /** The menu offers Choose apps…. */
+  choose: boolean;
+  /** No app to run: the menu offers only Connect running server…. */
+  connectOnly: boolean;
+}
+
+/** One app's chip label (D2). */
+export function designAppLabel(status: DesignAppStatus): string {
+  switch (status.phase) {
+    case "running":
+      return status.port === undefined ? status.frameworkLabel : `${status.frameworkLabel} · :${status.port}`;
+    case "installing":
+      return "Installing…";
+    case "starting":
+      return "Starting…";
+    case "consent":
+      return "Waiting for approval";
+    case "crashed":
+      return "Crashed";
+    case "stopped":
+      if (status.problem) return "Not running";
+      if (status.source === "attached") return status.url !== undefined ? "Connect" : "Connect again";
+      return "Start";
+  }
+}
+
+/** One app's tone (D2). */
+export function designAppTone(status: DesignAppStatus): DesignAppChip["tone"] {
+  switch (status.phase) {
+    case "running":
+      return "running";
+    case "installing":
+    case "starting":
+    case "consent":
+      return "busy";
+    case "crashed":
+      return "problem";
+    case "stopped":
+      return status.problem ? "problem" : "neutral";
+  }
+}
+
+const TONE_RANK: Record<DesignAppChip["tone"], number> = { neutral: 0, running: 1, busy: 2, problem: 3 };
+
+/** The chip for a workspace's snapshot, or null when it's hidden (D2). */
+export function designAppChip(snapshot: DesignAppsSnapshot): DesignAppChip | null {
+  if (snapshot.target === "unavailable") return null;
+  const apps = snapshot.apps;
+  const choose = snapshot.candidates.length > 1;
+  if (apps.length === 0) {
+    if (snapshot.target === "choose") return { label: "Choose apps…", tone: "neutral", apps, choose: true, connectOnly: false };
+    return { label: "Connect", tone: "neutral", apps, choose: false, connectOnly: true };
+  }
+  if (apps.length === 1) return { label: designAppLabel(apps[0]!), tone: designAppTone(apps[0]!), apps, choose, connectOnly: false };
+  const tone = apps.map(designAppTone).reduce((worst, next) => (TONE_RANK[next] > TONE_RANK[worst] ? next : worst));
+  return { label: `${apps.length} apps`, tone, apps, choose, connectOnly: false };
+}
+
+const RETRYABLE: ReadonlySet<DesignAppProblem["problem"]> = new Set([
+  "install-failed",
+  "install-timeout",
+  "node-missing",
+  "manager-missing",
+  "manager-conflict",
+  "unsupported-manager",
+  "not-ready",
+  "exposure-unknown",
+  "recovery-failed",
+  "choice-not-saved",
+]);
+
+/** Whether the chip's menu offers Retry (D5): a started app that crashed or failed in a way a retry can fix. */
+export function designAppRetryable(status: DesignAppStatus): boolean {
+  if (status.source !== "started") return false;
+  if (status.phase === "crashed") return true;
+  return status.phase === "stopped" && status.problem !== undefined && RETRYABLE.has(status.problem.problem);
+}
+
+/** The two transitions the chip announces (D2): a crash and a disconnect. */
+export function designAppAnnouncement(previous: DesignAppStatus | undefined, next: DesignAppStatus): string | null {
+  if (!previous || previous.phase !== "running") return null;
+  if (next.phase === "crashed") return `${next.frameworkLabel} crashed.`;
+  // The person's own Disconnect leaves no problem and isn't announced (B6).
+  if (previous.source === "attached" && next.source === "attached" && next.phase === "stopped" && next.problem && previous.origin) {
+    return `Disconnected from your server at ${previous.origin.replace(/^http:\/\//u, "")}.`;
+  }
+  return null;
+}
+
+/** Running design apps for the browser panel's Local servers (D12). */
+export function designBrowserServers(snapshot: DesignAppsSnapshot): Array<{ url: string; label: string }> {
+  return snapshot.apps
+    .filter((status) => status.phase === "running" && status.origin !== undefined)
+    .map((status) => ({ url: `${status.origin}/`, label: `${status.frameworkLabel} · ${consentDisplayText(status.appRoot)} · design mode` }));
 }
 
 /** A piece of script text as the card shows it: text, a marked line break, or a collapsed run shown as its count. */

@@ -29,6 +29,7 @@ import {
   processTable,
   readJobSockets,
   type JobSockets,
+  type ProcessRow,
 } from "./listening-ports.js";
 
 export const MAX_RUNNING_JOBS_PER_CHAT = 10;
@@ -150,7 +151,7 @@ export interface BackgroundJobsOptions {
   /** The TCP ports each of the given processes listens on; null turns port lookups off. */
   listeningPorts?: ((pids: readonly number[]) => Promise<Map<number, number[]>>) | null;
   /** Each job's listening sockets with addresses, from one look for all of them; fails closed (design jobs). */
-  jobSockets?: (groups: ReadonlyMap<string, number>) => Promise<Map<string, JobSockets>>;
+  jobSockets?: (groups: ReadonlyMap<string, number>, roots?: ReadonlyMap<string, number>) => Promise<Map<string, JobSockets>>;
   /** A design job's processes that left its group (a `setsid` child), found by parent pid. */
   designStrays?: (pgid: number) => Promise<number[]>;
   /**
@@ -826,7 +827,7 @@ export class BackgroundJobs {
    * that isn't a running design job, or whose read failed, comes back failed,
    * never as an empty list.
    */
-  async designSockets(jobIds: readonly string[]): Promise<Map<string, JobSockets>> {
+  async designSockets(jobIds: readonly string[], roots?: ReadonlyMap<string, number>): Promise<Map<string, JobSockets>> {
     const results = new Map<string, JobSockets>();
     const groups = new Map<string, number>();
     for (const jobId of jobIds) {
@@ -835,11 +836,32 @@ export class BackgroundJobs {
       if (!job || !isDesign(job) || job.view.state !== "running" || !pid) results.set(jobId, { ok: false, reason: "not running" });
       else groups.set(jobId, pid);
     }
-    if (groups.size) {
-      const read = await (this.options.jobSockets ?? readJobSockets)(groups);
-      for (const jobId of groups.keys()) results.set(jobId, read.get(jobId) ?? { ok: false, reason: "not read" });
+    // 2c: attached servers' holders ride the same `ps`, with their own socket read.
+    if (groups.size || roots?.size) {
+      const look =
+        this.options.jobSockets ??
+        ((jobGroups: ReadonlyMap<string, number>, attachRoots?: ReadonlyMap<string, number>) =>
+          readJobSockets(jobGroups, undefined, attachRoots));
+      const read = roots?.size ? await look(groups, roots) : await look(groups);
+      for (const key of [...groups.keys(), ...(roots?.keys() ?? [])]) results.set(key, read.get(key) ?? { ok: false, reason: "not read" });
     }
     return results;
+  }
+
+  /**
+   * Every process in a running job's tree (2c, A-M1): design jobs, chat and
+   * check jobs, and adopted groups alike, from rows the caller already read.
+   * Connect running server… never lists these, and an attach never accepts one.
+   */
+  ownedPids(rows: readonly ProcessRow[]): Set<number> {
+    const owned = new Set<number>();
+    for (const job of this.jobs.values()) {
+      if (job.view.state !== "running") continue;
+      const group = job.adoptedGroup ?? job.child?.pid;
+      if (!group) continue;
+      for (const pid of jobProcessTree(rows, group)) owned.add(pid);
+    }
+    return owned;
   }
 
   /** Stop a design job: polite first, forced after the grace period. Resolves once it has ended. Idempotent. */
@@ -884,7 +906,19 @@ export class BackgroundJobs {
       // A short read (output not flushed yet, or a file rotated away) ends here, so nothing is skipped.
       if (got.length < want) break;
     }
-    return { text: Buffer.concat(chunks).toString("utf8"), from, next: at, end, truncated };
+    let bytes = Buffer.concat(chunks);
+    // A cursor on continuation bytes starts at the next character (D4), so no read begins with half a character.
+    const skipped = leadingContinuationBytes(bytes);
+    bytes = bytes.subarray(skipped);
+    // While more bytes can follow (the job runs, or this read stopped short), end before an incomplete
+    // character: its bytes stay in the log and arrive whole in the next read. An ended job's last bytes
+    // are returned as they are, so `next` reaches `end`.
+    if (job.view.state === "running" || at < end) {
+      const cut = incompleteTrailingBytes(bytes);
+      bytes = bytes.subarray(0, bytes.length - cut);
+      at -= cut;
+    }
+    return { text: bytes.toString("utf8"), from: from + skipped, next: at, end, truncated };
   }
 
   private openLog(logPath: string): { log: fs.WriteStream; logClosed: Promise<void> } {
@@ -1471,6 +1505,24 @@ export function formatDuration(ms: number): string {
 }
 
 /** Up to `length` bytes of a file from `position`; fewer at its end, none when it is gone. */
+/** How many continuation bytes (10xxxxxx) a buffer starts with, at most 3: the tail of a character begun before it. */
+function leadingContinuationBytes(bytes: Buffer): number {
+  let count = 0;
+  while (count < 3 && count < bytes.length && (bytes[count]! & 0xc0) === 0x80) count += 1;
+  return count;
+}
+
+/** How many bytes at a buffer's end are an incomplete UTF-8 character (0–3). */
+function incompleteTrailingBytes(bytes: Buffer): number {
+  for (let back = 1; back <= Math.min(4, bytes.length); back += 1) {
+    const byte = bytes[bytes.length - back]!;
+    if ((byte & 0xc0) === 0x80) continue;
+    const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
+    return length > back ? back : 0;
+  }
+  return 0;
+}
+
 async function readAt(file: string, position: number, length: number): Promise<Buffer> {
   let handle: fsp.FileHandle | undefined;
   try {
