@@ -27,7 +27,7 @@ import {
   resolveQuickChatModeOnHide,
   shouldHideQuickChatOnBlur,
 } from "./quick-chat-window-core.js";
-import { isTrustedQuickChatSender } from "./quick-chat-window-security.js";
+import { isTrustedAuxSender } from "./aux-window-security.js";
 
 const DEFAULT_BLUR_SUPPRESS_MS = 500;
 const MAX_BLUR_SUPPRESS_MS = 10_000;
@@ -332,7 +332,7 @@ export function isCurrentQuickChatEvent(event: IpcMainInvokeEvent): boolean {
     rendererDocumentOwner(event, () => new Error("Invalid Quick Chat sender."));
     const frame = event.senderFrame;
     if (!frame || frame.isDestroyed()) return false;
-    return isTrustedQuickChatSender(activeWindow.webContents.id, quickChatUrl, {
+    return isTrustedAuxSender(activeWindow.webContents.id, quickChatUrl, {
       webContentsId: event.sender.id,
       frameUrl: frame.url,
       isMainFrame: frame === event.sender.mainFrame,

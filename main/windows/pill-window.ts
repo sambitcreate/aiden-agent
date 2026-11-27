@@ -7,7 +7,7 @@ import { BrowserWindow, logger, registerBroadcastReceiver, screen } from "../pla
 import { PILL_NOTIFICATION_CHANNELS } from "../../renderer/pill-preload-channels.js";
 import type { IpcMainInvokeEvent } from "electron";
 import { getPillPreloadPath, getWindowUrl } from "./window-paths.js";
-import { isTrustedPillSender } from "./pill-window-security.js";
+import { isTrustedAuxSender } from "./aux-window-security.js";
 import { shouldPositionDictationPill } from "./pill-window-platform.js";
 import { markAuxiliaryWindow } from "./auxiliary-windows.js";
 
@@ -141,7 +141,7 @@ export function isCurrentPillEvent(event: IpcMainInvokeEvent): boolean {
   const current = pillWindow && !pillWindow.isDestroyed() ? pillWindow.webContents.id : null;
   const frame = event.senderFrame;
   if (!frame) return false;
-  return isTrustedPillSender(current, pillUrl, {
+  return isTrustedAuxSender(current, pillUrl, {
     webContentsId: event.sender.id,
     frameUrl: frame.url,
     isMainFrame: frame === event.sender.mainFrame,

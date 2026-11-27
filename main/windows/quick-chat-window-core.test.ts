@@ -10,7 +10,7 @@ import {
   resolveQuickChatModeOnHide,
   shouldHideQuickChatOnBlur,
 } from "./quick-chat-window-core.js";
-import { isTrustedQuickChatSender } from "./quick-chat-window-security.js";
+import { isTrustedAuxSender } from "./aux-window-security.js";
 import { canPositionFloatingWindow } from "./pill-window-platform.js";
 import {
   parseQuickChatExpandRequest,
@@ -93,26 +93,26 @@ test("shouldHideQuickChatOnBlur hides State 1, respects suppression, and honors 
   );
 });
 
-test("isTrustedQuickChatSender enforces webContentsId, main frame, and exact URL", () => {
+test("isTrustedAuxSender enforces webContentsId, main frame, and exact URL", () => {
   const url = "file:///app/build/renderer/quick-chat.html";
   assert.equal(
-    isTrustedQuickChatSender(7, url, { webContentsId: 7, frameUrl: url, isMainFrame: true }),
+    isTrustedAuxSender(7, url, { webContentsId: 7, frameUrl: url, isMainFrame: true }),
     true,
   );
   assert.equal(
-    isTrustedQuickChatSender(null, url, { webContentsId: 7, frameUrl: url, isMainFrame: true }),
+    isTrustedAuxSender(null, url, { webContentsId: 7, frameUrl: url, isMainFrame: true }),
     false,
   );
   assert.equal(
-    isTrustedQuickChatSender(7, url, { webContentsId: 8, frameUrl: url, isMainFrame: true }),
+    isTrustedAuxSender(7, url, { webContentsId: 8, frameUrl: url, isMainFrame: true }),
     false,
   );
   assert.equal(
-    isTrustedQuickChatSender(7, url, { webContentsId: 7, frameUrl: url, isMainFrame: false }),
+    isTrustedAuxSender(7, url, { webContentsId: 7, frameUrl: url, isMainFrame: false }),
     false,
   );
   assert.equal(
-    isTrustedQuickChatSender(7, url, {
+    isTrustedAuxSender(7, url, {
       webContentsId: 7,
       frameUrl: "file:///app/build/renderer/main-window.html",
       isMainFrame: true,
