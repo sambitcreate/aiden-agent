@@ -1752,7 +1752,10 @@ test("3b: the person can place a route they removed, which forgets the removal",
 
 test("3b: a chat that leaves design mode or moves while main reads its apps gets unavailable, and nothing is placed or listed", async (t) => {
   for (const change of [
-    (chat: DesignCanvasChat): DesignCanvasChat => ({ ...chat, designMode: false }),
+    (chat: DesignCanvasChat): DesignCanvasChat => {
+      const { designMode: _left, ...rest } = chat;
+      return rest;
+    },
     (chat: DesignCanvasChat): DesignCanvasChat => ({ ...chat, workspaceId: "workspace-2" }),
   ]) {
     const chats: Record<string, DesignCanvasChat> = { "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true } };
