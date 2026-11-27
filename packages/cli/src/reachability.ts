@@ -50,13 +50,14 @@ function jsonRecord(text: string): Record<string, unknown> | undefined {
   }
 }
 
-async function raceTimeout<T>(work: Promise<T>, timeoutMs: number, onTimeout: () => T): Promise<T> {
+/** Arms the timer before starting `work`, so its synchronous setup counts against `timeoutMs`. */
+async function raceTimeout<T>(work: () => Promise<T>, timeoutMs: number, onTimeout: () => T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<T>((resolveLate) => {
     timer = setTimeout(() => resolveLate(onTimeout()), timeoutMs);
   });
   try {
-    return await Promise.race([work, late]);
+    return await Promise.race([work(), late]);
   } finally {
     clearTimeout(timer);
   }
@@ -68,7 +69,7 @@ async function raceTimeout<T>(work: Promise<T>, timeoutMs: number, onTimeout: ()
  * `timeoutMs` is reported as unresponsive rather than holding up the caller.
  */
 export async function readTailscaleFacts(runner: AidenTailscaleCommandRunner | null, host: TailscaleHost = systemTailscaleHost(), timeoutMs = TAILSCALE_FACTS_TIMEOUT_MS, cancel?: AbortController): Promise<TailscaleFacts> {
-  return raceTimeout(readTailscaleFactsNow(runner, host), timeoutMs, () => {
+  return raceTimeout(() => readTailscaleFactsNow(runner, host), timeoutMs, () => {
     // Stop the Tailscale command still running, so a CLI that exits next leaves nothing behind.
     cancel?.abort();
     return { installed: true, signedIn: false, httpsCertificates: false, funnelOn443: false, unresponsive: true };
@@ -225,7 +226,7 @@ export interface ServerReachability {
  * server is listening at all.
  */
 export async function remoteServerStatus(agentDir: string, timeoutMs = 5_000): Promise<ServerReachability | undefined> {
-  const asked = remoteDaemonCommand(agentDir, "remote", ["status"]).then(
+  const ask = () => remoteDaemonCommand(agentDir, "remote", ["status"]).then(
     (value) => value as ServerReachability,
     (error: unknown): ServerReachability | undefined => {
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -233,7 +234,7 @@ export async function remoteServerStatus(agentDir: string, timeoutMs = 5_000): P
       return /^Remote is off/u.test(error instanceof Error ? error.message : String(error)) ? { remoteOff: true } : { unanswered: true };
     },
   );
-  return raceTimeout(asked, timeoutMs, () => ({ unanswered: true }));
+  return raceTimeout<ServerReachability | undefined>(ask, timeoutMs, () => ({ unanswered: true }));
 }
 
 /**
