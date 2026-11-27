@@ -769,10 +769,9 @@ export function Composer({
     revision: 0,
   });
   const selectedSkill = skillSelection.selected;
-  const busyMode = effectiveBusySendMode(
-    busyChoice ?? busyDefault,
-    Boolean(onSteer) && attachments.length === 0 && grabbedElements.length === 0 && !selectedSkill,
-  );
+  const steerEligible =
+    Boolean(onSteer) && attachments.length === 0 && grabbedElements.length === 0 && !selectedSkill;
+  const busyMode = effectiveBusySendMode(busyChoice ?? busyDefault, steerEligible);
   // A blocked send explains itself beside the composer, not in a toast, and the
   // hint lasts only while the draft, attachments, grabbed elements, skill, and send mode are unchanged.
   const [blockedSend, setBlockedSend] = React.useState<{
@@ -913,6 +912,7 @@ export function Composer({
   const queueDuringCompaction = compactionActive && Boolean(onQueue);
   // A fork's sends wait for its summary the same way, in the queue.
   const queueForForkSummary = Boolean(forkSummaryHold) && Boolean(onQueue);
+  const queueing = hasQueuedMessages || queueDuringCompaction || queueForForkSummary;
   const composerInputLocked = sessionCommandBusy && !queueDuringCompaction;
   const [worktreeRequest, setWorktreeRequest] = React.useState(0);
   const [selection, setSelection] = React.useState({ start: 0, end: 0 });
@@ -2630,7 +2630,7 @@ export function Composer({
     }
     const mode = isGenerating
       ? (busyModeOverride ?? busyMode)
-      : hasQueuedMessages || queueDuringCompaction || queueForForkSummary
+      : queueing
         ? "queue"
         : undefined;
     if (mode === "steer" && (attachments.length > 0 || grabbedElements.length > 0 || selectedSkill)) {
@@ -2966,6 +2966,27 @@ export function Composer({
   // The chip's name starts with the name it shows (WCAG 2.5.3, Label in Name).
   const workspaceChipLabel = folderName ?? "Workspace";
   const WorkspaceChipIcon = noWorkspace ? MessageCircle : Folder;
+  const workspaceChip = ({
+    disabled,
+    ariaLabel,
+    onClick,
+  }: {
+    disabled: boolean;
+    ariaLabel: string;
+    onClick?: () => void;
+  }) => (
+    <Button
+      variant="transparent"
+      size="small"
+      className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+      {...(onClick ? { onClick } : {})}
+      disabled={disabled}
+      aria-label={ariaLabel}
+    >
+      <WorkspaceChipIcon className="size-4 shrink-0" />
+      <span className="max-w-[16rem] truncate">{workspaceChipLabel}</span>
+    </Button>
+  );
   const hasUserMessages =
     sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
   const { chips: contextChips, pullRequestAnnouncement, postingTasks, startedChats } = useComposerContextChips({
@@ -3109,44 +3130,25 @@ export function Composer({
                 openRequest={workspaceMenuRequest}
                 returnFocusRef={inputRef}
                 blockedReason={workspaceChangeBlockedReason}
-                trigger={
-                  <Button
-                    variant="transparent"
-                    size="small"
-                    className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                    disabled={
-                      isGenerating ||
-                      sending ||
-                      gitOperationBusy ||
-                      Boolean(workspaceChangeBlockedReason)
-                    }
-                    aria-label={
-                      workspaceChangeBlockedReason
-                        ? `${workspaceChipLabel}. Workspace unavailable: ${workspaceChangeBlockedReason}`
-                        : `${workspaceChipLabel}. Choose a workspace.`
-                    }
-                  >
-                    <WorkspaceChipIcon className="size-4 shrink-0" />
-                    <span className="max-w-[16rem] truncate">{workspaceChipLabel}</span>
-                  </Button>
-                }
+                trigger={workspaceChip({
+                  disabled:
+                    isGenerating ||
+                    sending ||
+                    gitOperationBusy ||
+                    Boolean(workspaceChangeBlockedReason),
+                  ariaLabel: workspaceChangeBlockedReason
+                    ? `${workspaceChipLabel}. Workspace unavailable: ${workspaceChangeBlockedReason}`
+                    : `${workspaceChipLabel}. Choose a workspace.`,
+                })}
               />
             ) : (
-              <Button
-                variant="transparent"
-                size="small"
-                className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                onClick={onOpenFolder}
-                disabled={!workspace?.folderPath}
-                aria-label={
-                  workspace?.folderPath
-                    ? `${workspaceChipLabel}. Open folder in file manager.`
-                    : workspaceChipLabel
-                }
-              >
-                <WorkspaceChipIcon className="size-4 shrink-0" />
-                <span className="max-w-[16rem] truncate">{workspaceChipLabel}</span>
-              </Button>
+              workspaceChip({
+                onClick: onOpenFolder,
+                disabled: !workspace?.folderPath,
+                ariaLabel: workspace?.folderPath
+                  ? `${workspaceChipLabel}. Open folder in file manager.`
+                  : workspaceChipLabel,
+              })
             )}
             {/* Execution location: shown only when a paired Mac could run this new chat. */}
             {contextChips.machine ? machinePicker : null}
@@ -3754,12 +3756,7 @@ export function Composer({
                   <BusySendButton
                     mode={busyMode}
                     canSubmit={canSend}
-                    steerAvailable={
-                      Boolean(onSteer) &&
-                      attachments.length === 0 &&
-                      grabbedElements.length === 0 &&
-                      !selectedSkill
-                    }
+                    steerAvailable={steerEligible}
                     onModeChange={setBusyMode}
                     onSubmit={(mode) => void submit(mode)}
                   />
@@ -3809,17 +3806,9 @@ export function Composer({
                     iconOnly
                     disabled={!canSend}
                     onClick={() => void submit()}
-                    aria-label={
-                      hasQueuedMessages || queueDuringCompaction || queueForForkSummary
-                        ? "Queue message"
-                        : "Send message"
-                    }
+                    aria-label={queueing ? "Queue message" : "Send message"}
                   >
-                    {hasQueuedMessages || queueDuringCompaction || queueForForkSummary ? (
-                      <ListPlus />
-                    ) : (
-                      <ArrowUp />
-                    )}
+                    {queueing ? <ListPlus /> : <ArrowUp />}
                   </Button>
                 )}
               </div>

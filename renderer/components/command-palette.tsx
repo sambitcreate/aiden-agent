@@ -148,11 +148,38 @@ function ItemDetail({ children }: { children: React.ReactNode }) {
 
 function PaletteResultItem({
   result,
+  className,
   ...props
 }: Omit<React.ComponentProps<typeof CommandItem>, "value" | "keywords" | "disabled" | "forceMount"> & {
   result: PaletteResult;
 }) {
-  return <CommandItem {...props} value={result.identity} disabled={result.disabled} />;
+  return (
+    <CommandItem
+      {...props}
+      className={cn("min-h-11 px-3", className)}
+      value={result.identity}
+      disabled={result.disabled}
+    />
+  );
+}
+
+function LoadingRow({ label }: { label: string }) {
+  return (
+    <CommandItem disabled value={label} className="min-h-11 px-3">
+      <RefreshCw className="size-4 animate-spin text-secondary" />
+      <span>{label}…</span>
+    </CommandItem>
+  );
+}
+
+function RetryRow({ result, onSelect }: { result: PaletteResult; onSelect: () => void }) {
+  return (
+    <PaletteResultItem result={result} onSelect={onSelect}>
+      <RefreshCw className="size-4 text-secondary" />
+      <span>{result.title}</span>
+      <ItemDetail>Retry</ItemDetail>
+    </PaletteResultItem>
+  );
 }
 
 export function AppCommandPalette({
@@ -785,7 +812,6 @@ export function AppCommandPalette({
                       result={item.result}
                       onSelect={() => void setAppearance(item.mode)}
                       aria-current={appearanceMode === item.mode ? "true" : undefined}
-                      className="min-h-11 px-3"
                     >
                       <item.icon className="size-4 shrink-0 text-secondary" />
                       <span className="min-w-0 flex-1 truncate">
@@ -816,7 +842,6 @@ export function AppCommandPalette({
                     result={row.result}
                     onSelect={() => runCommand(definition.id)}
                     aria-keyshortcuts={ariaKeyShortcut(binding(definition.id))}
-                    className="min-h-11 px-3"
                   >
                     <Icon className="size-4 shrink-0 text-secondary" />
                     <span className="min-w-0 flex-1 truncate">
@@ -833,12 +858,7 @@ export function AppCommandPalette({
 
               {palette.mode === "bots" ? (
                 <>
-                  {bots.isLoading ? (
-                    <CommandItem disabled value="Loading Bots" className="min-h-11 px-3">
-                      <RefreshCw className="size-4 animate-spin text-secondary" />
-                      <span>Loading Bots…</span>
-                    </CommandItem>
-                  ) : null}
+                  {bots.isLoading ? <LoadingRow label="Loading Bots" /> : null}
                   {shownBots.map(({ bot, result, ranges }) => (
                     <PaletteResultItem
                       key={bot.id}
@@ -849,7 +869,6 @@ export function AppCommandPalette({
                         close();
                         void navigate(botChatPath(bot.id));
                       }}
-                      className="min-h-11 px-3"
                     >
                       <Bot className="size-4 shrink-0 text-secondary" />
                       <span className="min-w-0 flex-1 truncate">
@@ -868,7 +887,7 @@ export function AppCommandPalette({
                       result={newChatResult}
                       onSelect={() => runCommand("chat.new")}
                       aria-keyshortcuts={ariaKeyShortcut(binding("chat.new"))}
-                      className="mb-1 min-h-11 px-3"
+                      className="mb-1"
                     >
                       <MessageSquare className="size-4 text-secondary" />
                       <span>
@@ -881,29 +900,15 @@ export function AppCommandPalette({
                       )}
                     </PaletteResultItem>
                   ) : null}
-                  {chats.isLoading ? (
-                    <CommandItem disabled value="Loading chats" className="min-h-11 px-3">
-                      <RefreshCw className="size-4 animate-spin text-secondary" />
-                      <span>Loading chats…</span>
-                    </CommandItem>
-                  ) : null}
+                  {chats.isLoading ? <LoadingRow label="Loading chats" /> : null}
                   {chats.isError ? (
-                    <PaletteResultItem
-                      result={chatRetryResult}
-                      onSelect={() => void chats.refetch()}
-                      className="min-h-11 px-3"
-                    >
-                      <RefreshCw className="size-4 text-secondary" />
-                      <span>{chatRetryResult.title}</span>
-                      <ItemDetail>Retry</ItemDetail>
-                    </PaletteResultItem>
+                    <RetryRow result={chatRetryResult} onSelect={() => void chats.refetch()} />
                   ) : null}
                   {shownChats.map(({ chat, result, ranges }) => (
                     <PaletteResultItem
                       key={chat.id}
                       result={result}
                       onSelect={() => void openChat(chat.id)}
-                      className="min-h-11 px-3"
                     >
                       <Clock3 className="size-4 shrink-0 text-secondary" />
                       <span className="min-w-0 flex-1 truncate">
@@ -924,7 +929,6 @@ export function AppCommandPalette({
                         if (chatPage.next) setActiveResult(chatPage.next.result.identity);
                         chatLimit.showMore();
                       }}
-                      className="min-h-11 px-3"
                     >
                       <Ellipsis className="size-4 shrink-0 text-secondary" />
                       <span className="min-w-0 flex-1 truncate">{showMoreChats?.title}</span>
@@ -940,7 +944,6 @@ export function AppCommandPalette({
                     result={pathRowResult}
                     onSelect={() => choosePathRow(pathRow)}
                     data-path-row={pathRow.action}
-                    className="min-h-11 px-3"
                   >
                     {pathRow.action === "select" ? (
                       <Folder className="size-4 shrink-0 text-secondary" />
@@ -973,7 +976,6 @@ export function AppCommandPalette({
                       result={result}
                       onSelect={() => startChatIn(workspace.id)}
                       aria-current={current ? "true" : undefined}
-                      className="min-h-11 px-3"
                     >
                       <Folder className="size-4 shrink-0 text-secondary" />
                       <span className="flex min-w-0 flex-1 items-baseline gap-2">
@@ -1003,7 +1005,7 @@ export function AppCommandPalette({
                       result={noWorkspaceResult}
                       onSelect={() => startChatIn(noWorkspaceHomeId)}
                       aria-current={noWorkspaceCurrent ? "true" : undefined}
-                      className="mt-1 min-h-11 px-3"
+                      className="mt-1"
                     >
                       <MessageCircle className="size-4 shrink-0 text-secondary" />
                       <span className="flex min-w-0 flex-1 items-baseline gap-2">
@@ -1023,7 +1025,7 @@ export function AppCommandPalette({
                     <PaletteResultItem
                       result={openFolderResult}
                       onSelect={openFolderForChat}
-                      className={shownNoWorkspace ? "min-h-11 px-3" : "mt-1 min-h-11 px-3"}
+                      className={shownNoWorkspace ? undefined : "mt-1"}
                     >
                       <FolderPlus className="size-4 shrink-0 text-secondary" />
                       <span className="min-w-0 flex-1 truncate">
@@ -1033,11 +1035,7 @@ export function AppCommandPalette({
                     </PaletteResultItem>
                   ) : null}
                   {shownClone ? (
-                    <PaletteResultItem
-                      result={cloneResult}
-                      onSelect={cloneForChat}
-                      className="min-h-11 px-3"
-                    >
+                    <PaletteResultItem result={cloneResult} onSelect={cloneForChat}>
                       <FolderDown className="size-4 shrink-0 text-secondary" />
                       <span className="min-w-0 flex-1 truncate">
                         <MatchText text={cloneResult.title} ranges={shownClone.ranges} />
@@ -1049,20 +1047,9 @@ export function AppCommandPalette({
 
               {palette.mode === "models" ? (
                 providers.isLoading ? (
-                  <CommandItem disabled value="Loading models" className="min-h-11 px-3">
-                    <RefreshCw className="size-4 animate-spin text-secondary" />
-                    <span>Loading models…</span>
-                  </CommandItem>
+                  <LoadingRow label="Loading models" />
                 ) : providers.isError ? (
-                  <PaletteResultItem
-                    result={modelRetryResult}
-                    onSelect={() => void providers.refetch()}
-                    className="min-h-11 px-3"
-                  >
-                    <RefreshCw className="size-4 text-secondary" />
-                    <span>{modelRetryResult.title}</span>
-                    <ItemDetail>Retry</ItemDetail>
-                  </PaletteResultItem>
+                  <RetryRow result={modelRetryResult} onSelect={() => void providers.refetch()} />
                 ) : (
                   shownModels.map((row) => {
                     if (row.kind === "unavailable") {
@@ -1077,7 +1064,6 @@ export function AppCommandPalette({
                             close();
                             void navigate(settingsLocation("providers", router.state.location));
                           }}
-                          className="min-h-11 px-3"
                         >
                           <ProviderIcon
                             providerId={provider.id}
@@ -1105,7 +1091,6 @@ export function AppCommandPalette({
                         result={row.result}
                         onSelect={() => void selectModel(entry.providerId, entry.model)}
                         aria-current={selected ? "true" : undefined}
-                        className="min-h-11 px-3"
                       >
                         <ProviderIcon
                           providerId={entry.providerId}
@@ -1136,7 +1121,7 @@ export function AppCommandPalette({
                     <PaletteResultItem
                       result={refreshResult}
                       onSelect={() => void refreshProviders()}
-                      className="mb-1 min-h-11 px-3"
+                      className="mb-1"
                     >
                       <RefreshCw className={cn("size-4 text-secondary", busy && "animate-spin")} />
                       <span>
@@ -1148,26 +1133,12 @@ export function AppCommandPalette({
                       </span>
                     </PaletteResultItem>
                   ) : null}
-                  {providers.isLoading ? (
-                    <CommandItem
-                      disabled
-                      value="Loading providers"
-                      className="min-h-11 px-3"
-                    >
-                      <RefreshCw className="size-4 animate-spin text-secondary" />
-                      <span>Loading providers…</span>
-                    </CommandItem>
-                  ) : null}
+                  {providers.isLoading ? <LoadingRow label="Loading providers" /> : null}
                   {providers.isError ? (
-                    <PaletteResultItem
+                    <RetryRow
                       result={providerRetryResult}
                       onSelect={() => void providers.refetch()}
-                      className="min-h-11 px-3"
-                    >
-                      <RefreshCw className="size-4 text-secondary" />
-                      <span>{providerRetryResult.title}</span>
-                      <ItemDetail>Retry</ItemDetail>
-                    </PaletteResultItem>
+                    />
                   ) : null}
                   {shownProviders.map(({ provider, result, ranges }) => (
                     <PaletteResultItem
@@ -1178,7 +1149,6 @@ export function AppCommandPalette({
                         close();
                         void navigate(settingsLocation("providers", router.state.location));
                       }}
-                      className="min-h-11 px-3"
                     >
                       <ProviderIcon
                         providerId={provider.id}
@@ -1207,7 +1177,7 @@ export function AppCommandPalette({
                       result={item.result}
                       onSelect={() => void setAppearance(item.mode)}
                       aria-current={appearanceMode === item.mode ? "true" : undefined}
-                      className={cn("min-h-11 px-3", !query.trim() && index === 2 && "mb-1")}
+                      className={cn(!query.trim() && index === 2 && "mb-1")}
                     >
                       <item.icon className="size-4 text-secondary" />
                       <span>
@@ -1232,7 +1202,6 @@ export function AppCommandPalette({
                       close();
                       void navigate(settingsLocation(destination.id, router.state.location));
                     }}
-                    className="min-h-11 px-3"
                   >
                     <Settings className="size-4 shrink-0 text-secondary" />
                     <span className="min-w-0 flex-1 truncate">

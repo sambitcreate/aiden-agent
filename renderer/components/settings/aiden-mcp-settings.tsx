@@ -21,6 +21,7 @@ import { CopyButton } from "../copy-button";
 import { BotPageSkeleton } from "../../main/bots/bot-page-shell";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { aidenMcpApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
 import { aidenMcpQueryKeys } from "../../lib/aiden-mcp";
 import { localComputerNoun, type LocalComputerNoun } from "../../shared/computer-noun";
 import {
@@ -36,10 +37,6 @@ const MAX_APP_NAME_LENGTH = 80;
 /** Characters as Aiden counts them for a name: code points, so an emoji is one. */
 function nameLength(name: string): number {
   return [...name].length;
-}
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function formatDate(epochMs: number): string {

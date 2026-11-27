@@ -48,6 +48,7 @@ import {
 } from "../ui";
 import { ProviderIcon } from "../provider-icon";
 import { webSearchApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
 import { queryKeys, useWebSearch } from "../../lib/queries";
 import type {
   BoundedNonSecretProviderConfig,
@@ -62,6 +63,7 @@ import { isWebSearchKeyPoolProviderId } from "../../shared/web-search-key-pool";
 import { WebSearchKeyPoolEditor } from "./web-search-key-pool";
 import { WebPageSettings } from "./web-page-settings";
 import { isEscapeKey } from "../../lib/dismiss-key";
+import { cn } from "../../lib/ui-utils";
 
 type WebSearchProvider = WebSearchProviderRendererMetadata;
 type CredentialMode = WebSearchRouteEntry["credentialMode"];
@@ -250,12 +252,105 @@ function routeEntryFor(
   return snapshot.route.find((entry) => entry.providerId === providerId);
 }
 
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
-
 function LinkIcon() {
   return <ExternalLink aria-hidden="true" className="size-3.5" />;
+}
+
+function ProviderPolicyLinks({ provider }: { provider: WebSearchProvider }) {
+  return (
+    <>
+      <a
+        href={provider.privacyUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
+      >
+        Privacy <LinkIcon />
+      </a>
+      <a
+        href={provider.termsUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
+      >
+        Terms <LinkIcon />
+      </a>
+    </>
+  );
+}
+
+function ProviderSubpage({
+  backLabel,
+  onBack,
+  title,
+  description,
+  headingRef,
+  children,
+}: {
+  backLabel: string;
+  onBack: () => void;
+  title: string;
+  description: string;
+  headingRef: React.RefObject<HTMLHeadingElement | null>;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-5 pb-8">
+      <Button variant="transparent" size="small" className="self-start" onClick={onBack}>
+        <ChevronLeft className="size-4" />
+        {backLabel}
+      </Button>
+      <header className="settings-page-heading px-1">
+        <h1
+          ref={headingRef}
+          tabIndex={-1}
+          className="text-heading1 font-semibold text-primary outline-none"
+        >
+          {title}
+        </h1>
+        <Text as="p" variant="regular" color="secondary" className="mt-1 max-w-xl">
+          {description}
+        </Text>
+      </header>
+      {children}
+    </div>
+  );
+}
+
+function RadioChoiceCard({
+  id,
+  value,
+  title,
+  description,
+  disabled,
+  className,
+}: {
+  id: string;
+  value: string;
+  title: string;
+  description: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <label
+      htmlFor={id}
+      className={cn(
+        "flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none",
+        className,
+      )}
+    >
+      <RadioGroupItem id={id} value={value} disabled={disabled} className="mt-0.5 shrink-0" />
+      <span className="min-w-0">
+        <Text as="span" variant="small-strong" className="block">
+          {title}
+        </Text>
+        <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
+          {description}
+        </Text>
+      </span>
+    </label>
+  );
 }
 
 function ProviderListGroup({
@@ -420,22 +515,7 @@ function ProviderCard({
       </dl>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-small">
-        <a
-          href={provider.privacyUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
-        >
-          Privacy <LinkIcon />
-        </a>
-        <a
-          href={provider.termsUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
-        >
-          Terms <LinkIcon />
-        </a>
+        <ProviderPolicyLinks provider={provider} />
       </div>
 
       <div className="mt-auto flex flex-wrap items-center justify-end gap-2 border-t border-separator pt-3">
@@ -654,101 +734,92 @@ function ProviderSetupDialog({
     (!providerNeedsEndpoint(provider) || endpointDraft.trim().length > 0) &&
     (!providerNeedsZone(provider) || zoneDraft.trim().length > 0);
 
-  const saveConfig = async () => {
-    if (!hasConfigFields || !configValid || busy) return;
-    setBusy("config");
+  const runProviderMutation = async (
+    kind: "credential" | "config" | "existing-auth",
+    work: () => Promise<WebSearchRendererSnapshot>,
+    success: string,
+    fallback: string,
+    onSaved?: () => void,
+  ) => {
+    setBusy(kind);
     setMessage(null);
     setError(null);
     try {
-      const nextConfig: BoundedNonSecretProviderConfig = {};
-      if (providerNeedsEndpoint(provider)) nextConfig.endpoint = endpointDraft.trim();
-      if (providerNeedsZone(provider)) nextConfig.zone = zoneDraft.trim();
-      const next = await webSearchApi.setProviderConfig(provider.id, nextConfig);
+      const next = await work();
       onSnapshot(next);
-      setMessage("Provider settings saved. Setup does not send a test request.");
+      onSaved?.();
+      setMessage(success);
     } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t save provider settings."));
+      setError(errorMessage(caught, fallback));
     } finally {
       setBusy(null);
     }
+  };
+
+  const saveConfig = async () => {
+    if (!hasConfigFields || !configValid || busy) return;
+    await runProviderMutation(
+      "config",
+      () => {
+        const nextConfig: BoundedNonSecretProviderConfig = {};
+        if (providerNeedsEndpoint(provider)) nextConfig.endpoint = endpointDraft.trim();
+        if (providerNeedsZone(provider)) nextConfig.zone = zoneDraft.trim();
+        return webSearchApi.setProviderConfig(provider.id, nextConfig);
+      },
+      "Provider settings saved. Setup does not send a test request.",
+      "Couldn’t save provider settings.",
+    );
   };
 
   const saveCredential = async () => {
     const value = keyDraft.trim();
     if (!value || !providerNeedsApiKey(provider) || busy) return;
-    setBusy("credential");
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await webSearchApi.setCredential(provider.id, value);
-      onSnapshot(next);
-      setKeyDraft("");
-      setMessage("API key saved. This does not select the provider or send a test request.");
-    } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t save the API key."));
-    } finally {
-      setBusy(null);
-    }
+    await runProviderMutation(
+      "credential",
+      () => webSearchApi.setCredential(provider.id, value),
+      "API key saved. This does not select the provider or send a test request.",
+      "Couldn’t save the API key.",
+      () => setKeyDraft(""),
+    );
   };
 
   const removeCredential = async () => {
     if (!hasCredential || busy) return;
-    setBusy("credential");
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await webSearchApi.removeCredential(provider.id);
-      onSnapshot(next);
-      setKeyDraft("");
-      setMessage(
-        "API key removed. The provider’s route membership and Web Search switch are unchanged.",
-      );
-    } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t remove the API key."));
-    } finally {
-      setBusy(null);
-    }
+    await runProviderMutation(
+      "credential",
+      () => webSearchApi.removeCredential(provider.id),
+      "API key removed. The provider’s route membership and Web Search switch are unchanged.",
+      "Couldn’t remove the API key.",
+      () => setKeyDraft(""),
+    );
   };
 
   const consentExistingAuth = async () => {
     if (!supportsExistingAuth || !existingAuthAvailable || !existingAuthModelId || busy) {
       return;
     }
-    setBusy("existing-auth");
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await webSearchApi.consentExistingAuth({
-        targetProviderId: "openai",
-        sourceProviderId: "openai",
-        modelId: existingAuthModelId,
-        consent: true,
-      });
-      onSnapshot(next);
-      setMessage("OpenAI account approved for Web Search. Route selection is unchanged.");
-    } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t approve the saved OpenAI account."));
-    } finally {
-      setBusy(null);
-    }
+    await runProviderMutation(
+      "existing-auth",
+      () =>
+        webSearchApi.consentExistingAuth({
+          targetProviderId: "openai",
+          sourceProviderId: "openai",
+          modelId: existingAuthModelId,
+          consent: true,
+        }),
+      "OpenAI account approved for Web Search. Route selection is unchanged.",
+      "Couldn’t approve the saved OpenAI account.",
+    );
   };
 
   const revokeExistingAuth = async () => {
     if (!supportsExistingAuth || !existingAuthReady || busy) return;
-    setBusy("existing-auth");
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await webSearchApi.revokeExistingAuth();
-      onSnapshot(next);
-      setMessage(
-        "OpenAI account approval revoked. The saved provider credential and route are unchanged.",
-      );
-    } catch (caught) {
-      setError(errorMessage(caught, "Couldn’t revoke the saved OpenAI account."));
-    } finally {
-      setBusy(null);
-    }
+    await runProviderMutation(
+      "existing-auth",
+      () => webSearchApi.revokeExistingAuth(),
+      "OpenAI account approval revoked. The saved provider credential and route are unchanged.",
+      "Couldn’t revoke the saved OpenAI account.",
+    );
   };
 
   const routeModeDescription =
@@ -806,22 +877,7 @@ function ProviderSetupDialog({
               <ShieldCheck aria-hidden="true" className="size-3.5 text-tertiary" />
               Queries go to {provider.label}
             </span>
-            <a
-              href={provider.privacyUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
-            >
-              Privacy <LinkIcon />
-            </a>
-            <a
-              href={provider.termsUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 outline-none hover:text-primary focus-visible:text-primary "
-            >
-              Terms <LinkIcon />
-            </a>
+            <ProviderPolicyLinks provider={provider} />
           </div>
         </section>
 
@@ -838,66 +894,30 @@ function ProviderSetupDialog({
               className="grid gap-2"
             >
               {provider.credentialKind === "optional-api-key" ? (
-                <label
-                  htmlFor={`web-search-${provider.id}-anonymous`}
-                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-                >
-                  <RadioGroupItem
-                    id={`web-search-${provider.id}-anonymous`}
-                    value="anonymous"
-                    className="mt-0.5 shrink-0"
-                  />
-                  <span className="min-w-0">
-                    <Text as="span" variant="small-strong" className="block">
-                      Built-in free route
-                    </Text>
-                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Use anonymous access where this provider supports it; provider rate limits may
-                      apply.
-                    </Text>
-                  </span>
-                </label>
+                <RadioChoiceCard
+                  id={`web-search-${provider.id}-anonymous`}
+                  value="anonymous"
+                  title="Built-in free route"
+                  description="Use anonymous access where this provider supports it; provider rate limits may apply."
+                />
               ) : null}
               {provider.credentialKind === "optional-api-key" || providerNeedsApiKey(provider) ? (
-                <label
-                  htmlFor={`web-search-${provider.id}-api-key`}
-                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-                >
-                  <RadioGroupItem
-                    id={`web-search-${provider.id}-api-key`}
-                    value="api-key"
-                    className="mt-0.5 shrink-0"
-                  />
-                  <span className="min-w-0">
-                    <Text as="span" variant="small-strong" className="block">
-                      Use my API key
-                    </Text>
-                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Store a provider-specific key encrypted on this device.
-                    </Text>
-                  </span>
-                </label>
+                <RadioChoiceCard
+                  id={`web-search-${provider.id}-api-key`}
+                  value="api-key"
+                  title="Use my API key"
+                  description="Store a provider-specific key encrypted on this device."
+                />
               ) : null}
               {supportsExistingAuth ? (
-                <label
-                  htmlFor={`web-search-${provider.id}-existing-auth`}
-                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-[background-color,opacity] duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-                >
-                  <RadioGroupItem
-                    id={`web-search-${provider.id}-existing-auth`}
-                    value="existing-provider-auth"
-                    disabled={!existingAuthAvailable}
-                    className="mt-0.5 shrink-0"
-                  />
-                  <span className="min-w-0">
-                    <Text as="span" variant="small-strong" className="block">
-                      Use approved OpenAI account
-                    </Text>
-                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Approve the saved account below; OpenAI quota and billing apply.
-                    </Text>
-                  </span>
-                </label>
+                <RadioChoiceCard
+                  id={`web-search-${provider.id}-existing-auth`}
+                  value="existing-provider-auth"
+                  disabled={!existingAuthAvailable}
+                  className="transition-[background-color,opacity]"
+                  title="Use approved OpenAI account"
+                  description="Approve the saved account below; OpenAI quota and billing apply."
+                />
               ) : null}
             </RadioGroup>
           </Field>
@@ -1466,32 +1486,29 @@ export function WebSearchSettings() {
     (provider) => !activeRoute.some((entry) => entry.providerId === provider.id),
   );
 
+  const setupDialog = editing ? (
+    <ProviderSetupDialog
+      provider={editing}
+      snapshot={snapshot}
+      open={editing !== null}
+      onOpenChange={(open) => {
+        if (!open) setEditingProvider(null);
+      }}
+      onSnapshot={applySnapshot}
+      returnFocus={() => setupTriggerRef.current}
+    />
+  ) : null;
+
   if (view === "providers") {
     if (browserProvider) {
       return (
-        <div className="flex flex-col gap-5 pb-8">
-          <Button
-            variant="transparent"
-            size="small"
-            className="self-start"
-            onClick={closeProviderDetail}
-          >
-            <ChevronLeft className="size-4" />
-            All providers
-          </Button>
-          <header className="settings-page-heading px-1">
-            <h1
-              ref={providerDetailHeadingRef}
-              tabIndex={-1}
-              className="text-heading1 font-semibold text-primary outline-none"
-            >
-              {browserProvider.label}
-            </h1>
-            <Text as="p" variant="regular" color="secondary" className="mt-1 max-w-xl">
-              Review connection, cost, and privacy details. Configuration never sends a search or
-              changes the active route by itself.
-            </Text>
-          </header>
+        <ProviderSubpage
+          backLabel="All providers"
+          onBack={closeProviderDetail}
+          title={browserProvider.label}
+          description="Review connection, cost, and privacy details. Configuration never sends a search or changes the active route by itself."
+          headingRef={providerDetailHeadingRef}
+        >
           <ProviderCard
             provider={browserProvider}
             route={activeRoute}
@@ -1508,46 +1525,19 @@ export function WebSearchSettings() {
               enable Web Search, or select this provider.
             </Text>
           </Callout>
-          {editing ? (
-            <ProviderSetupDialog
-              provider={editing}
-              snapshot={snapshot}
-              open={editing !== null}
-              onOpenChange={(open) => {
-                if (!open) setEditingProvider(null);
-              }}
-              onSnapshot={applySnapshot}
-              returnFocus={() => setupTriggerRef.current}
-            />
-          ) : null}
-        </div>
+          {setupDialog}
+        </ProviderSubpage>
       );
     }
 
     return (
-      <div className="flex flex-col gap-5 pb-8">
-        <Button
-          variant="transparent"
-          size="small"
-          className="self-start"
-          onClick={closeProviderBrowser}
-        >
-          <ChevronLeft className="size-4" />
-          Back to Web Search
-        </Button>
-        <header className="settings-page-heading px-1">
-          <h1
-            ref={browserHeadingRef}
-            tabIndex={-1}
-            className="text-heading1 font-semibold text-primary outline-none"
-          >
-            Browse providers
-          </h1>
-          <Text as="p" variant="regular" color="secondary" className="mt-1 max-w-xl">
-            Compare reviewed search services, then open one to configure it. Saving credentials
-            never selects a provider or makes a network request.
-          </Text>
-        </header>
+      <ProviderSubpage
+        backLabel="Back to Web Search"
+        onBack={closeProviderBrowser}
+        title="Browse providers"
+        description="Compare reviewed search services, then open one to configure it. Saving credentials never selects a provider or makes a network request."
+        headingRef={browserHeadingRef}
+      >
 
         <section
           aria-label="Current Web Search route"
@@ -1661,27 +1651,27 @@ export function WebSearchSettings() {
               </Button>
             ) : null}
             {filteredProviders.length === 0 ? (
-              <EmptyState
-                placement="inline"
-                title="No shipped providers match"
-                description="Clear the search and filters to browse every reviewed provider."
-              />
-            ) : null}
-            {filteredProviders.length === 0 ? (
-              <Button
-                variant="transparent"
-                className="self-center"
-                onClick={() => {
-                  setSearch("");
-                  setFilter("all");
-                }}
-              >
-                Clear search and filters
-              </Button>
+              <>
+                <EmptyState
+                  placement="inline"
+                  title="No shipped providers match"
+                  description="Clear the search and filters to browse every reviewed provider."
+                />
+                <Button
+                  variant="transparent"
+                  className="self-center"
+                  onClick={() => {
+                    setSearch("");
+                    setFilter("all");
+                  }}
+                >
+                  Clear search and filters
+                </Button>
+              </>
             ) : null}
           </div>
         </section>
-      </div>
+      </ProviderSubpage>
     );
   }
 
@@ -1847,42 +1837,20 @@ export function WebSearchSettings() {
                 aria-label="Web Search routing policy"
                 className="grid gap-2 min-[560px]:grid-cols-2"
               >
-                <label
-                  htmlFor="web-search-routing-automatic"
-                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-3 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-                >
-                  <RadioGroupItem
-                    id="web-search-routing-automatic"
-                    value="automatic"
-                    className="mt-0.5 shrink-0"
-                  />
-                  <span className="min-w-0">
-                    <Text as="span" variant="small-strong" className="block">
-                      Automatic
-                    </Text>
-                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Try listed destinations in order after an eligible failure.
-                    </Text>
-                  </span>
-                </label>
-                <label
-                  htmlFor="web-search-routing-fixed"
-                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-3 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-                >
-                  <RadioGroupItem
-                    id="web-search-routing-fixed"
-                    value="fixed"
-                    className="mt-0.5 shrink-0"
-                  />
-                  <span className="min-w-0">
-                    <Text as="span" variant="small-strong" className="block">
-                      Fixed provider
-                    </Text>
-                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Send only to one destination; failures stay visible.
-                    </Text>
-                  </span>
-                </label>
+                <RadioChoiceCard
+                  id="web-search-routing-automatic"
+                  value="automatic"
+                  className="py-3"
+                  title="Automatic"
+                  description="Try listed destinations in order after an eligible failure."
+                />
+                <RadioChoiceCard
+                  id="web-search-routing-fixed"
+                  value="fixed"
+                  className="py-3"
+                  title="Fixed provider"
+                  description="Send only to one destination; failures stay visible."
+                />
               </RadioGroup>
             </Field>
 
@@ -2102,18 +2070,7 @@ export function WebSearchSettings() {
         </div>
       </section>
 
-      {editing ? (
-        <ProviderSetupDialog
-          provider={editing}
-          snapshot={snapshot}
-          open={editing !== null}
-          onOpenChange={(open) => {
-            if (!open) setEditingProvider(null);
-          }}
-          onSnapshot={applySnapshot}
-          returnFocus={() => setupTriggerRef.current}
-        />
-      ) : null}
+      {setupDialog}
     </div>
   );
 }

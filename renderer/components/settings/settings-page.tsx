@@ -1,5 +1,6 @@
 import * as React from "react";
 import { settingsTabFor, settingsTabLabel, type SettingsPageEntry, type SettingsSection } from "../../lib/settings-section";
+import { Text } from "../ui";
 import { Tabs, tabIds } from "../ui-primitives";
 
 /** The spot on the page to scroll into view, such as `links` on Appearance or `bots` on Approvals. A new `request` scrolls again. */
@@ -22,6 +23,53 @@ export function SettingsPage({
       ) : null}
       {children}
     </div>
+  );
+}
+
+/** Shared heading layout for settings destinations that render their own title, hint, or trailing actions. */
+export function SettingsPageHeading({
+  as: Wrapper = "div",
+  title,
+  description,
+  descriptionAs = "span",
+  descriptionVariant = "small",
+  hint,
+  hintContainerAs: HintContainer = "span",
+  hintGap = "gap-1.5",
+  actions,
+}: {
+  as?: "header" | "div";
+  title: string;
+  description: React.ReactNode;
+  descriptionAs?: "p" | "span";
+  descriptionVariant?: "small" | "regular";
+  hint?: React.ReactNode;
+  hintContainerAs?: "span" | "div";
+  hintGap?: "gap-1" | "gap-1.5";
+  actions?: React.ReactNode;
+}) {
+  const heading = (
+    <Text as="h1" variant="heading1">
+      {title}
+    </Text>
+  );
+  return (
+    <Wrapper className="settings-page-heading flex items-start justify-between gap-4">
+      <div className="min-w-0 flex-1">
+        {hint ? (
+          <HintContainer className={`flex items-center ${hintGap}`}>
+            {heading}
+            {hint}
+          </HintContainer>
+        ) : (
+          heading
+        )}
+        <Text as={descriptionAs} variant={descriptionVariant} color="secondary" className="mt-0.5 block">
+          {description}
+        </Text>
+      </div>
+      {actions}
+    </Wrapper>
   );
 }
 

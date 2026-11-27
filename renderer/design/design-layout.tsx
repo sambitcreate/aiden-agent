@@ -22,6 +22,7 @@ import {
   resolveDesignEntryAction,
 } from "../lib/environment-panel-layout";
 import { appApi } from "../lib/ipc";
+import { useContainerWidth } from "../lib/use-container-width";
 import { DesignCanvasRegion } from "./design-canvas-region";
 import { DesignChatDivider } from "./design-chat-divider";
 import { DesignExpandContext, type DesignExpandState } from "./design-expand";
@@ -211,7 +212,7 @@ export function DesignLayout({
 }: React.PropsWithChildren<{ chatId: string | undefined; state: WorkbenchDesignState }>) {
   const on = state === "active" && Boolean(chatId);
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
+  const containerWidth = useContainerWidth(containerRef);
   const chatWidth = useWorkbenchWidth(DESIGN_CHAT_WIDTH_STORAGE_KEY, DESIGN_CHAT_WIDTH_BOUNDS);
   const layout = resolveDesignCanvasLayout(chatWidth.preferredWidth, containerWidth);
   const stacked = on && layout.mode === "stacked";
@@ -254,16 +255,6 @@ export function DesignLayout({
   const { reportDesignDockInset } = useEnvironmentPanelCore();
   React.useLayoutEffect(() => reportDesignDockInset(dockInset), [dockInset, reportDesignDockInset]);
   React.useLayoutEffect(() => () => reportDesignDockInset(null), [reportDesignDockInset]);
-
-  React.useLayoutEffect(() => {
-    const element = containerRef.current;
-    if (!element) return;
-    const measure = () => setContainerWidth(element.getBoundingClientRect().width);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
 
   return (
     <DesignPaneContext.Provider value={paneState}>

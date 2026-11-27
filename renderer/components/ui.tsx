@@ -1727,6 +1727,17 @@ function useOpener(open: boolean): React.MutableRefObject<HTMLElement | null> {
   return openerRef;
 }
 
+function dialogCloseAutoFocus(
+  openerRef: React.MutableRefObject<HTMLElement | null>,
+  returnFocus?: DialogProps["returnFocus"],
+): (event: Event) => void {
+  return (event) => {
+    const opener = openerRef.current;
+    openerRef.current = null;
+    if (restoreFocus([returnFocus, opener])) event.preventDefault();
+  };
+}
+
 export function Dialog({
   open,
   onOpenChange,
@@ -1759,6 +1770,17 @@ export function Dialog({
   );
   useLayer(open, "modal");
   const openerRef = useOpener(open);
+  const cancelButton = (
+    <Button
+      ref={cancelRef}
+      variant="filled"
+      className={actionClassName}
+      disabled={dismissBlocked}
+      onClick={() => void onCancel?.()}
+    >
+      {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
+    </Button>
+  );
 
   return (
     <DialogPrimitive.Root
@@ -1776,11 +1798,7 @@ export function Dialog({
           {...liveGuard}
           data-slot="dialog-content"
           aria-busy={busy || undefined}
-          onCloseAutoFocus={(event) => {
-            const opener = openerRef.current;
-            openerRef.current = null;
-            if (restoreFocus([returnFocus, opener])) event.preventDefault();
-          }}
+          onCloseAutoFocus={dialogCloseAutoFocus(openerRef, returnFocus)}
           onEscapeKeyDown={keepOpenWhileComposing((event) => {
             onEscapeKeyDown?.(event);
             if (dismissBlocked) event.preventDefault();
@@ -1828,27 +1846,9 @@ export function Dialog({
             <div className={cn("mt-4 min-h-0 overflow-y-auto px-0.5", size === "full" && "flex-1")}>{children}</div>
             <div className="mt-5 flex shrink-0 justify-end gap-2">
               {cancelKeepsOpen ? (
-                <Button
-                  ref={cancelRef}
-                  variant="filled"
-                  className={actionClassName}
-                  disabled={dismissBlocked}
-                  onClick={() => void onCancel?.()}
-                >
-                  {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
-                </Button>
+                cancelButton
               ) : (
-                <DialogPrimitive.Close asChild>
-                  <Button
-                    ref={cancelRef}
-                    variant="filled"
-                    className={actionClassName}
-                    disabled={dismissBlocked}
-                    onClick={() => void onCancel?.()}
-                  >
-                    {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
-                  </Button>
-                </DialogPrimitive.Close>
+                <DialogPrimitive.Close asChild>{cancelButton}</DialogPrimitive.Close>
               )}
               {confirmHidden ? null : (
                 <Button
@@ -1926,11 +1926,7 @@ export function AlertDialog({
           {...liveGuard}
           data-slot="dialog-content"
           aria-busy={busy}
-          onCloseAutoFocus={(event) => {
-            const opener = openerRef.current;
-            openerRef.current = null;
-            if (restoreFocus([returnFocus, opener])) event.preventDefault();
-          }}
+          onCloseAutoFocus={dialogCloseAutoFocus(openerRef, returnFocus)}
           onEscapeKeyDown={keepOpenWhileComposing((event) => busy && event.preventDefault())}
           className={cn(
             "fixed left-1/2 top-1/2 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 outline-none",

@@ -21,6 +21,8 @@ import {
 } from "../ui";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { peerHostsApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
+import { useNow } from "../../lib/use-now";
 import { hostQueryKeys } from "../../lib/hosts/host-query-keys";
 import {
   mergePeerHostStatus,
@@ -30,10 +32,6 @@ import {
 import { localComputerNoun } from "../../shared/computer-noun";
 import type { PeerHostStatus, PeerHostView } from "../../shared/peer-host";
 import { PeerAddDeviceSheet } from "./peer-add-device-sheet";
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
 
 /**
  * Paired hosts and their live supervisor status. The registry list never
@@ -88,18 +86,6 @@ function usePeerConnections() {
   });
 
   return { list, statuses: statuses.data ?? [] };
-}
-
-/** Re-render once a second while a retry countdown is shown. */
-function useNow(active: boolean): number {
-  const [now, setNow] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [active]);
-  return now;
 }
 
 export interface PeerHostRowProps {

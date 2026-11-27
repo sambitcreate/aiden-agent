@@ -130,6 +130,13 @@ export function buildTokenMix(tokens: UsageTokenBreakdown): TokenMixItem[] {
   ];
 }
 
+export function compactNumber(value: number): string {
+  return Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
 export function formatTrackedUsd(value: number): string {
   if (value > 0 && value < 0.0001) return "<$0.0001";
   const fractionDigits = value > 0 && value < 0.01 ? 4 : 2;

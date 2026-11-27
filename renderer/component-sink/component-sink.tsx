@@ -86,7 +86,7 @@ import {
   Tooltip,
 } from "../components/ui-primitives";
 import { InfoHint } from "../components/ui-info-hint";
-import { SettingsPage, SettingsPageTabs } from "../components/settings/settings-page";
+import { SettingsPage, SettingsPageHeading, SettingsPageTabs } from "../components/settings/settings-page";
 import {
   APPEARANCE_STORAGE_KEY,
   applyAppearanceConfig,
@@ -713,6 +713,18 @@ function SettingsCases() {
           </Field>
         </SettingsDisclosure>
       </SettingsPage>
+      <div data-sink="SettingsPageHeading" className="mt-8">
+        <SettingsPageHeading
+          title="Custom page heading"
+          description="Pages with their own hint or trailing actions share this layout."
+          hint={<InfoHint topic="custom page heading">A hint beside the page title.</InfoHint>}
+          actions={
+            <Button size="small" variant="muted">
+              Page action
+            </Button>
+          }
+        />
+      </div>
     </div>
   );
 }

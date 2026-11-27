@@ -57,6 +57,13 @@ export function botMemoryEditErrorText(
   }
 }
 
+const BOT_MEMORY_GROUPS: readonly BotMemoryTarget[] = ["user", "memory"] as const;
+
+const MEMORY_GROUP_EMPTY_TEXT: Record<BotMemoryTarget, (botName: string) => string> = {
+  user: (botName) => `Nothing yet. Tell ${botName} something to remember, like “I’m vegetarian.”`,
+  memory: (botName) => `Nothing yet. ${botName} keeps notes here as it helps you.`,
+};
+
 function groupTitle(target: BotMemoryTarget, botName: string): string {
   return target === "user" ? "About you" : `${botName}’s notes`;
 }
@@ -420,26 +427,19 @@ export function BotMemoryContent({
   } else {
     body = (
       <>
-        <MemoryGroup
-          target="user"
-          botName={bot.name}
-          store={view.user}
-          hidden={removals.hidden}
-          emptyText={`Nothing yet. Tell ${bot.name} something to remember, like “I’m vegetarian.”`}
-          compact={compact}
-          onEdit={(entry) => setEditing({ target: "user", entry })}
-          onDelete={(entry) => removals.remove("user", entry)}
-        />
-        <MemoryGroup
-          target="memory"
-          botName={bot.name}
-          store={view.memory}
-          hidden={removals.hidden}
-          emptyText={`Nothing yet. ${bot.name} keeps notes here as it helps you.`}
-          compact={compact}
-          onEdit={(entry) => setEditing({ target: "memory", entry })}
-          onDelete={(entry) => removals.remove("memory", entry)}
-        />
+        {BOT_MEMORY_GROUPS.map((target) => (
+          <MemoryGroup
+            key={target}
+            target={target}
+            botName={bot.name}
+            store={view[target]}
+            hidden={removals.hidden}
+            emptyText={MEMORY_GROUP_EMPTY_TEXT[target](bot.name)}
+            compact={compact}
+            onEdit={(entry) => setEditing({ target, entry })}
+            onDelete={(entry) => removals.remove(target, entry)}
+          />
+        ))}
         {botMemoryCount(view) > 0 ? (
           <div className="flex justify-center">
             <Button variant="destructive" onClick={() => setErasing(true)}>

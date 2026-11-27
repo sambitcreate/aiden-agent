@@ -5,11 +5,8 @@ import type { ApprovalPrompt } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { pauseWhenUnseen } from "../lib/offscreen-pause";
 import type { MainChatWaitingKind } from "../lib/subagent-helper-chat-store";
-import {
-  subagentDetailGrowthAction,
-  subagentDetailIsAwayFromLatest,
-  subagentModelDisplay,
-} from "../lib/subagent-panel-state";
+import { subagentModelDisplay } from "../lib/subagent-panel-state";
+import { useSubagentScrollFollow } from "../lib/use-subagent-scroll-follow";
 import {
   SUBAGENT_HELPER_TONE_DOT,
   subagentHelperBlocks,
@@ -275,10 +272,6 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
     const detailsId = React.useId();
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
     const detailsRef = React.useRef<HTMLElement | null>(null);
-    const userNavigatedRef = React.useRef(false);
-    const followGrowthRef = React.useRef(false);
-    const previousRef = React.useRef<{ runId: string; revision: number } | null>(null);
-    const [awayFromLatest, setAwayFromLatest] = React.useState(false);
     const [detailsOpen, setDetailsOpen] = React.useState(false);
     const state = shownState(run, approval !== null);
     const tone = subagentHelperTone(state);
@@ -307,77 +300,20 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
       }
     };
 
-    const updateScrollPosition = React.useCallback(() => {
-      const element = scrollRef.current;
-      if (!element) return;
-      const away = subagentDetailIsAwayFromLatest(
-        element.scrollHeight,
-        element.clientHeight,
-        element.scrollTop,
-      );
-      if (!away && userNavigatedRef.current) {
-        userNavigatedRef.current = false;
-        followGrowthRef.current = true;
-      }
-      setAwayFromLatest(userNavigatedRef.current && away);
-    }, []);
+    // A helper opens at its latest message, like the main chat.
+    const {
+      awayFromLatest,
+      updateScrollPosition,
+      markUserNavigation,
+      jumpToLatest: jumpScrollToLatest,
+    } = useSubagentScrollFollow({
+      scrollRef,
+      runId: run.runId,
+      revision: growthRevision,
+      onReset: "follow",
+    });
 
-    React.useLayoutEffect(() => {
-      const element = scrollRef.current;
-      if (!element || typeof window === "undefined") return;
-      const next = { runId: run.runId, revision: growthRevision };
-      const action = subagentDetailGrowthAction(previousRef.current, next, userNavigatedRef.current);
-      const first = previousRef.current === null;
-      previousRef.current = next;
-      if (action === "reset" || first) {
-        // A helper opens at its latest message, like the main chat.
-        userNavigatedRef.current = false;
-        followGrowthRef.current = true;
-        element.scrollTop = element.scrollHeight;
-        setAwayFromLatest(false);
-      } else if (action === "follow") {
-        followGrowthRef.current = true;
-        element.scrollTop = element.scrollHeight;
-        setAwayFromLatest(false);
-      } else {
-        updateScrollPosition();
-      }
-      const frame = window.requestAnimationFrame(updateScrollPosition);
-      return () => window.cancelAnimationFrame(frame);
-    }, [growthRevision, run.runId, updateScrollPosition]);
-
-    React.useEffect(() => {
-      const element = scrollRef.current;
-      if (!element || typeof ResizeObserver === "undefined") return;
-      const observer = new ResizeObserver(() => {
-        if (followGrowthRef.current && !userNavigatedRef.current) {
-          element.scrollTop = element.scrollHeight;
-          setAwayFromLatest(false);
-          return;
-        }
-        updateScrollPosition();
-      });
-      observer.observe(element);
-      if (element.firstElementChild) observer.observe(element.firstElementChild);
-      return () => observer.disconnect();
-    }, [updateScrollPosition]);
-
-    const markUserNavigation = () => {
-      userNavigatedRef.current = true;
-      followGrowthRef.current = false;
-    };
-
-    const jumpToLatest = () => {
-      const element = scrollRef.current;
-      if (!element) return;
-      element.scrollTo({
-        top: element.scrollHeight,
-        behavior: prefersReducedMotion() ? "auto" : "smooth",
-      });
-      userNavigatedRef.current = false;
-      followGrowthRef.current = true;
-      setAwayFromLatest(false);
-    };
+    const jumpToLatest = () => jumpScrollToLatest(prefersReducedMotion() ? "auto" : "smooth");
 
     // Opened details sit at the top of the conversation: bring them into view
     // and move focus there, so opening them visibly does something.

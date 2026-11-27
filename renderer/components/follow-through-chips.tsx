@@ -11,6 +11,7 @@ import { Button, Popover, PopoverContent, PopoverTrigger, Text, toast } from "./
 import { chatsApi } from "../lib/ipc";
 import { queryKeys, useChatFollowThrough } from "../lib/queries";
 import { useLinkOpener } from "../lib/link-opener";
+import { useNow } from "../lib/use-now";
 import { cn } from "../lib/ui-utils";
 import { backgroundJobLabel, backgroundJobPortUrl, type BackgroundJobView } from "../shared/background-jobs";
 import { checkBackWhen, type CheckBackView } from "../shared/check-backs";
@@ -60,17 +61,6 @@ export function pullRequestFollowStatus(follow: PullRequestFollowView): string {
     `${follow.noticesSent} ${follow.noticesSent === 1 ? "update" : "updates"} sent`,
   ];
   return parts.join(" · ");
-}
-
-function useNow(active: boolean): number {
-  const [now, setNow] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
-    return () => window.clearInterval(timer);
-  }, [active]);
-  return now;
 }
 
 function ChipTrigger({
@@ -185,7 +175,7 @@ function JobRow({ chatId, job, now, onStop }: { chatId: string; job: BackgroundJ
 function JobsChip({ chatId, jobs, onChanged }: { chatId: string; jobs: BackgroundJobView[]; onChanged: () => void }) {
   const [open, setOpen] = React.useState(false);
   const running = jobs.filter((job) => job.state === "running").length;
-  const now = useNow(open);
+  const now = useNow(open, 15_000);
   const stop = (job: BackgroundJobView) => {
     void chatsApi
       .stopBackgroundJob(chatId, job.id)
@@ -302,7 +292,7 @@ export function checkBackChipLabel(checkBacks: readonly CheckBackView[], now: nu
 function CheckBackChip({ chatId, checkBacks, onChanged }: { chatId: string; checkBacks: CheckBackView[]; onChanged: () => void }) {
   const [open, setOpen] = React.useState(false);
   const [cancelling, setCancelling] = React.useState<ReadonlySet<string>>(() => new Set());
-  const now = useNow(open);
+  const now = useNow(open, 15_000);
   // Hide a cancelled row at once; it comes back if the cancel fails.
   const visible = checkBacks.filter((checkBack) => !cancelling.has(checkBack.id));
   const cancel = (checkBack: CheckBackView) => {

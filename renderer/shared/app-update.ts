@@ -125,3 +125,19 @@ export function parseAppUpdateSnapshot(value: unknown): AppUpdateSnapshot {
       return IDLE_APP_UPDATE_SNAPSHOT;
   }
 }
+
+export function updateRestartError(result: AppUpdateRestartResult): string | null {
+  if (result.accepted) return null;
+  switch (result.reason) {
+    case "busy":
+      return "Aiden is already preparing another window action.";
+    case "not-ready":
+      return "That update is no longer ready. Check for updates again.";
+    case "unavailable":
+      return "Aiden could not restart into the update.";
+    case "install-cancelled":
+      return "The update wasn’t installed because the password prompt was closed.";
+    case "install-failed":
+      return "Aiden couldn’t install the update. Try again, or install it from GitHub Releases.";
+  }
+}

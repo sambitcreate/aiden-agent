@@ -20,6 +20,7 @@ import {
 import { Check, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ProviderIcon } from "../provider-icon";
 import { InfoHint } from "../ui-info-hint";
+import { SettingsPageHeading } from "./settings-page";
 import { ProviderEditor } from "./provider-editor";
 import { ProviderEditorFocusTarget } from "./provider-editor-focus";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
@@ -340,19 +341,17 @@ export function ProvidersSettings() {
 
   return (
     <div className="providers-settings flex flex-col gap-6">
-      <div className="settings-page-heading flex items-start justify-between gap-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1">
-            <Text as="h1" variant="heading1">Providers</Text>
-            <InfoHint topic="provider connections">
-              Connect an account, an API key or a local model. Custom endpoints and catalog updates are in Advanced.
-            </InfoHint>
-          </div>
-          <Text variant="small" color="secondary" className="mt-0.5 block">
-            Choose which AI services Aiden can use for chat.
-          </Text>
-        </div>
-      </div>
+      <SettingsPageHeading
+        title="Providers"
+        description="Choose which AI services Aiden can use for chat."
+        hintContainerAs="div"
+        hintGap="gap-1"
+        hint={
+          <InfoHint topic="provider connections">
+            Connect an account, an API key or a local model. Custom endpoints and catalog updates are in Advanced.
+          </InfoHint>
+        }
+      />
       {providers.isLoading || codex.isLoading ? <Text role="status" variant="small">Loading connections…</Text>
         : providers.isError || codex.isError ? <div role="alert" className="settings-card p-4">
           Couldn’t read all connections. <Button size="small" onClick={() => { void providers.refetch(); void codex.refetch(); }}>Try again</Button>

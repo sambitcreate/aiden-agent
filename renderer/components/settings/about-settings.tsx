@@ -4,7 +4,7 @@ import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
 import { Progress } from "../ui-primitives";
 import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
 import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
-import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../../shared/app-update";
+import { updateRestartError, type AppUpdateSnapshot } from "../../shared/app-update";
 import { DiagnosticsSettings } from "./diagnostics-settings";
 import { useAppCapabilities, type AppCapabilities } from "../../lib/app-capabilities";
 
@@ -63,21 +63,7 @@ export function softwareUpdateDescription(snapshot: AppUpdateSnapshot, capabilit
   }
 }
 
-export function updateRestartError(result: AppUpdateRestartResult): string | null {
-  if (result.accepted) return null;
-  switch (result.reason) {
-    case "busy":
-      return "Aiden is already preparing another window action.";
-    case "not-ready":
-      return "That update is no longer ready. Check for updates again.";
-    case "unavailable":
-      return "Aiden could not restart into the update.";
-    case "install-cancelled":
-      return "The update wasn’t installed because the password prompt was closed.";
-    case "install-failed":
-      return "Aiden couldn’t install the update. Try again, or install it from GitHub Releases.";
-  }
-}
+export { updateRestartError };
 
 export function AboutSettings() {
   const capabilities = useAppCapabilities();

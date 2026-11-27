@@ -19,7 +19,7 @@ import type { BotSettingsChangeStatus } from "../../shared/bot-settings-changes"
 import { BotInstructionsDialog } from "./bot-instructions-editor";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
-import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
+import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouSlotBody, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
 import { PlanCard } from "../../components/bots/plan-card";
 import { ApprovalStatusLine } from "../../components/chat-approval-card";
 import { useApprovalStatusLine } from "../../lib/use-approval-status-line";
@@ -35,6 +35,7 @@ import { botsApi } from "../../lib/ipc";
 import { useReportGoalView } from "../../lib/use-report-goal-view";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
+import { textAttachmentBody } from "../../shared/attachment-contract";
 import { botChatActivityOnDevice, showsBotToolActivity } from "../../shared/bots";
 import { queryKeys, useBot, useBots } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
@@ -125,14 +126,6 @@ export function BotInterruptedCard({
       {accessChanged ? <p>{BOT_ACCESS_CHANGED_TEXT}</p> : null}
     </BotNoticeCard>
   );
-}
-
-
-function attachmentText(attachments: readonly Attachment[]): string {
-  return attachments
-    .filter((attachment) => attachment.kind === "text" && attachment.text)
-    .map((attachment) => `\n\n${attachment.name}:\n${attachment.text}`)
-    .join("");
 }
 
 
@@ -827,7 +820,7 @@ export function BotChatPane({ botId }: { botId: string }) {
       toast.error("Bots take photos and text files for now.");
       return;
     }
-    const body = `${text}${attachmentText(attachments)}`;
+    const body = `${text}${textAttachmentBody(attachments)}`;
     const imageIdentity = images.map((image) => `${image.mimeType}:${image.data.length}:${image.data.slice(0, 64)}`).join("|");
     // The same words and photos sent again after a failure replay under the first request id.
     const unsettled = unsettledSend.current;
@@ -1299,18 +1292,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   const footer = (
     <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
       <NeedsYouAnnouncer slot={slot} />
-      {slot.count > 0 || approvalStatus.status ? (
-        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
-          <NeedsYouHeader slot={slot} />
-          {slot.current?.render ? (
-            <div key={slot.current.key} className="contents" data-needs-you-card>
-              {slot.current.render()}
-            </div>
-          ) : !slot.current && approvalStatus.status ? (
-            <ApprovalStatusLine status={approvalStatus.status} />
-          ) : null}
-        </div>
-      ) : null}
+      <NeedsYouSlotBody
+        slot={slot}
+        fallback={approvalStatus.status ? <ApprovalStatusLine status={approvalStatus.status} /> : null}
+      />
       {/* The question takes the composer's place, as in workspace chats, while the slot shows it. */}
       {question && askingQuestion ? (
         <>

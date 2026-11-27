@@ -14,7 +14,7 @@ import { AccessRequestCard } from "../components/bots/access-request-card";
 import { HandoffCard, handoffNoNoteComposerText } from "../components/bots/handoff-card";
 import { PlanCard } from "../components/bots/plan-card";
 import { handoffTakenKey, useHandoffTaken } from "../components/bots/handoff-taken";
-import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../components/bots/needs-you-slot";
+import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouSlotBody, needsYouSlotState, type NeedsYouItem } from "../components/bots/needs-you-slot";
 import { Composer } from "../components/composer";
 import { MessageAttachmentPreviewProvider } from "../components/message-attachments";
 import {
@@ -39,6 +39,7 @@ import { hostServesBotHandoffs, hostSharesBotSessions } from "../lib/hosts/remot
 import { useRemoteBotSession } from "../lib/hosts/use-remote-bot-session";
 import { browserApi, peerHostsApi } from "../lib/ipc";
 import type { Attachment } from "../lib/types";
+import { textAttachmentBody } from "../shared/attachment-contract";
 import type { AskUserQuestionResponseV1 } from "../shared/ask-user-question";
 import { DEFAULT_BOT_AVATAR, botChatActivityOnDevice, isBotAvatar, showsBotToolActivity, type BotAvatar } from "../shared/bots";
 import { useAppearancePreference } from "../lib/use-appearance-preference";
@@ -71,14 +72,6 @@ import { BotPausedNotice, botPausedText } from "./bots/bot-paused-card";
 import { BotStatusLine } from "./bots/bot-status-line";
 import { useChatFind } from "../components/chat-find-bar";
 import { useRemoteBotImages, useRemoteBotPhoto } from "../lib/hosts/remote-images";
-
-/** Text files ride along in the message, as in a local Bot chat. */
-function attachmentText(attachments: readonly Attachment[]): string {
-  return attachments
-    .filter((attachment) => attachment.kind === "text" && attachment.text)
-    .map((attachment) => `\n\n${attachment.name}:\n${attachment.text}`)
-    .join("");
-}
 
 function botName(feed: PeerHostFeedSnapshot | null | undefined, botId: string): string | null {
   const row = feed?.bots.find((bot) => bot.id === botId);
@@ -479,7 +472,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       toast.error(`Update Aiden on ${hostName} to send photos to ${name}.`);
       throw new Error("photos unsupported");
     }
-    const fullText = `${text}${attachmentText(attachments)}`;
+    const fullText = `${text}${textAttachmentBody(attachments)}`;
     const identity = photoIdentity(images);
     const echoId = mintPeerIdempotencyKey();
     const echo: BotPendingSend = {
@@ -861,18 +854,10 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const footer = (
     <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
       <NeedsYouAnnouncer slot={slot} />
-      {slot.count > 0 || approvalStatus.status ? (
-        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
-          <NeedsYouHeader slot={slot} />
-          {slot.current?.render ? (
-            <div key={slot.current.key} className="contents" data-needs-you-card>
-              {slot.current.render()}
-            </div>
-          ) : !slot.current && approvalStatus.status ? (
-            <ApprovalStatusLine status={approvalStatus.status} />
-          ) : null}
-        </div>
-      ) : null}
+      <NeedsYouSlotBody
+        slot={slot}
+        fallback={approvalStatus.status ? <ApprovalStatusLine status={approvalStatus.status} /> : null}
+      />
       {question && askingQuestion ? (
         <>
           <div className="contents" data-needs-you-card>

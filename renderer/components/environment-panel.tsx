@@ -9,6 +9,7 @@ import { ChatContextPanel, type ChatContextDetails } from "./chat-context-panel"
 import { WorkspaceToolLauncher, WORKSPACE_TOOLS, workspaceToolLabel } from "./workspace-tool-launcher";
 import { ArtifactsPanel } from "./artifacts-panel";
 import { useWorkspaceArtifacts, type WorkspaceArtifactsState } from "../lib/use-workspace-artifacts";
+import { useContainerWidth } from "../lib/use-container-width";
 import { revealsWorkspaceArtifact, workspaceArtifactChangeRequest } from "../lib/workspace-artifacts-view";
 import { stageComposerText } from "../lib/composer-draft-store";
 import type { WorkspaceArtifactsChangedEvent, WorkspaceArtifactView } from "../shared/workspace-artifacts";
@@ -2511,9 +2512,9 @@ export function EnvironmentWorkbench({
   const toolsOpen = panel.toolsOpen && !suppressed;
   const quickViewOpen = panel.quickViewOpen && !suppressed;
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
   const panelWidth = useWorkbenchWidth(WIDTH_STORAGE_KEY);
   useDesignWorkbenchSuspension(design, panel, panelWidth);
+  const containerWidth = useContainerWidth(containerRef);
   const resizing = panelWidth.resizing;
   const fullOpen = toolsOpen;
   const layout = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth);
@@ -2553,16 +2554,6 @@ export function EnvironmentWorkbench({
     },
     [panel.showTools],
   );
-
-  React.useLayoutEffect(() => {
-    const element = containerRef.current;
-    if (!element) return;
-    const measure = () => setContainerWidth(element.getBoundingClientRect().width);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
 
   // A dialog, menu or the compact sidebar above the panel takes Escape first.
   useLayer(toolsOpen || quickViewOpen, "panel", {

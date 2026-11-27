@@ -6,7 +6,7 @@ import { useRouter, useRouterState } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useEnvironmentPanelCore } from "./environment-panel";
 import { Button, toast } from "./ui";
-import { historyNavigationAvailability } from "../lib/history-navigation";
+import { environmentWorkBlockedReason, historyNavigationAvailability } from "../lib/history-navigation";
 import { useShortcutBinding } from "../lib/command-system";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 
@@ -25,13 +25,11 @@ export function HistoryNavButtons() {
   // the Files editor keeps unsaved text only while it is mounted, and leaving
   // mid-Git-operation would hide its outcome. These are action checks, not
   // registered route blockers, so traversal must consult them itself.
-  const blockedReason = environmentPanel.gitOperationBusy
-    ? "Wait for the current Git operation to finish"
-    : environmentPanel.editorState.saving
-      ? "Wait for the open file to finish saving"
-      : environmentPanel.editorState.dirty
-        ? "Save or discard the open file's edits first"
-        : null;
+  const blockedReason = environmentWorkBlockedReason({
+    gitBusy: environmentPanel.gitOperationBusy,
+    saving: environmentPanel.editorState.saving,
+    dirty: environmentPanel.editorState.dirty,
+  });
   const traverse = (go: () => void) => {
     if (blockedReason) {
       toast.info(blockedReason);

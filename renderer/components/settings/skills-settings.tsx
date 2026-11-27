@@ -18,9 +18,10 @@ import {
   toast,
 } from "../ui";
 import { InfoHint } from "../ui-info-hint";
+import { SettingsPageHeading } from "./settings-page";
 import { LIST_SEARCH_THRESHOLD, ListSearchField } from "../list-search-field";
 import { FolderGit2, Plus, Trash2 } from "lucide-react";
-import { skillsApi, settingsApi } from "../../lib/ipc";
+import { skillsApi } from "../../lib/ipc";
 import {
   queryKeys,
   useDiscoveredSkills,
@@ -28,7 +29,8 @@ import {
   useWorkspaces,
   useSettings,
 } from "../../lib/queries";
-import type { Skill, AppSettings } from "../../lib/types";
+import { useSettingsSave } from "../../lib/use-settings-save";
+import type { Skill } from "../../lib/types";
 import { resolveSkillCatalogWorkspaceId } from "../../lib/skill-catalog-workspace";
 import { filterSkillsByQuery } from "../../lib/workspace-settings-view";
 
@@ -54,7 +56,7 @@ export function SkillsSettings() {
   const qc = useQueryClient();
   const skills = useSkills();
   const settings = useSettings();
-  const [globalSaving, setGlobalSaving] = React.useState(false);
+  const { saving: globalSaving, save: saveGlobal } = useSettingsSave({ guard: "state" });
   const globallyEnabled = settings.data?.skillsEnabled !== false;
   const [editing, setEditing] = React.useState<Skill | null>(null);
   const [removing, setRemoving] = React.useState<Skill | null>(null);
@@ -69,19 +71,10 @@ export function SkillsSettings() {
       qc.invalidateQueries({ queryKey: ["skillCatalog"] }),
     ]);
 
-  const setGlobalEnabled = async (enabled: boolean) => {
-    if (globalSaving) return;
-    setGlobalSaving(true);
-    try {
-      const saved = await settingsApi.set({ skillsEnabled: enabled });
-      qc.setQueryData<AppSettings>(queryKeys.settings, saved);
-      await invalidate();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn’t update skills settings.");
-    } finally {
-      setGlobalSaving(false);
-    }
-  };
+  const setGlobalEnabled = (enabled: boolean) =>
+    saveGlobal({ skillsEnabled: enabled }, "Couldn’t update skills settings.", {
+      afterSave: invalidate,
+    });
 
   const toggle = async (skill: Skill, enabled: boolean) => {
     try {
@@ -108,25 +101,21 @@ export function SkillsSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="settings-page-heading flex items-start justify-between gap-4">
-        <div className="min-w-0 flex-1">
-          <Text as="h1" variant="heading1">
-            Skills
-          </Text>
-          <Text variant="small" color="secondary" className="mt-0.5 block">
-            Reusable instruction sets the assistant can invoke as tools when a task matches.
-          </Text>
-        </div>
-        <Button
-          className="shrink-0"
-          variant="filled"
-          size="small"
-          onClick={() => setEditing(newSkill())}
-        >
-          <Plus className="size-4" />
-          New skill
-        </Button>
-      </div>
+      <SettingsPageHeading
+        title="Skills"
+        description="Reusable instruction sets the assistant can invoke as tools when a task matches."
+        actions={
+          <Button
+            className="shrink-0"
+            variant="filled"
+            size="small"
+            onClick={() => setEditing(newSkill())}
+          >
+            <Plus className="size-4" />
+            New skill
+          </Button>
+        }
+      />
 
       <FieldSet>
         <Field

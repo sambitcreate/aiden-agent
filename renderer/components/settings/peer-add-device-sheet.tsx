@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, KeyRound, Laptop, Link2, Loader2, Monitor, RotateCw, TriangleAlert } from "lucide-react";
 import { Badge, Button, Callout, Dialog, Input, Text, Textarea } from "../ui";
 import { peerHostsApi } from "../../lib/ipc";
+import { useNow } from "../../lib/use-now";
 import { hostQueryKeys } from "../../lib/hosts/host-query-keys";
 import {
   mintPeerPairingAttemptId,
@@ -385,7 +386,6 @@ export function PeerAddDeviceSheet({
   const queryClient = useQueryClient();
   const [step, setStep] = React.useState<PeerAddDeviceStep>({ kind: "choose" });
   const [discovery, setDiscovery] = React.useState<PeerDiscoveryState>(IDLE_DISCOVERY);
-  const [now, setNow] = React.useState(() => Date.now());
   const attemptRef = React.useRef<string | null>(null);
   const contentRef = React.useRef<HTMLDivElement>(null);
   const replaceHostId = replaceHost?.id;
@@ -425,12 +425,7 @@ export function PeerAddDeviceSheet({
   }, [open]);
 
   const counting = step.kind === "waiting" && step.progress !== undefined;
-  React.useEffect(() => {
-    if (!counting) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [counting]);
+  const now = useNow(counting);
 
   // Move focus into the new step so it never falls back to the page.
   React.useEffect(() => {

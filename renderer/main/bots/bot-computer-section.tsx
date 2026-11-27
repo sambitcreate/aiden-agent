@@ -22,6 +22,8 @@ export function BotComputerSection({ bot }: { bot: ComputerBot }) {
   const navigate = useNavigate();
   const [acting, setActing] = React.useState(false);
   const [confirm, setConfirm] = React.useState<Confirm>(null);
+  const lastConfirmRef = React.useRef<Exclude<Confirm, null>>("reset");
+  if (confirm !== null) lastConfirmRef.current = confirm;
   if (!query.supported) return null;
 
   const status = query.data;
@@ -95,33 +97,39 @@ export function BotComputerSection({ bot }: { bot: ComputerBot }) {
     row = <ComputerRow bot={bot} computer={computer} acting={acting} onStop={stop} onConfirm={setConfirm} />;
   }
 
+  const confirmCopy: Record<
+    Exclude<Confirm, null>,
+    { title: string; description: string; label: string; run: () => Promise<void> }
+  > = {
+    reset: {
+      title: `Reset ${owner}?`,
+      description: `Aiden deletes everything on it and makes a fresh copy of the base. Files in ${bot.name}'s Computer folder stay.`,
+      label: "Reset computer",
+      run: reset,
+    },
+    remove: {
+      title: `Remove ${owner}?`,
+      description: `Aiden stops it and deletes it. Files in ${bot.name}'s Computer folder stay, and you can give ${bot.name} a new computer later.`,
+      label: "Remove computer",
+      run: remove,
+    },
+  };
+  const activeConfirm = confirmCopy[confirm ?? lastConfirmRef.current];
+
   return (
     <>
       <FieldSet title="Computer">{row}</FieldSet>
       <AlertDialog
-        open={confirm === "reset"}
+        open={confirm !== null}
         onOpenChange={(open) => !open && setConfirm(null)}
-        title={`Reset ${owner}?`}
-        description={`Aiden deletes everything on it and makes a fresh copy of the base. Files in ${bot.name}'s Computer folder stay.`}
-        confirmLabel="Reset computer"
+        title={activeConfirm.title}
+        description={activeConfirm.description}
+        confirmLabel={activeConfirm.label}
         confirmVariant="destructive"
         busy={acting}
         onConfirm={() => {
           setConfirm(null);
-          void reset();
-        }}
-      />
-      <AlertDialog
-        open={confirm === "remove"}
-        onOpenChange={(open) => !open && setConfirm(null)}
-        title={`Remove ${owner}?`}
-        description={`Aiden stops it and deletes it. Files in ${bot.name}'s Computer folder stay, and you can give ${bot.name} a new computer later.`}
-        confirmLabel="Remove computer"
-        confirmVariant="destructive"
-        busy={acting}
-        onConfirm={() => {
-          setConfirm(null);
-          void remove();
+          void activeConfirm.run();
         }}
       />
     </>

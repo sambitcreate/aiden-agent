@@ -22,18 +22,11 @@ import { ProfileShareCard } from "../components/usage/profile-share-card";
 import { TokenMix } from "../components/usage/token-mix";
 import { profileApi } from "../lib/ipc";
 import { profileShareSvgToPng, USAGE_RANGE_LABELS } from "../lib/profile-share-data";
-import { formatTrackedUsd, profileInitials } from "../lib/usage-profile-data";
+import { compactNumber, formatTrackedUsd, profileInitials } from "../lib/usage-profile-data";
 import { queryKeys, useProfile, useProviders, useUsageSummary } from "../lib/queries";
 import type { UsageDateRange, UsageSummary } from "../lib/types";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { isEscapeKey } from "../lib/dismiss-key";
-
-function compactNumber(value: number): string {
-  return Intl.NumberFormat("en-US", {
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(value);
-}
 
 function ProfileIdentity() {
   const profile = useProfile();

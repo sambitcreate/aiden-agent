@@ -51,3 +51,17 @@ export function attachmentInlineBytesRemaining(
   }
   return MAX_ATTACHMENT_INLINE_BYTES - used;
 }
+
+interface TextAttachmentLike {
+  kind: "image" | "text";
+  name: string;
+  text?: string;
+}
+
+/** Format text attachments appended to a Bot message body. */
+export function textAttachmentBody(attachments: readonly TextAttachmentLike[]): string {
+  return attachments
+    .filter((attachment) => attachment.kind === "text" && attachment.text)
+    .map((attachment) => `\n\n${attachment.name}:\n${attachment.text}`)
+    .join("");
+}

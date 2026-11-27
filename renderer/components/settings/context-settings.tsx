@@ -2,10 +2,11 @@
 // so a change in one is never dropped while another is still saving.
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Field, FieldSet, RadioGroup, RadioGroupItem, Switch, Text, toast } from "../ui";
+import { Field, FieldSet, RadioGroup, RadioGroupItem, Switch, Text } from "../ui";
 import { InfoHint } from "../ui-info-hint";
 import { providersApi, settingsApi } from "../../lib/ipc";
 import { queryKeys, useProviders, useSettings } from "../../lib/queries";
+import { useSettingsSave } from "../../lib/use-settings-save";
 import type { AppSettings } from "../../lib/types";
 import { providerSupportsLongPromptCache } from "../../shared/prompt-cache-retention";
 import { compactionEngineFrom, type CompactionEngine, type CompactionModelBudget } from "../../shared/compaction";
@@ -21,26 +22,12 @@ const ENGINES = [
 ] as const;
 
 export function AutomaticCompactionGroup() {
-  const queryClient = useQueryClient();
   const settings = useSettings();
-  const [saving, setSaving] = React.useState(false);
-  const savingRef = React.useRef(false);
+  const { saving, save } = useSettingsSave({ guard: "ref" });
   const engine = compactionEngineFrom(settings.data?.compactionEngine);
 
-  const setEngine = async (next: CompactionEngine) => {
-    if (savingRef.current) return;
-    savingRef.current = true;
-    setSaving(true);
-    try {
-      const saved = await settingsApi.set({ compactionEngine: next });
-      queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
-    } catch {
-      toast.error("Couldn't update automatic compaction.");
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
-  };
+  const setEngine = (next: CompactionEngine) =>
+    save({ compactionEngine: next }, "Couldn't update automatic compaction.", { errorText: false });
 
   return (
     <FieldSet
@@ -93,35 +80,11 @@ export function AutomaticCompactionGroup() {
   );
 }
 
-type PromptCacheSwitchKey = "cacheWarmingEnabled" | "longPromptCacheRetention";
-
-/** One switch's save, kept apart from the group's other switch so neither drops the other's change. */
-function usePromptCacheSwitch(key: PromptCacheSwitchKey, failure: string) {
-  const queryClient = useQueryClient();
-  const [saving, setSaving] = React.useState(false);
-  const savingRef = React.useRef(false);
-  const save = async (enabled: boolean) => {
-    if (savingRef.current) return;
-    savingRef.current = true;
-    setSaving(true);
-    try {
-      const saved = await settingsApi.set({ [key]: enabled });
-      queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
-    } catch {
-      toast.error(failure);
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
-  };
-  return { saving, save };
-}
-
 export function PromptCacheGroup() {
   const settings = useSettings();
   const providers = useProviders();
-  const warming = usePromptCacheSwitch("cacheWarmingEnabled", "Couldn’t update cache warming.");
-  const hour = usePromptCacheSwitch("longPromptCacheRetention", "Couldn’t update how long caches are kept.");
+  const warming = useSettingsSave({ guard: "ref" });
+  const hour = useSettingsSave({ guard: "ref" });
   const keepsHour = settings.data?.longPromptCacheRetention === true;
   const hourAvailable = (providers.data ?? []).some((provider) => providerSupportsLongPromptCache(provider.id));
 
@@ -136,7 +99,13 @@ export function PromptCacheGroup() {
             aria-label="Warm prompt caches during active chats"
             checked={settings.data?.cacheWarmingEnabled === true}
             disabled={settings.isLoading || warming.saving}
-            onCheckedChange={(enabled) => void warming.save(enabled)}
+            onCheckedChange={(enabled) =>
+              void warming.save(
+                { cacheWarmingEnabled: enabled },
+                "Couldn’t update cache warming.",
+                { errorText: false },
+              )
+            }
           />
         </Field>
         <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
@@ -160,7 +129,13 @@ export function PromptCacheGroup() {
             checked={keepsHour}
             // Off with no provider to use it, it can't be turned on; once on, it can always be turned off.
             disabled={settings.isLoading || providers.isLoading || hour.saving || (!hourAvailable && !keepsHour)}
-            onCheckedChange={(enabled) => void hour.save(enabled)}
+            onCheckedChange={(enabled) =>
+              void hour.save(
+                { longPromptCacheRetention: enabled },
+                "Couldn’t update how long caches are kept.",
+                { errorText: false },
+              )
+            }
           />
         </Field>
       </FieldSet>

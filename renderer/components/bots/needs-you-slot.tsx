@@ -214,3 +214,28 @@ export function NeedsYouHeader<Item extends NeedsYouItem>({ slot }: { slot: Need
     </>
   );
 }
+
+/** The slot container, header, active card, or fallback status line above a Bot composer. */
+export function NeedsYouSlotBody<
+  Item extends NeedsYouItem & { render?: () => React.ReactNode },
+>({
+  slot,
+  fallback,
+}: {
+  slot: NeedsYouSlotState<Item>;
+  fallback: React.ReactNode;
+}) {
+  if (slot.count === 0 && !fallback) return null;
+  return (
+    <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
+      <NeedsYouHeader slot={slot} />
+      {slot.current?.render ? (
+        <div key={slot.current.key} className="contents" data-needs-you-card>
+          {slot.current.render()}
+        </div>
+      ) : !slot.current && fallback ? (
+        fallback
+      ) : null}
+    </div>
+  );
+}

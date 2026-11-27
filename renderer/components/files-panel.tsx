@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { AlertDialog, Button, EmptyState, Input, Text, toast } from "./ui";
 import { browserApi, onNotification, workspacesApi } from "../lib/ipc";
+import { errorMessage } from "../lib/ipc-error";
 import { queryKeys } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import {
@@ -65,10 +66,6 @@ export interface FilesEditorState {
 export interface FilesEditorStateChangeOptions {
   /** Increment the lifecycle revision even when dirty/saving booleans stay the same. */
   touch?: boolean;
-}
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function useFileIndex(workspaceId: string | undefined, active: boolean) {

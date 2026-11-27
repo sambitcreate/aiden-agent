@@ -1,6 +1,7 @@
 import {
   buildActivityCalendar,
   buildTokenMix,
+  compactNumber,
   rankUsageModels,
   type ActivityCalendar,
   type TokenMixItem,
@@ -36,12 +37,7 @@ export interface ProfileShareData {
   topModels: UsageModelSummary[];
 }
 
-export function compactUsageNumber(value: number): string {
-  return Intl.NumberFormat("en-US", {
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(value);
-}
+export const compactUsageNumber = compactNumber;
 
 function streakLabel(value: number): string {
   return `${compactUsageNumber(value)} ${value === 1 ? "day" : "days"}`;

@@ -26,3 +26,11 @@ export function userFacingErrorMessage(error: unknown, fallback: string): string
   const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   return stripIpcErrorPrefix(raw).trim() || fallback;
 }
+
+/** Return an Error's non-empty message, or `fallback` when provided; with one argument, falls back to `String(error)`. */
+export function errorMessage(error: unknown, fallback?: string): string {
+  if (fallback !== undefined) {
+    return error instanceof Error && error.message ? error.message : fallback;
+  }
+  return error instanceof Error ? error.message : String(error);
+}

@@ -8,6 +8,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge, Button, Callout, Dialog, Field, FieldSet, Input, Switch, Text, toast } from "../ui";
 import { mcpApi } from "../../lib/ipc";
+import { errorMessage } from "../../lib/ipc-error";
 import { queryKeys, useMcpMacAppStatus } from "../../lib/queries";
 import type { McpServer } from "../../lib/types";
 import type { MacAppMcpPreset } from "../../shared/connector-catalog";
@@ -20,10 +21,6 @@ const OPEN_CHECK_INTERVAL_MS = 600;
 
 const LINK_CLASS =
   "rounded-control underline decoration-separator underline-offset-2 hover:text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring";
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function MacAppSetupDialog({
   state,

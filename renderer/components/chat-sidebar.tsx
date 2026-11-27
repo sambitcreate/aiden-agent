@@ -85,7 +85,7 @@ import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
 import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import { usePresence } from "../lib/use-presence";
-import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
+import { updateRestartError, type AppUpdateSnapshot } from "../shared/app-update";
 import { useChatActivityState, useChatReadMarkers } from "../lib/use-chat-activity";
 import { chatRowStateFor } from "../lib/chat-activity";
 import { isChatUnread } from "../shared/chat-row-state";
@@ -114,6 +114,7 @@ import { inboxTriageMenuItems } from "./sidebar/inbox-triage-menu";
 import { useInboxTriage, type InboxTriageRow } from "../lib/use-inbox-triage";
 import { inboxTriageOffer, settledInboxReads, withInboxReadsPending } from "../lib/inbox-triage";
 import { userFacingErrorMessage } from "../lib/ipc-error";
+import { environmentWorkBlockedReason } from "../lib/history-navigation";
 import { RemoteHostAdapter, remoteHostCapabilities } from "../lib/hosts/remote-host-adapter";
 import { isRevisionConflict, type HostChatCapability } from "../lib/hosts/host-chat-adapter";
 import { ChatRowContextGlyphs } from "./chat-row-context";
@@ -241,22 +242,6 @@ function workspaceAccessibleName(workspace: Workspace, preferences: WorkspacePat
   // The Chats group stands for every hidden No workspace folder; its own folder is no name for it.
   if (isNoWorkspace(workspace)) return NO_WORKSPACE_GROUP_LABEL;
   return [workspaceDisplayName(workspace, workspaces), workspaceSecondaryLabel(workspace, preferences)].filter(Boolean).join(", ");
-}
-
-function updateRestartError(result: AppUpdateRestartResult): string | null {
-  if (result.accepted) return null;
-  switch (result.reason) {
-    case "busy":
-      return "Aiden is already preparing another window action.";
-    case "not-ready":
-      return "That update is no longer ready. Check for updates again.";
-    case "unavailable":
-      return "Aiden could not restart into the update.";
-    case "install-cancelled":
-      return "The update wasn’t installed because the password prompt was closed.";
-    case "install-failed":
-      return "Aiden couldn’t install the update. Try again, or install it from GitHub Releases.";
-  }
 }
 
 function updateBannerKey(snapshot: AppUpdateSnapshot): string | null {
@@ -889,18 +874,15 @@ function WorkspaceChatSidebar({
   const workspaceActionBlocked =
     environmentPanel.editorState.saving || environmentPanel.gitOperationBusy;
   const workspaceSwitchBlocked = workspaceActionBlocked || environmentPanel.editorState.dirty;
-  const settingsBlockedReason = environmentPanel.gitOperationBusy
-    ? "Wait for the current Git operation to finish"
-    : environmentPanel.editorState.saving
-      ? "Wait for the open file to finish saving"
-      : environmentPanel.editorState.dirty
-        ? "Save or discard the open file's edits first"
-        : undefined;
-  const updateRestartBlockedReason = environmentPanel.gitOperationBusy
-    ? "Wait for the current Git operation to finish before restarting."
-    : environmentPanel.editorState.saving
-      ? "Wait for the open file to finish saving before restarting."
-      : undefined;
+  const settingsBlockedReason = environmentWorkBlockedReason({
+    gitBusy: environmentPanel.gitOperationBusy,
+    saving: environmentPanel.editorState.saving,
+    dirty: environmentPanel.editorState.dirty,
+  });
+  const updateRestartBlockedReason = environmentWorkBlockedReason(
+    { gitBusy: environmentPanel.gitOperationBusy, saving: environmentPanel.editorState.saving },
+    "restarting",
+  );
   const openChat = React.useCallback(
     async (chat: ChatMeta | null | undefined) => {
       if (!chat) return;
@@ -1214,16 +1196,16 @@ function WorkspaceChatSidebar({
   // Move to a workspace and open its latest chat, or an unsaved draft if empty.
   const enterWorkspace = React.useCallback(
     async (id: string, allowDirtyDiscard = false) => {
-      if (environmentPanel.gitOperationBusy) {
-        toast.info("Wait for the current Git operation to finish before switching workspaces.");
-        return false;
-      }
-      if (environmentPanel.editorState.saving) {
-        toast.info("Wait for the open file to finish saving before switching workspaces.");
-        return false;
-      }
-      if (environmentPanel.editorState.dirty && !allowDirtyDiscard) {
-        toast.info("Save or discard the open file's edits before switching workspaces.");
+      const blocked = environmentWorkBlockedReason(
+        {
+          gitBusy: environmentPanel.gitOperationBusy,
+          saving: environmentPanel.editorState.saving,
+          dirty: environmentPanel.editorState.dirty && !allowDirtyDiscard,
+        },
+        "switching workspaces",
+      );
+      if (blocked) {
+        toast.info(blocked);
         return false;
       }
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
@@ -1275,12 +1257,12 @@ function WorkspaceChatSidebar({
 
   const commitRemoveWorkspace = async () => {
     if (!removingWorkspace || removingWorkspaceBusy) return;
-    if (environmentPanel.gitOperationBusy) {
-      toast.info("Wait for the current Git operation to finish before removing this workspace.");
-      return;
-    }
-    if (environmentPanel.editorState.saving) {
-      toast.info("Wait for the open file to finish saving before removing this workspace.");
+    const blocked = environmentWorkBlockedReason(
+      { gitBusy: environmentPanel.gitOperationBusy, saving: environmentPanel.editorState.saving },
+      "removing this workspace",
+    );
+    if (blocked) {
+      toast.info(blocked);
       return;
     }
     const remaining = workspaces.filter((w) => w.id !== removingWorkspace.id);
@@ -1304,12 +1286,12 @@ function WorkspaceChatSidebar({
   const commitDeleteWorktree = async () => {
     const target = deletingWorktree;
     if (!target || deletingWorktreeBusy) return;
-    if (environmentPanel.gitOperationBusy) {
-      toast.info("Wait for the current Git operation to finish before deleting this worktree.");
-      return;
-    }
-    if (environmentPanel.editorState.saving) {
-      toast.info("Wait for the open file to finish saving before deleting this worktree.");
+    const blocked = environmentWorkBlockedReason(
+      { gitBusy: environmentPanel.gitOperationBusy, saving: environmentPanel.editorState.saving },
+      "deleting this worktree",
+    );
+    if (blocked) {
+      toast.info(blocked);
       return;
     }
     const remaining = workspaces.filter((workspace) => workspace.id !== target.id);
@@ -2150,6 +2132,14 @@ function WorkspaceChatSidebar({
     </SidebarOverflowMenu>
   );
 
+  const chatListHeader = (
+    <SectionHeader
+      label={chatViewTitle}
+      accessory={machineFilterChip}
+      actions={sidebarOrganizationMenu}
+    />
+  );
+
   return (
     <>
       <Sidebar
@@ -2512,15 +2502,7 @@ function WorkspaceChatSidebar({
               )}
             </SidebarListGroup>
           ) : chats.isLoading ? (
-            <SidebarListGroup
-              title={
-                <SectionHeader
-                  label={chatViewTitle}
-                  accessory={machineFilterChip}
-                  actions={sidebarOrganizationMenu}
-                />
-              }
-            >
+            <SidebarListGroup title={chatListHeader}>
               <EmptyState
                 placement="inline"
                 title="Loading chats…"
@@ -2528,15 +2510,7 @@ function WorkspaceChatSidebar({
               />
             </SidebarListGroup>
           ) : chats.isError ? (
-            <SidebarListGroup
-              title={
-                <SectionHeader
-                  label={chatViewTitle}
-                  accessory={machineFilterChip}
-                  actions={sidebarOrganizationMenu}
-                />
-              }
-            >
+            <SidebarListGroup title={chatListHeader}>
               <div role="alert" className="flex flex-col gap-1">
                 <EmptyState
                   placement="inline"
@@ -2577,15 +2551,7 @@ function WorkspaceChatSidebar({
               }
             />
           ) : organized.chatSections.length === 0 ? (
-            <SidebarListGroup
-              title={
-                <SectionHeader
-                  label={chatViewTitle}
-                  accessory={machineFilterChip}
-                  actions={sidebarOrganizationMenu}
-                />
-              }
-            >
+            <SidebarListGroup title={chatListHeader}>
               <EmptyState
                 placement="inline"
                 title={search.trim() ? "No matches" : "No chats yet"}
