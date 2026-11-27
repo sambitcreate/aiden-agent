@@ -820,6 +820,17 @@ export function createConfigStore(
     return settingsStore.update(mutation, isCurrent);
   }
 
+  async function updateSettings(
+    mutation: (draft: SettingsShape) => void | Promise<void>,
+    isCurrent: () => boolean = () => true,
+  ): Promise<AppSettings> {
+    const saved = await mutateSettings(async (config) => {
+      await mutation(config);
+      return structuredClone(config.settings);
+    }, isCurrent);
+    return publicSettings(saved);
+  }
+
   async function readModelCache(): Promise<ProviderModelCacheShape> {
     await ensureSeeded();
     return modelCache.load();
@@ -1050,7 +1061,7 @@ export function createConfigStore(
       mutation: (current: WebSearchSettingsV2) => WebSearchSettingsV2,
       isCurrent: () => boolean = () => true,
     ): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         const hasWebSearch = Object.prototype.hasOwnProperty.call(config.settings, "webSearch");
         const current = parseWebSearchSettings(config.settings.webSearch);
         if (!current && hasWebSearch) {
@@ -1062,9 +1073,7 @@ export function createConfigStore(
           mutation(structuredClone(current ?? freshWebSearchSettings())),
         );
         config.settings.webSearch = next;
-        return structuredClone(config.settings);
       }, isCurrent);
-      return publicSettings(saved);
     },
 
     /** Read the `web_fetch` document; a future or invalid one reads as off. */
@@ -1145,7 +1154,7 @@ export function createConfigStore(
     async updateAppControl(input: AppControlOperation, isCurrent: () => boolean, remote = false, authorize?: () => Promise<void>): Promise<AppSettings> {
       const operation = parseAppControlOperation(input);
       if (operation.control === "memory.workspace") throw new Error("Workspace memory needs its workspace application service.");
-      const saved = await mutateSettings(async (config) => {
+      return updateSettings(async (config) => {
         await authorize?.();
         const state: AppControlState = { settings: runtimeSettingsFrom(config.settings) };
         if (remote && state.settings.remoteAppControlsEnabled !== true) throw new Error("Chat controls from paired devices were disabled.");
@@ -1182,9 +1191,7 @@ export function createConfigStore(
         } else {
           config.settings[operation.control === "memory.enabled" ? "memoryEnabled" : "skillsEnabled"] = operation.value as boolean;
         }
-        return structuredClone(config.settings);
       }, isCurrent);
-      return publicSettings(saved);
     },
 
     async setSettings(
@@ -1325,7 +1332,7 @@ export function createConfigStore(
       scope: import("./types.js").GeminiUsageScope,
       voiceModel: string,
     ): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         config.settings.geminiUsageScope = scope;
         config.settings.voiceProvider = "gemini";
         config.settings.voiceModel = voiceModel;
@@ -1334,9 +1341,7 @@ export function createConfigStore(
           GOOGLE_PROVIDER_ID,
           scope,
         );
-        return structuredClone(config.settings);
       });
-      return publicSettings(saved);
     },
 
     /**
@@ -1345,16 +1350,14 @@ export function createConfigStore(
      * Google key cannot silently move transcription away from local or OpenAI.
      */
     async setGeminiUsageScope(scope: import("./types.js").GeminiUsageScope): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         config.settings.geminiUsageScope = scope;
         config.settings.hiddenModelsByProvider = hiddenModelsForGeminiScope(
           config.settings.hiddenModelsByProvider,
           GOOGLE_PROVIDER_ID,
           scope,
         );
-        return structuredClone(config.settings);
       });
-      return publicSettings(saved);
     },
 
     /** Atomically update one presentation-only model visibility preference. */
@@ -1363,13 +1366,13 @@ export function createConfigStore(
       modelId: string,
       hidden: boolean,
     ): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         if (
           providerId === GOOGLE_PROVIDER_ID &&
           config.settings.geminiUsageScope === "transcription_only" &&
           !hidden
         ) {
-          return structuredClone(config.settings);
+          return;
         }
         config.settings.hiddenModelsByProvider = withModelVisibility(
           config.settings.hiddenModelsByProvider,
@@ -1377,39 +1380,33 @@ export function createConfigStore(
           modelId,
           hidden,
         );
-        return structuredClone(config.settings);
       });
-      return publicSettings(saved);
     },
 
     /** Atomically restore every model for one provider to picker visibility. */
     async showAllProviderModels(providerId: string): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         if (
           providerId === GOOGLE_PROVIDER_ID &&
           config.settings.geminiUsageScope === "transcription_only"
         ) {
-          return structuredClone(config.settings);
+          return;
         }
         config.settings.hiddenModelsByProvider = withoutProviderVisibility(
           config.settings.hiddenModelsByProvider,
           providerId,
         );
-        return structuredClone(config.settings);
       });
-      return publicSettings(saved);
     },
 
     /** Atomically hide current and future models for one provider. */
     async hideAllProviderModels(providerId: string): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         config.settings.hiddenModelsByProvider = hideAllProviderModels(
           config.settings.hiddenModelsByProvider,
           providerId,
         );
-        return structuredClone(config.settings);
       });
-      return publicSettings(saved);
     },
 
     /** Atomically merge one validated native-Google preference into current settings. */
@@ -1417,28 +1414,24 @@ export function createConfigStore(
       modelId: string,
       level: GoogleThinkingLevel,
     ): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         config.settings.googleThinkingByModel = mergeGoogleThinkingPreference(
           config.settings.googleThinkingByModel,
           modelId,
           level,
         );
-        return structuredClone(config.settings);
       });
-      return publicSettings(saved);
     },
 
     /** Atomically merge one validated ChatGPT/Codex preference into current settings. */
     async setCodexThinkingLevel(modelId: string, level: CodexThinkingLevel): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         config.settings.codexThinkingByModel = mergeCodexThinkingPreference(
           config.settings.codexThinkingByModel,
           modelId,
           level,
         );
-        return structuredClone(config.settings);
       });
-      return publicSettings(saved);
     },
 
     /**
@@ -1447,7 +1440,7 @@ export function createConfigStore(
      * overrides that no longer validate are left for the user to repair.
      */
     async setCompactionModelBudget(modelKey: string, budget: CompactionModelBudget | undefined): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         const stored = config.settings.compactionModelOverrides;
         let current: CompactionModelOverrides = {};
         if (stored !== undefined) {
@@ -1460,9 +1453,7 @@ export function createConfigStore(
         const parsed = parseCompactionModelOverrides(next);
         if (Object.keys(parsed).length === 0) delete config.settings.compactionModelOverrides;
         else config.settings.compactionModelOverrides = parsed;
-        return structuredClone(config.settings);
       });
-      return publicSettings(saved);
     },
 
     /** Atomically merge one validated Anthropic preference into current settings. */
@@ -1470,15 +1461,13 @@ export function createConfigStore(
       modelId: string,
       level: AnthropicThinkingLevel,
     ): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         config.settings.anthropicThinkingByModel = mergeAnthropicThinkingPreference(
           config.settings.anthropicThinkingByModel,
           modelId,
           level,
         );
-        return structuredClone(config.settings);
       });
-      return publicSettings(saved);
     },
 
     /** Atomically persist a Pi-native thinking preference for any other provider. */
@@ -1487,16 +1476,14 @@ export function createConfigStore(
       modelId: string,
       level: GenerationThinkingLevel,
     ): Promise<AppSettings> {
-      const saved = await mutateSettings((config) => {
+      return updateSettings((config) => {
         config.settings.providerThinkingByModel = mergeProviderThinkingPreference(
           config.settings.providerThinkingByModel,
           providerId,
           modelId,
           level,
         );
-        return structuredClone(config.settings);
       });
-      return publicSettings(saved);
     },
 
     // ── MCP servers ──────────────────────────────────────────────────────
