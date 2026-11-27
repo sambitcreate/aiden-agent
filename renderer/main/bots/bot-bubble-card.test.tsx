@@ -61,7 +61,10 @@ test("Bring back here and Open bubble ask main to bring the chat back or open it
   });
   fireEvent.click(await screen.findByRole("button", { name: "Open bubble" }));
   await waitFor(() => assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:open")?.args, [{ botId: "bot-1" }]));
-  fireEvent.click(screen.getByRole("button", { name: "Bring back here" }));
+  // The card's actions stay disabled until main answers the open.
+  const bringBack = screen.getByRole<HTMLButtonElement>("button", { name: "Bring back here" });
+  await waitFor(() => assert.equal(bringBack.disabled, false));
+  fireEvent.click(bringBack);
   await waitFor(() => assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:bringBack")?.args, [{ botId: "bot-1" }]));
   // Main's answer says the Bot is no longer bubbled: its chat is back here.
   assert.ok(await screen.findByText("Here is your plan."));
