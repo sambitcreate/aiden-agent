@@ -77,6 +77,15 @@ const MAX_CHAT_META_PREVIEW_BYTES = 2_000;
 const MAX_SUMMARY_INDEX_BYTES = 16 * 1024 * 1024;
 const MAX_SUMMARY_INDEX_ENTRIES = 10_000;
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]+$/u;
+
+function isSafeChatId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= 160 &&
+    value.normalize("NFKC") === value &&
+    SAFE_CHAT_ID.test(value)
+  );
+}
 const CHAT_DELETE_STAGING =
   /^\.index\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.chat-delete\.tmp$/u;
 const INDEX_WRITE_STAGING =
@@ -409,12 +418,7 @@ export function createChatStore(
   }
 
   async function chatPath(id: string): Promise<string> {
-    if (
-      id.length === 0 ||
-      id.length > 160 ||
-      id.normalize("NFKC") !== id ||
-      !SAFE_CHAT_ID.test(id)
-    ) {
+    if (!isSafeChatId(id)) {
       throw new Error("Invalid chat id.");
     }
     return path.join(await resolveChatsDir(), `${id}.json`);
@@ -430,11 +434,7 @@ export function createChatStore(
       return false;
     const meta = value as Record<string, unknown>;
     return (
-      typeof meta.id === "string" &&
-      meta.id.length > 0 &&
-      meta.id.length <= 160 &&
-      meta.id.normalize("NFKC") === meta.id &&
-      SAFE_CHAT_ID.test(meta.id) &&
+      isSafeChatId(meta.id) &&
       typeof meta.title === "string" &&
       typeof meta.createdAt === "number" &&
       Number.isFinite(meta.createdAt) &&
@@ -442,12 +442,7 @@ export function createChatStore(
       Number.isFinite(meta.updatedAt) &&
       (meta.workspaceId === undefined ||
         typeof meta.workspaceId === "string") &&
-      (meta.botId === undefined ||
-        (typeof meta.botId === "string" &&
-          meta.botId.length > 0 &&
-          meta.botId.length <= 160 &&
-          meta.botId.normalize("NFKC") === meta.botId &&
-          SAFE_CHAT_ID.test(meta.botId))) &&
+      (meta.botId === undefined || isSafeChatId(meta.botId)) &&
       (meta.owner === undefined ||
         (parseChatOwnerV1(meta.owner) !== undefined && meta.botId === undefined)) &&
       (meta.providerId === undefined || typeof meta.providerId === "string") &&
@@ -618,12 +613,7 @@ export function createChatStore(
         continue;
       }
       const id = entry.name.slice(0, -".json".length);
-      if (
-        id.length === 0 ||
-        id.length > 160 ||
-        id.normalize("NFKC") !== id ||
-        !SAFE_CHAT_ID.test(id)
-      ) {
+      if (!isSafeChatId(id)) {
         continue;
       }
       const chat = await readChat(id, policy);
